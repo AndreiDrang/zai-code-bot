@@ -50,6 +50,9 @@ Please keep PRs focused — one fix or feature per PR.
 Releases are tagged using semantic versioning (e.g. `v0.1.1`). After a PR is merged to `main`, a maintainer will tag the release.
 
 Users reference the action by tag in their workflows, so the `dist/index.js` and `action.yml` at the tagged commit are what gets executed.
+## Security
+
+For security policies, authorization rules, and permission requirements, see [SECURITY.md](SECURITY.md).
 
 ## License
 
