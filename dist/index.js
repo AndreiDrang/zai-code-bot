@@ -30258,15 +30258,15 @@ async function isCollaborator(octokit, owner, repo, username) {
       permission,
     };
   } catch (_error) {
-    // Handle 404 - user is not a collaborator
-    if (_error.status === 404 || _error.status === 403) {
+    // 404 means user is not a collaborator
+    if (_error.status === 404) {
       return {
         isCollaborator: false,
         permission: null,
       };
     }
     
-    // Re-throw other errors (network, timeout, etc.)
+    // Re-throw other errors (403 permission, network, timeout, etc.)
     throw _error;
   }
 }

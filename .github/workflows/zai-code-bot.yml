@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run bot for PR review and commands
-        uses: AndreiDrang/zai-code-bot@main
+        uses: ./
         with:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           ZAI_MODEL: ${{ vars.ZAI_MODEL }}

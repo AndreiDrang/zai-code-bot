@@ -97,11 +97,12 @@ describe('isCollaborator', () => {
     assert.strictEqual(result.permission, null);
   });
 
-  test('handles 403 error - not a collaborator', async () => {
+  test('re-throws 403 error for caller to handle safely', async () => {
     const octokit = createMockOctokit(null, true, 403);
-    const result = await isCollaborator(octokit, 'owner', 'repo', 'unknown-user');
-    assert.strictEqual(result.isCollaborator, false);
-    assert.strictEqual(result.permission, null);
+    await assert.rejects(
+      isCollaborator(octokit, 'owner', 'repo', 'unknown-user'),
+      (error) => error.status === 403
+    );
   });
 
   test('re-throws non-404/403 errors', async () => {
@@ -160,6 +161,17 @@ describe('checkAuthorization', () => {
 
   test('denies access on API error for security', async () => {
     const octokit = createMockOctokit(null, true, 500);
+    const context = createMockContext();
+    const commenter = { login: 'some-user' };
+
+    const result = await checkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, false);
+    assert.strictEqual(result.reason, 'Authorization check failed. Please try again later.');
+  });
+
+  test('returns auth-check-failed for 403 permission errors', async () => {
+    const octokit = createMockOctokit(null, true, 403);
     const context = createMockContext();
     const commenter = { login: 'some-user' };
 
