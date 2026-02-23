@@ -131,3 +131,148 @@ module.exports = {
   DEFAULT_MAX_CHARS,
   TRUNCATION_MARKER
 };
+
+
+
+/**
+ * Context builder error class for typed errors
+ */
+class ContextError extends Error {
+  constructor(message, field) {
+    super(message);
+    this.name = 'ContextError';
+    this.field = field;
+    this.code = 'MISSING_FIELD';
+  }
+}
+
+/**
+ * Fetches changed files from a PR
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} pullNumber - PR number
+ * @returns {Promise<Array>} Array of changed file objects
+ */
+async function fetchChangedFiles(octokit, owner, repo, pullNumber) {
+  const { data: files } = await octokit.rest.pulls.listFiles({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  });
+  return files;
+}
+
+/**
+ * Builds a normalized handler context from GitHub payload
+ * Provides consistent fields for all command handlers
+ * 
+ * @param {Object} payload - GitHub event payload (github.context.payload)
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {Object} options - Optional configuration
+ * @param {boolean} options.fetchFiles - Whether to fetch changed files (default: true)
+ * @param {string} options.apiKey - Z.ai API key (from config)
+ * @param {string} options.model - Z.ai model (from config)
+ * @param {number} options.maxChars - Max characters for context (default: 8000)
+ * @returns {Promise<Object>} Normalized handler context
+ * 
+ * @throws {ContextError} When required fields are missing
+ * 
+ * Context object contains:
+ * - octokit: GitHub API client
+ * - owner: Repository owner
+ * - repo: Repository name
+ * - pullNumber: PR number
+ * - commentId: Comment ID (if from issue_comment)
+ * - commentBody: Comment text
+ * - sender: User who triggered the event
+ * - changedFiles: Array of changed files (fetched from PR)
+ * - payload: Raw event payload
+ * - githubContext: GitHub context object
+ * - maxChars: Context budget
+ * - apiKey: Z.ai API key
+ * - model: Z.ai model
+ */
+async function buildHandlerContext(payload, octokit, options = {}) {
+  const fetchFiles = options.fetchFiles !== false;
+  const apiKey = options.apiKey;
+  const model = options.model || 'glm-4.7';
+  const maxChars = options.maxChars || DEFAULT_MAX_CHARS;
+
+  // Extract owner and repo from payload
+  const owner = payload.repo?.owner?.login || payload.repository?.owner?.login;
+  const repo = payload.repo?.name || payload.repository?.name;
+
+  if (!owner) {
+    throw new ContextError('Missing required field: owner', 'owner');
+  }
+  if (!repo) {
+    throw new ContextError('Missing required field: repo', 'repo');
+  }
+
+  // Extract PR number from pull_request or issue (for issue_comment on PR)
+  let pullNumber = payload.pull_request?.number;
+  if (!pullNumber && payload.issue?.number && payload.issue?.pull_request) {
+    pullNumber = payload.issue.number;
+  }
+
+  if (!pullNumber) {
+    throw new ContextError('Missing required field: pullNumber (PR number)', 'pullNumber');
+  }
+
+  // Extract comment info (for issue_comment events)
+  const commentId = payload.comment?.id;
+  const commentBody = payload.comment?.body;
+
+  // Extract sender (user who triggered the event)
+  const sender = payload.sender?.login;
+
+  if (!sender) {
+    throw new ContextError('Missing required field: sender', 'sender');
+  }
+
+  // Build base context
+  const context = {
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    commentId,
+    commentBody,
+    sender,
+    payload,
+    maxChars,
+    apiKey,
+    model,
+    // Legacy/compatibility fields
+    issueNumber: pullNumber, // For handlers expecting issueNumber
+  };
+
+  // Fetch changed files if requested
+  if (fetchFiles) {
+    try {
+      context.changedFiles = await fetchChangedFiles(octokit, owner, repo, pullNumber);
+    } catch (error) {
+      // Don't fail the entire context for file fetch errors
+      context.changedFiles = [];
+      context._fileFetchError = error.message;
+    }
+  }
+
+  return context;
+}
+
+module.exports = {
+  // Existing exports
+  truncateContext,
+  extractLines,
+  validateRange,
+  getDefaultMaxChars,
+  DEFAULT_MAX_CHARS,
+  TRUNCATION_MARKER,
+  // New exports
+  buildHandlerContext,
+  fetchChangedFiles,
+  ContextError,
+};
