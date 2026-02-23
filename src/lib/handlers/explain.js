@@ -91,7 +91,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No line range provided. Usage: /zai explain 10-15`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -106,7 +107,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -127,7 +129,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}. File has ${maxLines} lines.`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -142,7 +145,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${extracted.error}`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -172,7 +176,8 @@ async function handleExplainCommand(context, args) {
       await upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
-        EXPLAIN_MARKER
+        EXPLAIN_MARKER,
+        { replyToId: commentId, updateExisting: false }
       );
       // Add error reaction if commentId available
       if (commentId) {
@@ -192,7 +197,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
 
     // Add success reaction if commentId available
@@ -209,7 +215,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete explanation. Please try again later.`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
 
     // Add error reaction if commentId available

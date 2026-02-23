@@ -10,6 +10,7 @@ const api = require('../api');
 const comments = require('../comments');
 const context = require('../context');
 const logging = require('../logging');
+const continuity = require('../continuity');
 
 const { REACTIONS, setReaction } = require('../comments');
 
@@ -48,7 +49,7 @@ function validateArgs(args) {
  * @param {Object} params.logger - Logger instance
  * @returns {Promise<{ success: boolean, message?: string, error?: string }>}
  */
-async function handleAskCommand({ octokit, context: githubContext, commenter, args, config, logger }) {
+async function handleAskCommand({ octokit, context: githubContext, commenter, args, continuityState = null, config, logger }) {
   // Validate arguments
   const validation = validateArgs(args);
   if (!validation.valid) {
@@ -110,6 +111,14 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
 
   // Post the response as a threaded reply
   const responseBody = formatResponse(result.data, question);
+  const nextState = continuity.mergeState(continuityState, {
+    lastCommand: 'ask',
+    lastArgs: question,
+    lastUser: commenter?.login || 'unknown',
+    turnCount: (continuityState?.turnCount || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  });
+  const responseWithState = continuity.createCommentWithState(responseBody, nextState);
   
   const marker = '<!-- ZAI-ASK-RESPONSE -->';
   const commentResult = await comments.upsertComment(
@@ -117,7 +126,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
     owner,
     repo,
     issueNumber,
-    responseBody + '\n\n' + marker,
+    responseWithState + '\n\n' + marker,
     marker,
     { replyToId: commentId, updateExisting: false }
   );

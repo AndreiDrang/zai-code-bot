@@ -109,7 +109,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -127,7 +128,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}`,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -158,7 +160,8 @@ async function handleReviewCommand(context, args) {
       await upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
-        REVIEW_MARKER
+        REVIEW_MARKER,
+        { replyToId: commentId, updateExisting: false }
       );
       // Add error reaction if commentId available
       if (commentId) {
@@ -181,7 +184,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     
     // Add success reaction if commentId available
@@ -198,7 +202,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete review. Please try again later.`,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     
     // Add error reaction if commentId available

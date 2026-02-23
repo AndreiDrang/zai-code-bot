@@ -31323,6 +31323,206 @@ module.exports = {
 
 /***/ }),
 
+/***/ 6630:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Ask Command Handler
+ * 
+ * Handles `/zai ask <question>` command.
+ * Answers questions about the codebase using Z.ai API.
+ */
+
+const auth = __nccwpck_require__(6495);
+const api = __nccwpck_require__(9729);
+const comments = __nccwpck_require__(6819);
+const context = __nccwpck_require__(9990);
+const logging = __nccwpck_require__(2120);
+const continuity = __nccwpck_require__(4575);
+
+const { REACTIONS, setReaction } = __nccwpck_require__(6819);
+
+/**
+ * Validates the ask command arguments
+ * @param {string[]} args - Command arguments
+ * @returns {{ valid: boolean, error?: string }}
+ */
+function validateArgs(args) {
+  if (!args || args.length === 0) {
+    return {
+      valid: false,
+      error: 'Please provide a question. Usage: /zai ask <question>'
+    };
+  }
+
+  const question = args.join(' ').trim();
+  if (!question) {
+    return {
+      valid: false,
+      error: 'Please provide a question. Usage: /zai ask <question>'
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Handle the ask command
+ * @param {Object} params - Handler parameters
+ * @param {Object} params.octokit - GitHub Octokit instance
+ * @param {Object} params.context - GitHub context object
+ * @param {Object} params.commenter - Commenter object with login property
+ * @param {string[]} params.args - Command arguments (the question)
+ * @param {Object} params.config - Configuration object with apiKey and model
+ * @param {Object} params.logger - Logger instance
+ * @returns {Promise<{ success: boolean, message?: string, error?: string }>}
+ */
+async function handleAskCommand({ octokit, context: githubContext, commenter, args, continuityState = null, config, logger }) {
+  // Validate arguments
+  const validation = validateArgs(args);
+  if (!validation.valid) {
+    return { success: false, error: validation.error };
+  }
+
+  // Check authorization
+  const authResult = await auth.checkForkAuthorization(octokit, githubContext, commenter);
+  if (!authResult.authorized) {
+    // Silent block for fork PRs, otherwise return error message
+    if (authResult.reason) {
+      return { success: false, error: authResult.reason };
+    }
+    // Silent block - don't respond
+    return { success: false, error: null };
+  }
+
+  const question = args.join(' ').trim();
+  const { owner, repo } = githubContext.repo;
+  const issueNumber = githubContext.payload.pull_request.number;
+
+  // Get the comment ID for threading
+  const commentId = githubContext.payload.comment?.id;
+
+  // Build context with file information if available
+  const contextContent = await buildContext(githubContext);
+  const truncatedContext = context.truncateContext(contextContent, context.DEFAULT_MAX_CHARS);
+
+  // Build the prompt
+  const prompt = buildPrompt(question, truncatedContext.content);
+
+  // Add reaction to show we're processing (acknowledgment)
+  if (commentId) {
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
+  }
+
+  // Call the API
+  const apiClient = api.createApiClient({ timeout: config.timeout, maxRetries: config.maxRetries });
+  const result = await apiClient.call({
+    apiKey: config.apiKey,
+    model: config.model,
+    prompt
+  });
+
+  if (!result.success) {
+    logger.error(
+      { command: 'ask', errorCategory: result.error.category },
+      `API call failed: ${result.error.message}`
+    );
+    const userMessage = logging.getUserMessage(result.error.category, new Error(result.error.message));
+    
+    // Add error reaction
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    
+    return { success: false, error: userMessage };
+  }
+
+  // Post the response as a threaded reply
+  const responseBody = formatResponse(result.data, question);
+  const nextState = continuity.mergeState(continuityState, {
+    lastCommand: 'ask',
+    lastArgs: question,
+    lastUser: commenter?.login || 'unknown',
+    turnCount: (continuityState?.turnCount || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  });
+  const responseWithState = continuity.createCommentWithState(responseBody, nextState);
+  
+  const marker = '<!-- ZAI-ASK-RESPONSE -->';
+  const commentResult = await comments.upsertComment(
+    octokit,
+    owner,
+    repo,
+    issueNumber,
+    responseWithState + '\n\n' + marker,
+    marker,
+    { replyToId: commentId, updateExisting: false }
+  );
+
+  if (commentResult.action === 'created' || commentResult.action === 'updated') {
+    // Add success reaction
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+    
+    logger.info({ command: 'ask', question: question.substring(0, 50) }, 'Ask command completed successfully');
+    return { success: true };
+  }
+
+  // Add error reaction for failed comment post
+  if (commentId) {
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+  }
+  
+  return { success: false, error: 'Failed to post response' };
+}
+
+/**
+ * Build context from PR changes
+ * @param {Object} githubContext - GitHub context
+ * @returns {Promise<string>} Context string
+ */
+async function buildContext(githubContext) {
+  // For ask command, we'll include recent file changes as context
+  // This is a simplified version - full implementation would fetch relevant files
+  const pullRequest = githubContext.payload.pull_request;
+  const title = pullRequest?.title || '';
+  const body = pullRequest?.body || '';
+  
+  return `Pull Request: ${title}\n\nDescription: ${body}\n\n---\nYou are being asked a question about this pull request.`;
+}
+
+/**
+ * Build prompt for the API
+ * @param {string} question - User's question
+ * @param {string} contextContent - Context from PR
+ * @returns {string} Full prompt
+ */
+function buildPrompt(question, contextContent) {
+  return `${contextContent}\n\n---\n\nQuestion: ${question}\n\nPlease answer this question about the code changes above.`;
+}
+
+/**
+ * Format the API response
+ * @param {string} data - Raw API response
+ * @param {string} question - Original question
+ * @returns {string} Formatted response
+ */
+function formatResponse(data, question) {
+  return `## Answer to: "${question}"\n\n${data}\n\n---\n*Response from Z.ai*`;
+}
+
+module.exports = {
+  handleAskCommand,
+  validateArgs,
+  buildContext,
+  buildPrompt,
+  formatResponse,
+};
+
+
+/***/ }),
+
 /***/ 3016:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -31574,7 +31774,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No line range provided. Usage: /zai explain 10-15`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -31589,7 +31790,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -31610,7 +31812,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}. File has ${maxLines} lines.`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -31625,7 +31828,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${extracted.error}`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -31655,7 +31859,8 @@ async function handleExplainCommand(context, args) {
       await upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
-        EXPLAIN_MARKER
+        EXPLAIN_MARKER,
+        { replyToId: commentId, updateExisting: false }
       );
       // Add error reaction if commentId available
       if (commentId) {
@@ -31675,7 +31880,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
 
     // Add success reaction if commentId available
@@ -31692,7 +31898,8 @@ async function handleExplainCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete explanation. Please try again later.`,
-      EXPLAIN_MARKER
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
 
     // Add error reaction if commentId available
@@ -31828,7 +32035,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -31846,7 +32054,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}`,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -31877,7 +32086,8 @@ async function handleReviewCommand(context, args) {
       await upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
-        REVIEW_MARKER
+        REVIEW_MARKER,
+        { replyToId: commentId, updateExisting: false }
       );
       // Add error reaction if commentId available
       if (commentId) {
@@ -31900,7 +32110,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     
     // Add success reaction if commentId available
@@ -31917,7 +32128,8 @@ async function handleReviewCommand(context, args) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete review. Please try again later.`,
-      REVIEW_MARKER
+      REVIEW_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
     
     // Add error reaction if commentId available
@@ -34352,21 +34564,26 @@ const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
 const https = __nccwpck_require__(5692);
 
-const { getEventType, isBotComment, shouldProcessEvent, getEventInfo } = __nccwpck_require__(2500);
+const { getEventType, shouldProcessEvent } = __nccwpck_require__(2500);
 const { parseCommand, isValid } = __nccwpck_require__(5055);
 const { checkForkAuthorization, getUnauthorizedMessage } = __nccwpck_require__(6495);
+const { handleAskCommand } = __nccwpck_require__(6630);
 const { handleSuggestCommand } = __nccwpck_require__(4361);
 const { handleCompareCommand } = __nccwpck_require__(3016);
 const reviewHandler = __nccwpck_require__(903);
 const explainHandler = __nccwpck_require__(1248);
 
 const { truncateContext, DEFAULT_MAX_CHARS, fetchChangedFiles } = __nccwpck_require__(9990);
-const { loadContinuityState, saveContinuityState, mergeState, MAX_STATE_SIZE } = __nccwpck_require__(4575);
+const { loadContinuityState, mergeState, createCommentWithState } = __nccwpck_require__(4575);
+const { REACTIONS, setReaction, upsertComment } = __nccwpck_require__(6819);
 const { createApiClient } = __nccwpck_require__(9729);
 const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
 const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
 const COMMENT_MARKER = '<!-- zai-code-review -->';
 const CONTINUITY_MARKER = '<!-- zai-continuity:';
+const PROGRESS_MARKER = '<!-- zai-progress -->';
+const GUIDANCE_MARKER = '<!-- zai-guidance -->';
+const AUTH_MARKER = '<!-- zai-auth -->';
 
 // Safe guidance messages for error cases
 const GUIDANCE_MESSAGES = {
@@ -34552,6 +34769,8 @@ async function handlePullRequestEvent(context, apiKey, model, owner, repo) {
 async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
   const comment = context.payload.comment;
   const commentBody = comment?.body || '';
+  const commentId = comment?.id;
+  const pullNumber = context.payload.issue?.number;
 
   core.info(`Processing issue_comment on PR: ${commentBody.substring(0, 50)}...`);
 
@@ -34564,40 +34783,29 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
     const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
 
     const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-    const pullNumber = context.payload.issue?.number;
 
     if (!pullNumber) {
       core.setFailed('No issue/PR number found.');
       return;
     }
 
-    // Check if there's already a comment from us
-    const { data: comments } = await octokit.rest.issues.listComments({
+    await upsertComment(
+      octokit,
       owner,
       repo,
-      issue_number: pullNumber,
-    });
-
-    const existingBotComment = comments.find(c =>
-      c.user?.type === 'Bot' && c.body.includes(COMMENT_MARKER)
+      pullNumber,
+      guidance,
+      GUIDANCE_MARKER,
+      { replyToId: commentId, updateExisting: false }
     );
+    core.info(`Posted guidance comment for error: ${errorType}`);
 
-    if (existingBotComment) {
-      await octokit.rest.issues.updateComment({
-        owner,
-        repo,
-        comment_id: existingBotComment.id,
-        body: guidance,
-      });
-      core.info(`Updated guidance comment for error: ${errorType}`);
-    } else {
-      await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: pullNumber,
-        body: guidance,
-      });
-      core.info(`Posted guidance comment for error: ${errorType}`);
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
+      }
     }
     return;
   }
@@ -34622,26 +34830,68 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
     // For regular PRs, post an error message
     core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
     const pullNumber = context.payload.issue?.number;
-    await octokit.rest.issues.createComment({
+    await upsertComment(
+      octokit,
       owner,
       repo,
-      issue_number: pullNumber,
-      body: getUnauthorizedMessage(),
-    });
+      pullNumber,
+      getUnauthorizedMessage(),
+      AUTH_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set auth-failure reaction: ${error.message}`);
+      }
+    }
     return;
   }
 
+  let continuityState = null;
+  try {
+    continuityState = await loadContinuityState(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    core.warning(`Failed to load continuity state: ${error.message}`);
+  }
+
+  if (commentId && parseResult.command !== 'ask') {
+    try {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
+    } catch (error) {
+      core.warning(`Failed to set acknowledgment reaction: ${error.message}`);
+    }
+  }
+
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
+    PROGRESS_MARKER,
+    { replyToId: commentId, updateExisting: false }
+  );
+
   core.info(`Authorized command from collaborator: ${commenter.login}`);
-  await dispatchCommand(context, parseResult, apiKey, model, owner, repo);
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, {
+    commentId,
+    continuityState,
+    commenter,
+  });
 }
 
-async function dispatchCommand(context, parseResult, apiKey, model, owner, repo) {
+async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, options = {}) {
   const { command, args } = parseResult;
   const pullNumber = context.payload.issue?.number;
+  const { commentId = null, continuityState = null, commenter = null } = options;
 
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
 
   let responseMessage = '';
+  let terminalReaction = REACTIONS.ROCKET;
 
   // Build handler context with required fields
   const correlationId = generateCorrelationId();
@@ -34665,12 +34915,14 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo)
     owner,
     repo,
     issueNumber: pullNumber,
+    commentId,
     changedFiles,
     apiClient: createApiClient(),
     apiKey,
     model,
     logger,
     maxChars: DEFAULT_MAX_CHARS,
+    continuityState,
   };
 
   switch (command) {
@@ -34695,6 +34947,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo)
         }
       } catch (error) {
         logger.error({ error: error.message }, 'Review handler threw error');
+        terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Code Review
 
 **Error:** Failed to complete review. Please try again later.
@@ -34703,12 +34956,13 @@ ${COMMENT_MARKER}`;
       }
       break;
 
-    case 'explain':
+    case 'explain': {
       // Route to explain handler with line range from args
       logger.info({ args }, 'Dispatching to explain handler');
       
       // Check if line range argument is provided
       if (args.length === 0) {
+        terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${COMMENT_MARKER}`;
         break;
       }
@@ -34717,6 +34971,7 @@ ${COMMENT_MARKER}`;
       // If no specific file is mentioned in args, use the first changed file
       const firstChangedFile = changedFiles.find(f => f.patch);
       if (!firstChangedFile) {
+        terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Explanation
 
 No files with changes found in this PR to explain.
@@ -34743,6 +34998,7 @@ ${COMMENT_MARKER}`;
         }
       } catch (error) {
         logger.error({ error: error.message }, 'Explain handler threw error');
+        terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Explanation
 
 **Error:** Failed to complete explanation. Please try again later.
@@ -34750,11 +35006,63 @@ ${COMMENT_MARKER}`;
 ${COMMENT_MARKER}`;
       }
       break;
+    }
 
-    case 'ask':
-      // Placeholder response - TODO: implement actual command handler
-      responseMessage = `## Z.ai: ask\n\nCommand \`ask\` with args: \`${args.join(' ')}\` received.\n\nThis feature is coming soon!${COMMENT_MARKER}`;
+    case 'ask': {
+      if (args.length === 0) {
+        terminalReaction = REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\nPlease provide a question. Usage: \`/zai ask <question>\`\n\n${COMMENT_MARKER}`;
+        break;
+      }
+
+      try {
+        const normalizedAskContext = {
+          ...context,
+          payload: {
+            ...context.payload,
+            pull_request: {
+              number: pullNumber,
+              title: context.payload.issue?.title || context.payload.pull_request?.title || '',
+              body: context.payload.issue?.body || context.payload.pull_request?.body || '',
+            },
+          },
+        };
+
+        const askContext = {
+          octokit,
+          context: normalizedAskContext,
+          commenter,
+          args,
+          continuityState,
+          config: {
+            apiKey,
+            model,
+            timeout: 30000,
+            maxRetries: 3,
+          },
+          logger,
+        };
+
+        const result = await handleAskCommand(askContext);
+        if (result.success) {
+          logger.info({ success: true }, 'Ask command completed');
+          return;
+        }
+
+        if (!result.error) {
+          logger.info('Ask command silently blocked by fork policy');
+          return;
+        }
+
+        terminalReaction = REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
+      } catch (error) {
+        logger.error({ error: error.message }, 'Ask handler threw error');
+        terminalReaction = REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\n**Error:** Failed to complete request. Please try again later.\n\n${COMMENT_MARKER}`;
+      }
       break;
+    }
 
     case 'suggest': {
       // Extract user prompt from args (everything after 'suggest')
@@ -34766,7 +35074,8 @@ ${COMMENT_MARKER}`;
         payload: context.payload,
         apiKey,
         model,
-        userPrompt
+        userPrompt,
+        commentId,
       };
       
       core.info(`Processing suggest command with prompt: ${userPrompt.substring(0, 50)}...`);
@@ -34776,6 +35085,7 @@ ${COMMENT_MARKER}`;
       if (result.success) {
         responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
       } else {
+        terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Suggest\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
       }
       break;
@@ -34787,7 +35097,8 @@ ${COMMENT_MARKER}`;
         context,
         payload: context.payload,
         apiKey,
-        model
+        model,
+        commentId,
       };
       
       core.info('Processing compare command');
@@ -34797,6 +35108,7 @@ ${COMMENT_MARKER}`;
       if (result.success) {
         responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
       } else {
+        terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Compare\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
       }
       break;
@@ -34811,32 +35123,32 @@ ${COMMENT_MARKER}`;
     return;
   }
 
-  const { data: comments } = await octokit.rest.issues.listComments({
+  const nextState = mergeState(continuityState, {
+    lastCommand: command,
+    lastArgs: args.join(' '),
+    lastUser: commenter?.login || 'unknown',
+    turnCount: (continuityState?.turnCount || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  });
+  const responseWithState = createCommentWithState(responseMessage, nextState);
+
+  await upsertComment(
+    octokit,
     owner,
     repo,
-    issue_number: pullNumber,
-  });
-
-  const existingBotComment = comments.find(c =>
-    c.user?.type === 'Bot' && c.body.includes(COMMENT_MARKER)
+    pullNumber,
+    responseWithState,
+    COMMENT_MARKER,
+    { replyToId: commentId, updateExisting: false }
   );
+  core.info(`Posted response for command: ${command}`);
 
-  if (existingBotComment) {
-    await octokit.rest.issues.updateComment({
-      owner,
-      repo,
-      comment_id: existingBotComment.id,
-      body: responseMessage,
-    });
-    core.info(`Updated response for command: ${command}`);
-  } else {
-    await octokit.rest.issues.createComment({
-      owner,
-      repo,
-      issue_number: pullNumber,
-      body: responseMessage,
-    });
-    core.info(`Posted response for command: ${command}`);
+  if (commentId) {
+    try {
+      await setReaction(octokit, owner, repo, commentId, terminalReaction);
+    } catch (error) {
+      core.warning(`Failed to set terminal reaction: ${error.message}`);
+    }
   }
 }
 
