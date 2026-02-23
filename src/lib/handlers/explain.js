@@ -1,11 +1,13 @@
 /**
  * Explain command handler for /zai explain <lines>
  * 
- * Parses line range, validates with context.validateRange, extracts lines,
+ * Parses line range, fetches file at PR head, extracts target + surrounding context,
  * and requests explanation from Z.ai API.
  */
 
-const { extractLines, validateRange, truncateContext, DEFAULT_MAX_CHARS } = require('../context');
+const { validateRange, truncateContext, DEFAULT_MAX_CHARS } = require('../context');
+const { fetchFileAtPrHead } = require('../pr-context');
+const { extractWindow } = require('../code-scope');
 const { REACTIONS, upsertComment, setReaction } = require('../comments');
 const { createLogger, generateCorrelationId } = require('../logging');
 
@@ -48,20 +50,39 @@ function parseLineRange(arg) {
 }
 
 /**
- * Build explanation prompt with extracted lines
+ * Build explanation prompt with extracted lines and surrounding context
  * @param {string} filename - File being explained
- * @param {string[]} lines - Extracted lines
+ * @param {Object|Array} scopeResult - Result from extractWindow OR legacy lines array
  * @param {number} startLine - Start line number
  * @param {number} endLine - End line number
  * @param {number} maxChars - Maximum prompt characters
  * @returns {{ prompt: string, truncated: boolean }}
  */
-function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFAULT_MAX_CHARS) {
-  const codeContent = lines.join('\n');
+function buildExplainPrompt(filename, scopeResult, startLine, endLine, maxChars = DEFAULT_MAX_CHARS) {
+  // Handle backward compatibility: if scopeResult is an array (old format), wrap it
+  let target, surrounding;
   
-  let prompt = `Please explain the following code from file: ${filename}\n`;
-  prompt += `Lines ${startLine}-${endLine}:\n\n`;
-  prompt += `\`\`\`\n${codeContent}\n\`\`\``;
+  if (Array.isArray(scopeResult)) {
+    // Legacy format: scopeResult is the lines array
+    target = scopeResult;
+    surrounding = scopeResult; // No surrounding context in legacy format
+  } else {
+    // New format: scopeResult is extractWindow result
+    target = scopeResult.target || [];
+    surrounding = scopeResult.surrounding || [];
+  }
+
+  const targetContent = target.join('\n');
+  const surroundingContent = surrounding.join('\n');
+  
+  // Include filename in the prompt for clarity
+  let prompt = `Explain the following code block from file: ${filename}\n`;
+  prompt += `Context (Surrounding Code):\n`;
+  prompt += `<surrounding_scope>\n${surroundingContent}\n</surrounding_scope>\n\n`;
+  prompt += `Target block to explain:\n`;
+  prompt += `<target_lines>${startLine}-${endLine}</target_lines>\n`;
+  prompt += `<code>\n${targetContent}\n</code>\n\n`;
+  prompt += `Task: Explain what this specific block does, why it's written this way, and identify any dependencies it uses from the surrounding scope.`;
   
   const truncated = truncateContext(prompt, maxChars);
   return { prompt: truncated.content, truncated: truncated.truncated };
@@ -74,8 +95,9 @@ function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFA
  * @param {string} context.owner - Repository owner
  * @param {string} context.repo - Repository name
  * @param {number} context.issueNumber - PR number
- * @param {string} context.fileContent - File content to explain
- * @param {string} context.filename - File name
+ * @param {string} context.commentPath - File path from command comment (if specified)
+ * @param {string} context.filename - Fallback file name
+ * @param {Array} context.changedFiles - List of changed files in PR
  * @param {Object} context.apiClient - Z.ai API client
  * @param {string} context.apiKey - Z.ai API key
  * @param {string} context.model - Z.ai model to use
@@ -84,7 +106,7 @@ function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFA
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function handleExplainCommand(context, args) {
-  const { octokit, owner, repo, issueNumber, fileContent, filename, apiClient, apiKey, model, commentId } = context;
+  const { octokit, owner, repo, issueNumber, commentPath, filename, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
 
   if (!args || args.length === 0) {
@@ -118,12 +140,54 @@ async function handleExplainCommand(context, args) {
   }
 
   const { startLine, endLine } = parsed;
-  logger.info({ startLine, endLine, filename }, 'Parsed line range');
 
-  // Step 2: Validate line range bounds
+  // Step 2: Determine target file path
+  // Use commentPath if provided, otherwise use filename or first changed file
+  const targetPath = commentPath || filename;
+  
+  // If no path available, try to get first changed file
+  let resolvedPath = targetPath;
+  if (!resolvedPath && changedFiles && changedFiles.length > 0) {
+    resolvedPath = changedFiles[0].filename;
+  }
+
+  if (!resolvedPath) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** No target file specified. Usage: /zai explain 10-15`,
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: 'No target file specified' };
+  }
+
+  logger.info({ startLine, endLine, path: resolvedPath }, 'Parsed line range, fetching file at PR head');
+
+  // Step 3: Fetch file content at PR head
+  const fileResult = await fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber);
+  
+  if (!fileResult.success) {
+    const errorMsg = fileResult.fallback || `Failed to fetch ${resolvedPath}`;
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** ${errorMsg}`,
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: errorMsg };
+  }
+
+  const fileContent = fileResult.data;
   const lines = fileContent.split('\n');
   const maxLines = lines.length;
-  
+
+  // Step 4: Validate line range against actual file line count
   const validation = validateRange(startLine, endLine, maxLines);
   if (!validation.valid) {
     await upsertComment(
@@ -139,30 +203,24 @@ async function handleExplainCommand(context, args) {
     return { success: false, error: validation.error };
   }
 
-  // Step 3: Extract lines
-  const extracted = extractLines(fileContent, startLine, endLine);
-  if (!extracted.valid) {
-    await upsertComment(
-      octokit, owner, repo, issueNumber,
-      `**Error:** ${extracted.error}`,
-      EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
-    );
-    // Add error reaction if commentId available
-    if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-    }
-    return { success: false, error: extracted.error };
+  // Step 5: Extract target + surrounding context using extractWindow
+  const scopeResult = extractWindow(fileContent, startLine, endLine);
+  
+  if (scopeResult.fallback) {
+    logger.warn({ note: scopeResult.note }, 'Using fallback for scope extraction');
   }
 
-  logger.info({ linesExtracted: extracted.lines.length }, 'Lines extracted');
+  logger.info({ 
+    targetLines: scopeResult.target.length, 
+    surroundingLines: scopeResult.surrounding.length 
+  }, 'Extracted target and surrounding context');
 
-  // Step 4: Build prompt
-  const { prompt, truncated } = buildExplainPrompt(filename, extracted.lines, startLine, endLine);
+  // Step 6: Build prompt with scope result
+  const { prompt, truncated } = buildExplainPrompt(resolvedPath, scopeResult, startLine, endLine);
 
-  // Step 5: Call Z.ai API
+  // Step 7: Call Z.ai API
   try {
-    logger.info({ filename, startLine, endLine }, 'Calling Z.ai API for explanation');
+    logger.info({ path: resolvedPath, startLine, endLine }, 'Calling Z.ai API for explanation');
 
     const result = await apiClient.call({
       apiKey,
@@ -192,7 +250,7 @@ async function handleExplainCommand(context, args) {
       response += '\n\n_(Note: Context was truncated due to size limits)_';
     }
 
-    const formattedResponse = `## 📖 Explanation: ${filename}:${startLine}-${endLine}\n\n${response}`;
+    const formattedResponse = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${response}`;
 
     await upsertComment(
       octokit, owner, repo, issueNumber,
@@ -206,7 +264,7 @@ async function handleExplainCommand(context, args) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
 
-    logger.info({ filename, startLine, endLine }, 'Explanation posted successfully');
+    logger.info({ path: resolvedPath, startLine, endLine }, 'Explanation posted successfully');
     return { success: true };
 
   } catch (error) {

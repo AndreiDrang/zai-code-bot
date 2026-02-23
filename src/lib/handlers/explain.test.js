@@ -72,36 +72,59 @@ describe('explain.js - parseLineRange', () => {
 });
 
 describe('explain.js - buildExplainPrompt', () => {
-  test('builds prompt with code content', () => {
-    const lines = ['function test() {', '  return true;', '}'];
-    const result = buildExplainPrompt('src/test.js', lines, 5, 7, 10000);
+  test('builds prompt with surrounding scope and target lines', () => {
+    const scopeResult = {
+      target: ['function test() {', '  return true;', '}'],
+      surrounding: ['// comment', 'function test() {', '  return true;', '}', '// end']
+    };
+    const result = buildExplainPrompt('src/test.js', scopeResult, 5, 7, 10000);
     
-    assert.ok(result.prompt.includes('src/test.js'));
-    assert.ok(result.prompt.includes('5-7'));
-    assert.ok(result.prompt.includes('function test()'));
+    assert.ok(result.prompt.includes('<surrounding_scope>'), 'should include surrounding_scope tag');
+    assert.ok(result.prompt.includes('<target_lines>5-7</target_lines>'), 'should include target_lines tag with range');
+    assert.ok(result.prompt.includes('<code>'), 'should include code tag');
+    assert.ok(result.prompt.includes('function test()'), 'should include code content');
     assert.strictEqual(result.truncated, false);
   });
 
-  test('wraps code in markdown code blocks', () => {
-    const lines = ['const x = 1;'];
-    const result = buildExplainPrompt('app.js', lines, 1, 1, 10000);
+  test('includes target_lines and code tags', () => {
+    const scopeResult = {
+      target: ['const x = 1;'],
+      surrounding: ['const x = 1;']
+    };
+    const result = buildExplainPrompt('app.js', scopeResult, 1, 1, 10000);
     
-    assert.ok(result.prompt.includes('```'));
+    assert.ok(result.prompt.includes('<target_lines>1-1</target_lines>'));
+    assert.ok(result.prompt.includes('<code>'));
     assert.ok(result.prompt.includes('const x = 1;'));
   });
 
   test('respects maxChars and truncates', () => {
-    const lines = ['line ' + 'a'.repeat(1000)];
-    const result = buildExplainPrompt('app.js', lines, 1, 1, 100);
+    const longLine = 'line ' + 'a'.repeat(1000);
+    const scopeResult = {
+      target: [longLine],
+      surrounding: [longLine]
+    };
+    const result = buildExplainPrompt('app.js', scopeResult, 1, 1, 100);
     
     assert.ok(result.truncated, true);
     assert.ok(result.prompt.includes('[truncated'));
   });
 
-  test('includes line numbers in prompt', () => {
-    const lines = ['code'];
-    const result = buildExplainPrompt('app.js', lines, 10, 10, 10000);
+  test('includes target line range in target_lines tag', () => {
+    const scopeResult = {
+      target: ['code'],
+      surrounding: ['code']
+    };
+    const result = buildExplainPrompt('app.js', scopeResult, 10, 10, 10000);
     
-    assert.ok(result.prompt.includes('Lines 10-10'));
+    assert.ok(result.prompt.includes('<target_lines>10-10</target_lines>'));
+  });
+
+  test('handles legacy array format for backward compatibility', () => {
+    const lines = ['function test() {', '  return true;', '}'];
+    const result = buildExplainPrompt('src/test.js', lines, 5, 7, 10000);
+    
+    assert.ok(result.prompt.includes('function test()'));
+    assert.strictEqual(result.truncated, false);
   });
 });
