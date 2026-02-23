@@ -1,7 +1,7 @@
 {
-  "name": "zai-code-review",
-  "version": "0.1.1",
-  "description": "AI-powered code review GitHub Action using Z.ai",
+  "name": "zai-code-bot",
+  "version": "0.0.1",
+  "description": "GitHub Action for PR auto-review and /zai assistant commands powered by Z.ai",
   "main": "dist/index.js",
   "scripts": {
     "build": "ncc build src/index.js -o dist --license licenses.txt",

@@ -1,99 +1,87 @@
-# Z.ai Code Review
+# Zai Code Bot
 
-AI-powered GitHub Pull Request code review using Z.ai models. Automatic PR comments, bug detection, and improvement suggestions via GitHub Actions.
+GitHub Action for automatic PR reviews and collaborator-gated `/zai` commands powered by Z.ai models.
 
 ## Features
 
-- 🚀 Automatic PR review on open/synchronize
-- 🔍 Interactive commands (`/zai ask`, `/zai help`, `/zai review`, `/zai explain`, `/zai suggest`, `/zai compare`)
-- 🧠 AI-driven PR feedback
-- ⚡ Works with GitHub Actions
-- 🔐 Collaborator-only command access
-- 🔄 Marker-based comment updates (idempotent)
+- Automatic pull request review on `opened` and `synchronize`
+- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai suggest`, `/zai compare`, `/zai help`
+- Prefix normalization: use either `/zai ...` or `@zai-bot ...`
+- Threaded command replies with progress feedback and lifecycle reactions
+- Marker-based idempotent comments to avoid duplicate review spam
+- Fork-aware collaborator authorization checks before command execution
 
 ## Quickstart
 
-Add this to your `.github/workflows/code-review.yml`:
+Create `.github/workflows/code-review.yml`:
 
 ```yaml
-name: AI Code Review with Z.ai
+name: Zai Code Bot
 
 on:
   pull_request:
     types: [opened, synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   review:
-    name: Review
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Code Review
-        uses: tarmojussila/zai-code-review@v0.1.1
+
+      - name: Run Zai Code Bot
+        uses: AndreiDrang/zai-code-bot@v0.0.1
         with:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          ZAI_MODEL: ${{ vars.ZAI_MODEL }}
 ```
 
 ## Inputs
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `ZAI_API_KEY` | Yes | — | Your Z.ai API key |
-| `ZAI_MODEL` | No | `glm-4.7` | Z.ai model to use for review |
+| `ZAI_API_KEY` | Yes | - | Z.ai API key |
+| `ZAI_MODEL` | No | `glm-5` | Z.ai model for review and commands |
+| `GITHUB_TOKEN` | No | `${{ github.token }}` | Token used for GitHub API calls |
 
 ## Commands
 
-The action responds to comments on pull requests. Use `/zai` or `@zai-bot` prefix.
+Commands are processed from PR comments only. Supported prefixes: `/zai` and `@zai-bot`.
 
 | Command | Example | Description |
 |---|---|---|
-| `/zai ask <question>` | `/zai ask what does this function do?` | Ask questions about the PR code |
-| `/zai help` | `/zai help` | Show available commands |
-| `/zai review` | `/zai review src/utils.ts` | Review a specific file in the PR |
-| `/zai explain <lines>` | `/zai explain 10-20` | Explain specific line numbers |
-| `/zai suggest <prompt>` | `/zai suggest better variable naming` | Get improvement suggestions |
-| `/zai compare` | `/zai compare` | Compare old vs new version in PR |
+| `/zai ask <question>` | `/zai ask what changed in auth flow?` | Ask about current PR changes |
+| `/zai review <path>` | `/zai review src/lib/auth.js` | Review one changed file |
+| `/zai explain <start-end>` | `/zai explain 10-25` | Explain a line range in selected file context |
+| `/zai suggest <prompt>` | `/zai suggest propose safer error handling` | Request targeted improvement ideas |
+| `/zai compare` | `/zai compare` | Compare old vs new behavior across diff |
+| `/zai help` | `/zai help` | Show command help |
 
-### Authorization
+## Behavior
 
-Interactive commands require collaborator access (write permission). Fork PR authors who are not collaborators receive an authorization error.
+- PR auto-review comments are idempotent and updated via hidden markers
+- Command replies are posted in-thread to the invoking comment
+- Reactions indicate status (`eyes`, `thinking`, `rocket`, `x`)
+- Command execution requires collaborator authorization
 
-### Trigger Behavior
+## Setup
 
-- **PR opened**: Creates a new review comment
-- **PR synchronize**: Updates the existing review comment (marker-based idempotent)
-- **Issue comment on PR**: Processes `/zai` commands if commenter is a collaborator
-
-## Configuration
-
-To use this action, you must add your Z.ai API key as a GitHub secret.
-
-### 1️⃣ Get your Z.ai API key
-
-Generate an API key from your Z.ai dashboard.
-
-### 2️⃣ Add the API key to your repository
-
-1. Go to your GitHub repository  
-2. Click **Settings**  
-3. Navigate to **Secrets and variables → Actions**  
-4. Click **New repository secret**  
-5. Add:
-
-   - **Name:** `ZAI_API_KEY`  
-   - **Value:** your Z.ai API key  
-
-6. Click **Save**
+1. Generate a Z.ai API key from your Z.ai account.
+2. In GitHub repository settings, add `ZAI_API_KEY` to **Secrets and variables -> Actions**.
+3. (Optional) Add repository variable `ZAI_MODEL` to override the default model.
 
 ## Contributing
 
-Contributions are welcome. See the [CONTRIBUTING](CONTRIBUTING.md) file for more information.
+Contributions are welcome. See `CONTRIBUTING.md`.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more information.
+This project is licensed under MIT. See `LICENSE`.
