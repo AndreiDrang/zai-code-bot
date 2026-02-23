@@ -1,5 +1,9 @@
-name: "Z.ai Code Review"
-description: "AI-powered code review using Z.ai models"
+name: 'Zai Code Bot'
+description: 'AI-powered PR code review'
+author: 'AndreiDrang'
+branding:
+  icon: 'shield'
+  color: 'blue'
 inputs:
   ZAI_API_KEY:
     description: "Z.ai API key"
@@ -7,7 +11,7 @@ inputs:
   ZAI_MODEL:
     description: "Z.ai AI model"
     required: false
-    default: "glm-4.7"
+    default: "glm-5"
   GITHUB_TOKEN:
     description: "GitHub token for API access"
     required: false
@@ -15,6 +19,3 @@ inputs:
 runs:
   using: "node20"
   main: "dist/index.js"
-branding:
-  icon: "check-circle"
-  color: "gray-dark"
