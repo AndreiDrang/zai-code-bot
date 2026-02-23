@@ -1,4 +1,4 @@
-name: Zai Code Bot Test
+name: Zai Code Bot
 
 on:
   pull_request:
