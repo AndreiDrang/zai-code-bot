@@ -29922,6 +29922,2520 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
+/***/ 9729:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Hardened API client with timeout, retry, and error handling.
+ * Provides reliability improvements for the Z.ai API calls.
+ */
+
+const https = __nccwpck_require__(5692);
+
+// Default configuration
+const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_DELAY_MS = 2000; // 2 seconds
+
+// API endpoint (matching existing implementation)
+const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
+
+/**
+ * Error categories for structured logging and handling.
+ * @typedef {'auth'|'validation'|'provider'|'rate-limit'|'timeout'|'internal'} ErrorCategory
+ */
+
+/**
+ * Creates an API client with configurable timeout and retry settings.
+ * @param {Object} config - Configuration options
+ * @param {number} [config.timeout=30000] - Request timeout in milliseconds
+ * @param {number} [config.maxRetries=3] - Maximum number of retry attempts
+ * @param {number} [config.baseDelay=2000] - Base delay for exponential backoff in ms
+ * @returns {Object} API client with call method
+ */
+function createApiClient(config = {}) {
+  const timeout = config.timeout ?? DEFAULT_TIMEOUT_MS;
+  const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const baseDelay = config.baseDelay ?? DEFAULT_BASE_DELAY_MS;
+
+  return {
+    /**
+     * Makes an API call with timeout and retry support.
+     * @param {Object} params - API call parameters
+     * @param {string} params.apiKey - API authentication key
+     * @param {string} params.model - Model identifier
+     * @param {string} params.prompt - Prompt content
+     * @returns {Promise<{success: boolean, data?: string, error?: Object}>}
+     */
+    async call({ apiKey, model, prompt }) {
+      const makeRequest = () => makeApiRequest({ apiKey, model, prompt, timeout });
+      const options = { maxRetries, baseDelay };
+
+      return callWithRetry(makeRequest, options);
+    },
+
+    // Expose config for testing/debugging
+    config: { timeout, maxRetries, baseDelay }
+  };
+}
+
+/**
+ * Generic retry wrapper with exponential backoff.
+ * @param {Function} fn - Async function to execute
+ * @param {Object} options - Retry options
+ * @param {number} [options.maxRetries=3] - Maximum retry attempts
+ * @param {number} [options.baseDelay=2000] - Base delay in milliseconds
+ * @returns {Promise<*>} Result of the function call
+ */
+async function callWithRetry(fn, options = {}) {
+  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const baseDelay = options.baseDelay ?? DEFAULT_BASE_DELAY_MS;
+
+  let lastError;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const categorized = categorizeError(error);
+
+      // Don't retry if error is not retryable
+      if (!categorized.retryable || attempt >= maxRetries) {
+        return {
+          success: false,
+          error: {
+            category: categorized.category,
+            message: sanitizeErrorMessage(error),
+            retryable: categorized.retryable
+          }
+        };
+      }
+
+      // Calculate delay with exponential backoff and jitter
+      // delay = baseDelay * 2^attempt + random(0, 1000)
+      const delay = baseDelay * Math.pow(2, attempt) + Math.floor(Math.random() * 1000);
+      await sleep(delay);
+    }
+  }
+
+  // Should not reach here, but handle defensively
+  return {
+    success: false,
+    error: {
+      category: 'internal',
+      message: sanitizeErrorMessage(lastError),
+      retryable: false
+    }
+  };
+}
+
+/**
+ * Makes the actual API request with timeout.
+ * @private
+ */
+function makeApiRequest({ apiKey, model, prompt, timeout }) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert code reviewer. Review the provided code changes and give clear, actionable feedback.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ]
+    });
+
+    const url = new URL(ZAI_API_URL);
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'POST',
+      timeout: timeout,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => (data += chunk));
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.message?.content;
+            if (!content) {
+              reject(new Error(`Z.ai API returned an empty response: ${data}`));
+            } else {
+              resolve(content);
+            }
+          } catch (parseError) {
+            reject(new Error(`Failed to parse API response: ${parseError.message}`));
+          }
+        } else {
+          reject(new Error(`Z.ai API error ${res.statusCode}: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timed out'));
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * Categorizes an error to determine if it's retryable.
+ * @param {Error} error - The error to categorize
+ * @returns {{category: ErrorCategory, retryable: boolean}}
+ */
+function categorizeError(error) {
+  const message = error.message || '';
+  const statusCode = extractStatusCode(message);
+
+  // Timeout errors
+  if (message.toLowerCase().includes('timeout') || message.toLowerCase().includes('timed out')) {
+    return { category: 'timeout', retryable: true };
+  }
+
+  // Network errors
+  if (message.toLowerCase().includes('econnrefused') ||
+      message.toLowerCase().includes('enetunreach') ||
+      message.toLowerCase().includes('ECONNREFUSED') ||
+      message.toLowerCase().includes('ENETUNREACH')) {
+    return { category: 'provider', retryable: true };
+  }
+
+  // Rate limiting (429)
+  if (statusCode === 429) {
+    return { category: 'rate-limit', retryable: true };
+  }
+
+  // Authentication errors (401, 403)
+  if (statusCode === 401 || statusCode === 403) {
+    return { category: 'auth', retryable: false };
+  }
+
+  // Validation errors (400)
+  if (statusCode === 400) {
+    return { category: 'validation', retryable: false };
+  }
+
+  // Server errors (5xx)
+  if (statusCode >= 500 && statusCode < 600) {
+    return { category: 'provider', retryable: true };
+  }
+
+  // Empty response
+  if (message.includes('empty response') || message.includes('returned an empty response')) {
+    return { category: 'provider', retryable: true };
+  }
+
+  // Default to internal/unknown
+  return { category: 'internal', retryable: false };
+}
+
+/**
+ * Extracts HTTP status code from error message.
+ * @private
+ */
+function extractStatusCode(message) {
+  const match = message.match(/\b([45]\d{2})\b/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+/**
+ * Sanitizes error message to prevent secret leakage.
+ * Removes API keys, tokens, URLs with credentials, and raw provider responses.
+ * @param {Error} error - The error to sanitize
+ * @returns {string} Safe user-facing message
+ */
+function sanitizeErrorMessage(error) {
+  if (!error || !error.message) {
+    return 'An unknown error occurred';
+  }
+
+  let message = error.message;
+
+  // Remove API keys (Bearer tokens, api keys)
+  message = message.replace(/(Bearer\s+)[^\s]+/gi, '$1[REDACTED]');
+  message = message.replace(/(api[_-]?key[=:]?\s*)[^\s,}]+/gi, '$1[REDACTED]');
+  message = message.replace(/(Authorization:\s*)[^\s]+/gi, '$1[REDACTED]');
+
+  // Remove URLs with potential credentials
+  message = message.replace(/https?:\/\/[^\s]*:[^\s@]+@[^\s]*/gi, '[URL_REDACTED]');
+
+  // Remove JSON-like content that might contain sensitive data
+  // This catches raw API response bodies
+  message = message.replace(/\{[^{}]*"[a-zA-Z_]*"\s*:\s*"[^"]*"[^{}]*\}/g, '[DATA_REDACTED]');
+
+  // Truncate very long error messages that might contain dump
+  if (message.length > 500) {
+    message = message.substring(0, 500) + '...';
+  }
+
+  return message;
+}
+
+/**
+ * Sleep utility for retry delays.
+ * @private
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+module.exports = {
+  createApiClient,
+  callWithRetry,
+  categorizeError,
+  sanitizeErrorMessage,
+  ZAI_API_URL,
+  DEFAULT_TIMEOUT_MS,
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_BASE_DELAY_MS
+};
+
+
+/***/ }),
+
+/***/ 6495:
+/***/ ((module) => {
+
+/**
+ * Authorization module for collaborator-based access control
+ * 
+ * Implements collaborator-only policy for all /zai commands
+ * as defined in SECURITY.md
+ */
+
+// Valid permission levels that authorize command execution
+// According to SECURITY.md: admin, maintain, write, or read (any is authorized)
+const AUTHORIZED_PERMISSIONS = new Set(['admin', 'maintain', 'write', 'read']);
+
+// Timeout for GitHub API calls (in milliseconds)
+const API_TIMEOUT_MS = 10000;
+
+/**
+ * Check if a user is a collaborator with acceptable permission level
+ * 
+ * @param {object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} username - Username to check
+ * @returns {Promise<{isCollaborator: boolean, permission: string|null}>}
+ */
+async function isCollaborator(octokit, owner, repo, username) {
+  try {
+    const response = await Promise.race([
+      octokit.rest.repos.getCollaboratorPermission({
+        owner,
+        repo,
+        username,
+      }),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('GitHub API request timed out')), API_TIMEOUT_MS)
+      )
+    ]);
+
+    const permission = response.data.permission;
+    const isAuthorized = AUTHORIZED_PERMISSIONS.has(permission);
+
+    return {
+      isCollaborator: isAuthorized,
+      permission,
+    };
+  } catch (_error) {
+    // Handle 404 - user is not a collaborator
+    if (_error.status === 404 || _error.status === 403) {
+      return {
+        isCollaborator: false,
+        permission: null,
+      };
+    }
+    
+    // Re-throw other errors (network, timeout, etc.)
+    throw _error;
+  }
+}
+
+/**
+ * Check authorization for a commenter on a PR
+ * 
+ * @param {object} octokit - GitHub Octokit instance
+ * @param {object} context - GitHub context object
+ * @param {object} commenter - Commenter object with login property
+ * @returns {Promise<{authorized: boolean, reason?: string}>}
+ */
+async function checkAuthorization(octokit, context, commenter) {
+  // If no commenter provided, reject
+  if (!commenter || !commenter.login) {
+    return {
+      authorized: false,
+      reason: 'Unable to identify commenter',
+    };
+  }
+
+  const { owner, repo } = context.repo;
+
+  try {
+    const result = await isCollaborator(octokit, owner, repo, commenter.login);
+
+    if (result.isCollaborator) {
+      return {
+        authorized: true,
+      };
+    }
+
+    // User is not authorized
+    return {
+      authorized: false,
+      reason: 'You are not authorized to use this command.',
+    };
+  } catch (_error) {
+    // Handle API errors gracefully - deny access on error for security
+    // Never expose internal error details to users
+    return {
+      authorized: false,
+      reason: 'Authorization check failed. Please try again later.',
+    };
+  }
+}
+
+/**
+ * Check if the PR is from a fork
+ * 
+ * @param {object} pullRequest - PR object from GitHub context
+ * @returns {boolean}
+ */
+function isForkPullRequest(pullRequest) {
+  if (!pullRequest || !pullRequest.head || !pullRequest.head.repo) {
+    return false;
+  }
+  return pullRequest.head.repo.fork === true;
+}
+
+/**
+ * Check authorization for fork PR scenarios
+ * According to SECURITY.md:
+ * - Fork PR comment by non-collaborator: Block all /zai commands silently
+ * - Fork PR comment by collaborator: Allow /zai commands
+ * 
+ * @param {object} octokit - GitHub Octokit instance
+ * @param {object} context - GitHub context object
+ * @param {object} commenter - Commenter object with login property
+ * @returns {Promise<{authorized: boolean, reason?: string}>}
+ */
+async function checkForkAuthorization(octokit, context, commenter) {
+  const pullRequest = context.payload.pull_request;
+  const isFork = isForkPullRequest(pullRequest);
+
+  // For non-fork PRs, use standard authorization
+  if (!isFork) {
+    return checkAuthorization(octokit, context, commenter);
+  }
+
+  // For fork PRs, check collaborator status
+  // Non-collaborators are blocked silently (per SECURITY.md)
+  if (!commenter || !commenter.login) {
+    return {
+      authorized: false,
+      reason: null, // Silent block for fork PRs
+    };
+  }
+
+  const authResult = await checkAuthorization(octokit, context, commenter);
+  
+  // If not authorized on fork PR, silent block
+  if (!authResult.authorized) {
+    return {
+      authorized: false,
+      reason: null, // Silent block for fork PRs
+    };
+  }
+
+  return authResult;
+}
+
+/**
+ * Get safe error message for unauthorized access
+ * Never exposes internal details
+ * 
+ * @returns {string}
+ */
+function getUnauthorizedMessage() {
+  return 'You are not authorized to use this command.';
+}
+
+/**
+ * Get safe error message for unknown commands
+ * 
+ * @returns {string}
+ */
+function getUnknownCommandMessage() {
+  return "Unknown command. Use /zai help for available commands.";
+}
+
+module.exports = {
+  isCollaborator,
+  checkAuthorization,
+  checkForkAuthorization,
+  isForkPullRequest,
+  getUnauthorizedMessage,
+  getUnknownCommandMessage,
+  AUTHORIZED_PERMISSIONS,
+  API_TIMEOUT_MS,
+};
+
+
+/***/ }),
+
+/***/ 5055:
+/***/ ((module) => {
+
+/**
+ * Z.ai Command Parser
+ * 
+ * Parses `/zai` commands and `@zai-bot` mentions into structured output.
+ * Enforces allowlist of valid commands.
+ */
+
+// Allowlisted commands
+const ALLOWED_COMMANDS = ['ask', 'review', 'explain', 'suggest', 'compare', 'help'];
+
+// Error types
+const ERROR_TYPES = {
+  UNKNOWN_COMMAND: 'unknown_command',
+  MALFORMED_INPUT: 'malformed_input',
+  EMPTY_INPUT: 'empty_input',
+};
+
+/**
+ * Normalize input: convert @zai-bot mentions to /zai format
+ * @param {string} input - Raw input string
+ * @returns {string} - Normalized input
+ */
+function normalizeInput(input) {
+  if (typeof input !== 'string') {
+    return '';
+  }
+  
+  // Trim whitespace
+  let normalized = input.trim();
+  
+  // Convert @zai-bot to /zai (case-insensitive mention normalization)
+  // Matches: @zai-bot, @zaibot, @zai, etc. at start of input
+  normalized = normalized.replace(/^@zai[-_]?bot\s+/i, '/zai ');
+  
+  // Also handle @zai without -bot suffix
+  normalized = normalized.replace(/^@zai\s+/i, '/zai ');
+  
+  return normalized;
+}
+
+/**
+ * Parse a /zai command string into structured output
+ * @param {string} input - Raw input string (e.g., "/zai ask what is this?")
+ * @returns {Object} - Parsed result: { command, args, raw, error? }
+ */
+function parseCommand(input) {
+  const raw = input;
+  
+  // Handle null/undefined/empty input
+  if (input === null || input === undefined || input === '') {
+    return {
+      command: null,
+      args: [],
+      raw,
+      error: { type: ERROR_TYPES.EMPTY_INPUT, message: 'Input is empty' },
+    };
+  }
+  
+  // Normalize the input (handle mentions)
+  const normalized = normalizeInput(input);
+  
+  // Check if it starts with /zai (case-insensitive)
+  if (!normalized.toLowerCase().startsWith('/zai')) {
+    // If normalized input is empty after processing, it's empty input
+    if (!normalized) {
+      return {
+        command: null,
+        args: [],
+        raw,
+        error: { type: ERROR_TYPES.EMPTY_INPUT, message: 'Input is empty' },
+      };
+    }
+    return {
+      command: null,
+      args: [],
+      raw,
+      error: { type: ERROR_TYPES.MALFORMED_INPUT, message: 'Input must start with /zai' },
+    };
+  }
+  
+  // Extract command and args after /zai (normalize prefix to lowercase)
+  const afterZai = normalized.slice(4).trim();
+  
+  // If nothing after /zai, it's malformed
+  if (!afterZai) {
+    return {
+      command: null,
+      args: [],
+      raw,
+      error: { type: ERROR_TYPES.MALFORMED_INPUT, message: 'Missing command after /zai' },
+    };
+  }
+  
+  // Parse command and args (split by whitespace)
+  const parts = afterZai.split(/\s+/);
+  const command = parts[0].toLowerCase();
+  const args = parts.slice(1);
+  
+  // Check if command is in allowlist
+  if (!ALLOWED_COMMANDS.includes(command)) {
+    return {
+      command: null,
+      args: [],
+      raw,
+      error: { type: ERROR_TYPES.UNKNOWN_COMMAND, message: `Unknown command: ${command}` },
+    };
+  }
+  
+  // Valid command
+  return {
+    command,
+    args,
+    raw,
+    error: null,
+  };
+}
+
+/**
+ * Check if a parsed result is valid (has no error)
+ * @param {Object} result - Result from parseCommand
+ * @returns {boolean}
+ */
+function isValid(result) {
+  return result.error === null;
+}
+
+module.exports = {
+  ALLOWED_COMMANDS,
+  ERROR_TYPES,
+  parseCommand,
+  normalizeInput,
+  isValid,
+};
+
+
+/***/ }),
+
+/***/ 6819:
+/***/ ((module) => {
+
+const REACTIONS = {
+  EYES: 'eyes',
+  THINKING: 'thinking',
+  ROCKET: 'rocket',
+  X: 'x',
+};
+
+async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {
+  const { data: comments } = await octokit.rest.issues.listComments({
+    owner,
+    repo,
+    issue_number: issueNumber,
+  });
+  
+  return comments.find(c => c.body.includes(marker)) || null;
+}
+
+async function upsertComment(octokit, owner, repo, issueNumber, body, marker, options = {}) {
+  const { replyToId = null, updateExisting = true } = options;
+  
+  let existingComment = null;
+  if (!replyToId && updateExisting) {
+    existingComment = await findCommentByMarker(octokit, owner, repo, issueNumber, marker);
+  }
+  
+  if (existingComment) {
+    const { data: updated } = await octokit.rest.issues.updateComment({
+      owner,
+      repo,
+      comment_id: existingComment.id,
+      body,
+    });
+    return { action: 'updated', comment: updated };
+  } else {
+    const createParams = {
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body,
+    };
+    
+    if (replyToId) {
+      createParams.in_reply_to_comment_id = replyToId;
+    }
+    
+    const { data: created } = await octokit.rest.issues.createComment(createParams);
+    return { action: 'created', comment: created };
+  }
+}
+
+async function addReaction(octokit, owner, repo, commentId, reaction) {
+  try {
+    const { data: result } = await octokit.rest.reactions.createForIssueComment({
+      owner,
+      repo,
+      comment_id: commentId,
+      content: reaction,
+    });
+    return { success: true, reaction: result };
+  } catch (error) {
+    if (error.status === 404) {
+      return { success: false, error: 'comment_not_found', details: error };
+    }
+    throw error;
+  }
+}
+
+async function updateReaction(octokit, owner, repo, commentId, _oldReaction, newReaction) {
+  const result = await addReaction(octokit, owner, repo, commentId, newReaction);
+  
+  return {
+    oldReactionRemoved: true,
+    newReaction: result,
+  };
+}
+
+async function setReaction(octokit, owner, repo, commentId, reactionContent) {
+  return addReaction(octokit, owner, repo, commentId, reactionContent);
+}
+
+module.exports = {
+  REACTIONS,
+  findCommentByMarker,
+  upsertComment,
+  addReaction,
+  updateReaction,
+  setReaction,
+};
+
+
+/***/ }),
+
+/***/ 9990:
+/***/ ((module) => {
+
+/**
+ * Context budget and truncation utilities for prompt construction.
+ * Provides deterministic file/diff selection and truncation policy.
+ */
+
+const DEFAULT_MAX_CHARS = 8000;
+const TRUNCATION_MARKER = '...[truncated, N chars omitted]';
+
+/**
+ * Truncates content to maxChars with explicit truncation marker.
+ * @param {string} content - The content to truncate
+ * @param {number} maxChars - Maximum characters (default: 8000)
+ * @returns {{ content: string, truncated: boolean, omitted: number }}
+ */
+function truncateContext(content, maxChars = DEFAULT_MAX_CHARS) {
+  if (typeof content !== 'string') {
+    throw new TypeError('content must be a string');
+  }
+  if (typeof maxChars !== 'number' || maxChars < 1) {
+    throw new TypeError('maxChars must be a positive number');
+  }
+
+  if (content.length <= maxChars) {
+    return { content, truncated: false, omitted: 0 };
+  }
+
+  const markerTemplate = TRUNCATION_MARKER;
+  // Estimate: use 1 digit for N initially
+  const estimatedMarkerLen = markerTemplate.length;
+  const availableSpace = maxChars - estimatedMarkerLen;
+
+  // Ensure we have positive space
+  if (availableSpace <= 0) {
+    const fullMarker = markerTemplate.replace('N', content.length);
+    return { content: fullMarker, truncated: true, omitted: content.length };
+  }
+
+  let truncatedContent = content.slice(0, availableSpace);
+  let omitted = content.length - availableSpace;
+
+  // Adjust for variable marker length (number of digits in omitted count)
+  const fullMarker = markerTemplate.replace('N', omitted);
+  const actualMarkerLen = fullMarker.length;
+  const adjustment = actualMarkerLen - estimatedMarkerLen;
+
+  if (adjustment > 0) {
+    // Need to trim more content to fit the longer marker
+    const newAvailableSpace = Math.max(0, availableSpace - adjustment);
+    truncatedContent = content.slice(0, newAvailableSpace);
+    omitted = content.length - newAvailableSpace;
+  }
+
+  return {
+    content: truncatedContent + markerTemplate.replace('N', omitted),
+    truncated: true,
+    omitted
+  };
+}
+
+/**
+ * Extracts a line range from content.
+ * @param {string} content - The content to extract from
+ * @param {number} startLine - Start line number (1-indexed)
+ * @param {number} endLine - End line number (1-indexed)
+ * @returns {{ lines: string[], valid: boolean, error?: string }}
+ */
+function extractLines(content, startLine, endLine) {
+  if (typeof content !== 'string') {
+    throw new TypeError('content must be a string');
+  }
+
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
+  // Validate range first
+  const validation = validateRange(startLine, endLine, maxLines);
+  if (!validation.valid) {
+    return { lines: [], valid: false, error: validation.error };
+  }
+
+  // Extract lines (convert to 0-indexed, slice end is exclusive)
+  const extracted = lines.slice(startLine - 1, endLine);
+
+  return { lines: extracted, valid: true };
+}
+
+/**
+ * Validates a line range.
+ * @param {number} startLine - Start line number (1-indexed)
+ * @param {number} endLine - End line number (1-indexed)
+ * @param {number} maxLines - Maximum number of lines in the content
+ * @returns {{ valid: boolean, error?: string }}
+ */
+function validateRange(startLine, endLine, maxLines) {
+  if (typeof startLine !== 'number' || typeof endLine !== 'number' || typeof maxLines !== 'number') {
+    return { valid: false, error: 'All parameters must be numbers' };
+  }
+
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || !Number.isInteger(maxLines)) {
+    return { valid: false, error: 'All parameters must be integers' };
+  }
+
+  if (startLine < 1) {
+    return { valid: false, error: `Start line must be >= 1, got ${startLine}` };
+  }
+
+  if (endLine > maxLines) {
+    return { valid: false, error: `End line ${endLine} exceeds content max lines ${maxLines}` };
+  }
+
+  if (startLine > endLine) {
+    return { valid: false, error: `Start line ${startLine} cannot exceed end line ${endLine}` };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Gets the default maximum context size.
+ * @returns {number} Default max characters
+ */
+function getDefaultMaxChars() {
+  return DEFAULT_MAX_CHARS;
+}
+
+module.exports = {
+  truncateContext,
+  extractLines,
+  validateRange,
+  getDefaultMaxChars,
+  DEFAULT_MAX_CHARS,
+  TRUNCATION_MARKER
+};
+
+
+
+/**
+ * Context builder error class for typed errors
+ */
+class ContextError extends Error {
+  constructor(message, field) {
+    super(message);
+    this.name = 'ContextError';
+    this.field = field;
+    this.code = 'MISSING_FIELD';
+  }
+}
+
+/**
+ * Fetches changed files from a PR
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} pullNumber - PR number
+ * @returns {Promise<Array>} Array of changed file objects
+ */
+async function fetchChangedFiles(octokit, owner, repo, pullNumber) {
+  const { data: files } = await octokit.rest.pulls.listFiles({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  });
+  return files;
+}
+
+/**
+ * Builds a normalized handler context from GitHub payload
+ * Provides consistent fields for all command handlers
+ * 
+ * @param {Object} payload - GitHub event payload (github.context.payload)
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {Object} options - Optional configuration
+ * @param {boolean} options.fetchFiles - Whether to fetch changed files (default: true)
+ * @param {string} options.apiKey - Z.ai API key (from config)
+ * @param {string} options.model - Z.ai model (from config)
+ * @param {number} options.maxChars - Max characters for context (default: 8000)
+ * @returns {Promise<Object>} Normalized handler context
+ * 
+ * @throws {ContextError} When required fields are missing
+ * 
+ * Context object contains:
+ * - octokit: GitHub API client
+ * - owner: Repository owner
+ * - repo: Repository name
+ * - pullNumber: PR number
+ * - commentId: Comment ID (if from issue_comment)
+ * - commentBody: Comment text
+ * - sender: User who triggered the event
+ * - changedFiles: Array of changed files (fetched from PR)
+ * - payload: Raw event payload
+ * - githubContext: GitHub context object
+ * - maxChars: Context budget
+ * - apiKey: Z.ai API key
+ * - model: Z.ai model
+ */
+async function buildHandlerContext(payload, octokit, options = {}) {
+  const fetchFiles = options.fetchFiles !== false;
+  const apiKey = options.apiKey;
+  const model = options.model || 'glm-4.7';
+  const maxChars = options.maxChars || DEFAULT_MAX_CHARS;
+
+  // Extract owner and repo from payload
+  const owner = payload.repo?.owner?.login || payload.repository?.owner?.login;
+  const repo = payload.repo?.name || payload.repository?.name;
+
+  if (!owner) {
+    throw new ContextError('Missing required field: owner', 'owner');
+  }
+  if (!repo) {
+    throw new ContextError('Missing required field: repo', 'repo');
+  }
+
+  // Extract PR number from pull_request or issue (for issue_comment on PR)
+  let pullNumber = payload.pull_request?.number;
+  if (!pullNumber && payload.issue?.number && payload.issue?.pull_request) {
+    pullNumber = payload.issue.number;
+  }
+
+  if (!pullNumber) {
+    throw new ContextError('Missing required field: pullNumber (PR number)', 'pullNumber');
+  }
+
+  // Extract comment info (for issue_comment events)
+  const commentId = payload.comment?.id;
+  const commentBody = payload.comment?.body;
+
+  // Extract sender (user who triggered the event)
+  const sender = payload.sender?.login;
+
+  if (!sender) {
+    throw new ContextError('Missing required field: sender', 'sender');
+  }
+
+  // Build base context
+  const context = {
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    commentId,
+    commentBody,
+    sender,
+    payload,
+    maxChars,
+    apiKey,
+    model,
+    // Legacy/compatibility fields
+    issueNumber: pullNumber, // For handlers expecting issueNumber
+  };
+
+  // Fetch changed files if requested
+  if (fetchFiles) {
+    try {
+      context.changedFiles = await fetchChangedFiles(octokit, owner, repo, pullNumber);
+    } catch (error) {
+      // Don't fail the entire context for file fetch errors
+      context.changedFiles = [];
+      context._fileFetchError = error.message;
+    }
+  }
+
+  return context;
+}
+
+module.exports = {
+  // Existing exports
+  truncateContext,
+  extractLines,
+  validateRange,
+  getDefaultMaxChars,
+  DEFAULT_MAX_CHARS,
+  TRUNCATION_MARKER,
+  // New exports
+  buildHandlerContext,
+  fetchChangedFiles,
+  ContextError,
+};
+
+
+/***/ }),
+
+/***/ 4575:
+/***/ ((module) => {
+
+/**
+ * Conversation Continuity State Management
+ * 
+ * Lightweight state persistence for PR thread context without external database.
+ * State is stored in the bot's own comment as a JSON object in an HTML comment marker.
+ */
+
+const CONTINUITY_MARKER = '<!-- zai-continuity:';
+const CONTINUITY_MARKER_END = ' -->';
+
+// Current version for future migrations
+const STATE_VERSION = 1;
+
+// Maximum state size in bytes (~2KB)
+const MAX_STATE_SIZE = 2048;
+
+/**
+ * Encode state data to a compact base64 string
+ * @param {Object} data - State data to encode
+ * @returns {string} Base64-encoded JSON string
+ */
+function encodeState(data) {
+  const stateWithVersion = {
+    v: STATE_VERSION,
+    ...data,
+  };
+  
+  const jsonStr = JSON.stringify(stateWithVersion);
+  
+  // Check size limit
+  const sizeBytes = Buffer.byteLength(jsonStr, 'utf8');
+  if (sizeBytes > MAX_STATE_SIZE) {
+    throw new Error(`State size ${sizeBytes} bytes exceeds limit of ${MAX_STATE_SIZE} bytes`);
+  }
+  
+  // Use base64url encoding (URL-safe, no padding)
+  return Buffer.from(jsonStr, 'utf8').toString('base64url');
+}
+
+/**
+ * Decode state from compact base64 string
+ * @param {string} encoded - Base64-encoded state string
+ * @returns {Object|null} Decoded state object or null if invalid/corrupted
+ */
+function decodeState(encoded) {
+  if (!encoded || typeof encoded !== 'string') {
+    return null;
+  }
+  
+  try {
+    // Handle both base64url and standard base64
+    let jsonStr;
+    try {
+      jsonStr = Buffer.from(encoded, 'base64url').toString('utf8');
+    } catch {
+      jsonStr = Buffer.from(encoded, 'base64').toString('utf8');
+    }
+    
+    const parsed = JSON.parse(jsonStr);
+    
+    // Validate version - support migration path
+    if (!parsed.v) {
+      // Legacy state without version - assume v1 format
+      return parsed;
+    }
+    
+    if (parsed.v > STATE_VERSION) {
+      // Future version - attempt to parse what we can
+      console.warn(`State version ${parsed.v} is newer than supported ${STATE_VERSION}, attempting to parse`);
+    }
+    
+    return parsed;
+  } catch {
+    // Graceful fallback for corrupted state
+    return null;
+  }
+}
+
+/**
+ * Extract continuity state from comment body
+ * @param {string} body - Comment body text
+ * @returns {Object|null} State object or null if not found/corrupted
+ */
+function extractStateFromComment(body) {
+  if (!body || typeof body !== 'string') {
+    return null;
+  }
+  
+  const startIdx = body.indexOf(CONTINUITY_MARKER);
+  if (startIdx === -1) {
+    return null;
+  }
+  
+  const contentStart = startIdx + CONTINUITY_MARKER.length;
+  const endIdx = body.indexOf(CONTINUITY_MARKER_END, contentStart);
+  
+  if (endIdx === -1) {
+    return null;
+  }
+  
+  const encoded = body.slice(contentStart, endIdx).trim();
+  return decodeState(encoded);
+}
+
+/**
+ * Create comment body with continuity state embedded
+ * @param {string} content - Main comment content
+ * @param {Object} state - State data to embed
+ * @returns {string} Comment body with embedded state
+ */
+function createCommentWithState(content, state) {
+  let markerContent = '';
+  
+  if (state && Object.keys(state).length > 0) {
+    try {
+      const encoded = encodeState(state);
+      markerContent = `${CONTINUITY_MARKER} ${encoded}${CONTINUITY_MARKER_END}`;
+    } catch {
+      console.warn('Failed to encode state');
+      // Continue without state marker
+    }
+  }
+  
+  if (markerContent) {
+    return `${content}\n\n${markerContent}`;
+  }
+  
+  return content;
+}
+
+/**
+ * Find bot comment containing continuity state
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - PR/Issue number
+ * @returns {Promise<Object|null>} Comment object or null
+ */
+async function findStateComment(octokit, owner, repo, issueNumber) {
+  const { data: comments } = await octokit.rest.issues.listComments({
+    owner,
+    repo,
+    issue_number: issueNumber,
+  });
+  
+  return comments.find(c => c.body?.includes(CONTINUITY_MARKER)) || null;
+}
+
+/**
+ * Load continuity state from PR comment
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - PR/Issue number
+ * @returns {Promise<Object|null>} State object or null if not found/corrupted
+ */
+async function loadContinuityState(octokit, owner, repo, issueNumber) {
+  try {
+    const comment = await findStateComment(octokit, owner, repo, issueNumber);
+    
+    if (!comment) {
+      return null;
+    }
+    
+    return extractStateFromComment(comment.body);
+  } catch {
+    // Graceful fallback - any error returns null
+    console.warn('Failed to load continuity state');
+    return null;
+  }
+}
+
+/**
+ * Save continuity state to PR comment (creates or updates)
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - PR/Issue number
+ * @param {Object} state - State data to save
+ * @param {Object} options - Additional options
+ * @param {string} options.content - Main comment content (if creating new)
+ * @param {number} [options.replyToId] - Reply to comment ID
+ * @returns {Promise<Object>} Result with action type and comment
+ */
+async function saveContinuityState(octokit, owner, repo, issueNumber, state, options = {}) {
+  const { content = '', replyToId = null } = options;
+  
+  try {
+    const existingComment = await findStateComment(octokit, owner, repo, issueNumber);
+    
+    if (existingComment) {
+      // Extract existing content (remove old state marker)
+      let existingContent = existingComment.body;
+      const markerStart = existingContent.indexOf(CONTINUITY_MARKER);
+      const markerEnd = existingContent.indexOf(CONTINUITY_MARKER_END, markerStart);
+      
+      if (markerStart !== -1 && markerEnd !== -1) {
+        existingContent = existingContent.slice(0, markerStart).trim() + 
+          existingContent.slice(markerEnd + CONTINUITY_MARKER_END.length).trim();
+      }
+      
+      // Merge with new content
+      const newContent = content || existingContent;
+      const newBody = createCommentWithState(newContent, state);
+      
+      const { data: updated } = await octokit.rest.issues.updateComment({
+        owner,
+        repo,
+        comment_id: existingComment.id,
+        body: newBody,
+      });
+      
+      return { action: 'updated', comment: updated };
+    } else {
+      // Create new comment with state
+      if (!content) {
+        throw new Error('Cannot create comment without content');
+      }
+      
+      const body = createCommentWithState(content, state);
+      
+      const createParams = {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body,
+      };
+      
+      if (replyToId) {
+        createParams.in_reply_to_comment_id = replyToId;
+      }
+      
+      const { data: created } = await octokit.rest.issues.createComment(createParams);
+      return { action: 'created', comment: created };
+    }
+  } catch (err) {
+    console.warn('Failed to save continuity state');
+    throw err;
+  }
+}
+
+/**
+ * Update existing state with new data (merge)
+ * @param {Object} currentState - Current state object
+ * @param {Object} updates - New data to merge
+ * @returns {Object} Merged state
+ */
+function mergeState(currentState, updates) {
+  if (!currentState) {
+    return updates;
+  }
+  
+  return {
+    ...currentState,
+    ...updates,
+  };
+}
+
+module.exports = {
+  CONTINUITY_MARKER,
+  CONTINUITY_MARKER_END,
+  STATE_VERSION,
+  MAX_STATE_SIZE,
+  encodeState,
+  decodeState,
+  extractStateFromComment,
+  createCommentWithState,
+  findStateComment,
+  loadContinuityState,
+  saveContinuityState,
+  mergeState,
+};
+
+
+/***/ }),
+
+/***/ 2500:
+/***/ ((module) => {
+
+/**
+ * Event routing and anti-loop protection utilities
+ * Handles GitHub webhook events for PR reviews and comments
+ */
+
+/**
+ * Determines the type of GitHub event from the context
+ * @param {Object} context - GitHub actions context object
+ * @returns {string} Event type: 'pull_request', 'issue_comment_pr', or 'issue_comment_non_pr'
+ */
+function getEventType(context) {
+  const eventName = context.eventName;
+
+  if (eventName === 'pull_request') {
+    return 'pull_request';
+  }
+
+  if (eventName === 'issue_comment') {
+    // Check if the issue is a pull request by looking for pull_request property
+    const issue = context.payload.issue;
+    if (issue && issue.pull_request) {
+      return 'issue_comment_pr';
+    }
+    return 'issue_comment_non_pr';
+  }
+
+  // Unknown event type - return as non-processable
+  return 'issue_comment_non_pr';
+}
+
+/**
+ * Checks if a comment was authored by a bot
+ * @param {Object} comment - GitHub comment object
+ * @returns {boolean} True if the comment author is a bot
+ */
+function isBotComment(comment) {
+  if (!comment || !comment.user) {
+    return false;
+  }
+  return comment.user.type === 'Bot';
+}
+
+/**
+ * Determines whether an event should be processed based on event type and author
+ * @param {Object} context - GitHub actions context object
+ * @returns {Object} { process: boolean, reason: string }
+ */
+function shouldProcessEvent(context) {
+  const eventType = getEventType(context);
+
+  // Handle pull_request events - always process (existing behavior)
+  if (eventType === 'pull_request') {
+    return { process: true, reason: 'pull_request event' };
+  }
+
+  // Handle issue_comment on PRs
+  if (eventType === 'issue_comment_pr') {
+    const comment = context.payload.comment;
+
+    // Check if comment is from a bot (anti-loop protection)
+    if (isBotComment(comment)) {
+      return { process: false, reason: 'bot comment - skipping to prevent loop' };
+    }
+
+    return { process: true, reason: 'issue_comment on pull request' };
+  }
+
+  // Handle non-PR issue comments - reject
+  if (eventType === 'issue_comment_non_pr') {
+    return { process: false, reason: 'non-PR issue comment - not supported' };
+  }
+
+  // Unknown event type - reject by default
+  return { process: false, reason: `unknown event type: ${context.eventName}` };
+}
+
+/**
+ * Extracts relevant information from context for routing decisions
+ * @param {Object} context - GitHub actions context object
+ * @returns {Object} Event info object
+ */
+function getEventInfo(context) {
+  const eventType = getEventType(context);
+  const { process, reason } = shouldProcessEvent(context);
+
+  const info = {
+    eventType,
+    shouldProcess: process,
+    reason,
+    eventName: context.eventName,
+  };
+
+  // Add PR number if available
+  if (context.payload.pull_request?.number) {
+    info.pullNumber = context.payload.pull_request.number;
+  } else if (context.payload.issue?.number) {
+    info.pullNumber = context.payload.issue.number;
+  }
+
+  // Add comment info if available
+  if (context.payload.comment) {
+    info.commentId = context.payload.comment.id;
+    info.commentAuthor = context.payload.comment.user?.login;
+    info.isBot = isBotComment(context.payload.comment);
+  }
+
+  return info;
+}
+
+module.exports = {
+  getEventType,
+  isBotComment,
+  shouldProcessEvent,
+  getEventInfo,
+};
+
+
+/***/ }),
+
+/***/ 3016:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+const { createApiClient } = __nccwpck_require__(9729);
+const { createLogger, generateCorrelationId, getUserMessage } = __nccwpck_require__(2120);
+const { REACTIONS, setReaction } = __nccwpck_require__(6819);
+
+function buildComparePrompt(files) {
+  const diffs = files
+    .filter(f => f.patch)
+    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
+    .join('\n\n');
+
+  return `You are an expert code reviewer. Compare the OLD version with the NEW version in the following pull request changes.
+
+Analyze the differences and provide:
+1. What changed between old and new versions
+2. Key differences in approach or implementation
+3. Potential implications of these changes
+4. Any concerns or things to watch out for
+
+## Changed Files:\n\n${diffs}`;
+}
+
+function formatCompareResponse(comparison) {
+  if (!comparison.includes('```')) {
+    return `## Old vs New Comparison\n\n${comparison}`;
+  }
+  return `## Old vs New Comparison\n\n${comparison}`;
+}
+
+async function handleCompareCommand(context) {
+  const { octokit, context: githubContext, payload, apiKey, model, commentId } = context;
+  const { owner, repo } = githubContext.repo;
+
+  const correlationId = generateCorrelationId();
+  const logger = createLogger(correlationId, {
+    eventName: githubContext.eventName,
+    prNumber: payload.pull_request?.number,
+    command: 'compare',
+  });
+
+  logger.info({}, 'Processing compare command');
+
+  try {
+    const pullNumber = payload.pull_request.number;
+
+    logger.info({ pullNumber }, 'Fetching changed files');
+
+    const { data: files } = await octokit.rest.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+    });
+
+    if (!files || files.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return {
+        success: false,
+        error: 'No changed files found in this pull request.',
+      };
+    }
+
+    const filesWithPatches = files.filter(f => f.patch);
+    if (filesWithPatches.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return {
+        success: false,
+        error: 'No patchable changes found in this pull request.',
+      };
+    }
+
+    const prompt = buildComparePrompt(files);
+
+    const truncated = truncateContext(prompt, DEFAULT_MAX_CHARS);
+    if (truncated.truncated) {
+      logger.info({ originalLength: prompt.length, truncatedLength: truncated.content.length },
+        'Context truncated due to size');
+    }
+
+    logger.info({ promptLength: truncated.content.length }, 'Calling Z.ai API');
+
+    const apiClient = createApiClient({ timeout: 30000, maxRetries: 3 });
+    const result = await apiClient.call({
+      apiKey,
+      model,
+      prompt: truncated.content,
+    });
+
+    if (!result.success) {
+      const category = result.error.category || 'provider';
+      const userMessage = getUserMessage(category, new Error(result.error.message));
+      
+      logger.error({ error: result.error }, 'API call failed');
+      
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      
+      return {
+        success: false,
+        error: userMessage,
+      };
+    }
+
+    const response = formatCompareResponse(result.data);
+
+    logger.info({ responseLength: response.length }, 'Compare command completed successfully');
+
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+
+    return {
+      success: true,
+      response,
+    };
+
+  } catch (error) {
+    logger.error({ error: error.message }, 'Unexpected error in compare command');
+    
+    const category = 'internal';
+    const userMessage = getUserMessage(category, error);
+    
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    
+    return {
+      success: false,
+      error: userMessage,
+    };
+  }
+}
+
+module.exports = {
+  handleCompareCommand,
+  buildComparePrompt,
+  formatCompareResponse,
+};
+
+
+/***/ }),
+
+/***/ 1248:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Explain command handler for /zai explain <lines>
+ * 
+ * Parses line range, validates with context.validateRange, extracts lines,
+ * and requests explanation from Z.ai API.
+ */
+
+const { extractLines, validateRange, truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+const { REACTIONS, upsertComment, setReaction } = __nccwpck_require__(6819);
+const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
+
+const EXPLAIN_MARKER = '<!-- ZAI_EXPLAIN_COMMAND -->';
+
+/**
+ * Parse line range from command argument
+ * Supports formats: "10-15", "10:15", "10..15"
+ * @param {string} arg - Line range argument
+ * @returns {{ startLine: number|null, endLine: number|null, error?: string }}
+ */
+function parseLineRange(arg) {
+  if (!arg || typeof arg !== 'string') {
+    return { startLine: null, endLine: null, error: 'No line range provided. Usage: /zai explain <start-end>' };
+  }
+
+  // Try different separators
+  const match = arg.match(/^(\d+)([-:]|[.]{1,2})(\d+)$/);
+  
+  if (!match) {
+    return { 
+      startLine: null, 
+      endLine: null, 
+      error: `Invalid line range format: "${arg}". Use format: /zai explain 10-15` 
+    };
+  }
+
+  const startLine = parseInt(match[1], 10);
+  const endLine = parseInt(match[3], 10);
+
+  if (startLine < 1) {
+    return { startLine: null, endLine: null, error: `Start line must be >= 1, got ${startLine}` };
+  }
+
+  if (startLine > endLine) {
+    return { startLine: null, endLine: null, error: `Start line ${startLine} cannot exceed end line ${endLine}` };
+  }
+
+  return { startLine, endLine };
+}
+
+/**
+ * Build explanation prompt with extracted lines
+ * @param {string} filename - File being explained
+ * @param {string[]} lines - Extracted lines
+ * @param {number} startLine - Start line number
+ * @param {number} endLine - End line number
+ * @param {number} maxChars - Maximum prompt characters
+ * @returns {{ prompt: string, truncated: boolean }}
+ */
+function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFAULT_MAX_CHARS) {
+  const codeContent = lines.join('\n');
+  
+  let prompt = `Please explain the following code from file: ${filename}\n`;
+  prompt += `Lines ${startLine}-${endLine}:\n\n`;
+  prompt += `\`\`\`\n${codeContent}\n\`\`\``;
+  
+  const truncated = truncateContext(prompt, maxChars);
+  return { prompt: truncated.content, truncated: truncated.truncated };
+}
+
+/**
+ * Handle the /zai explain command
+ * @param {Object} context - Application context
+ * @param {Object} context.octokit - GitHub Octokit instance
+ * @param {string} context.owner - Repository owner
+ * @param {string} context.repo - Repository name
+ * @param {number} context.issueNumber - PR number
+ * @param {string} context.fileContent - File content to explain
+ * @param {string} context.filename - File name
+ * @param {Object} context.apiClient - Z.ai API client
+ * @param {string} context.apiKey - Z.ai API key
+ * @param {string} context.model - Z.ai model to use
+ * @param {Object} context.logger - Logger instance
+ * @param {string[]} args - Command arguments (line range)
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+async function handleExplainCommand(context, args) {
+  const { octokit, owner, repo, issueNumber, fileContent, filename, apiClient, apiKey, model, commentId } = context;
+  const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
+
+  if (!args || args.length === 0) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** No line range provided. Usage: /zai explain 10-15`,
+      EXPLAIN_MARKER
+    );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: 'No line range provided' };
+  }
+
+  // Step 1: Parse line range
+  const parsed = parseLineRange(args[0]);
+  if (parsed.error) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** ${parsed.error}`,
+      EXPLAIN_MARKER
+    );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: parsed.error };
+  }
+
+  const { startLine, endLine } = parsed;
+  logger.info({ startLine, endLine, filename }, 'Parsed line range');
+
+  // Step 2: Validate line range bounds
+  const lines = fileContent.split('\n');
+  const maxLines = lines.length;
+  
+  const validation = validateRange(startLine, endLine, maxLines);
+  if (!validation.valid) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** ${validation.error}. File has ${maxLines} lines.`,
+      EXPLAIN_MARKER
+    );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: validation.error };
+  }
+
+  // Step 3: Extract lines
+  const extracted = extractLines(fileContent, startLine, endLine);
+  if (!extracted.valid) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** ${extracted.error}`,
+      EXPLAIN_MARKER
+    );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: extracted.error };
+  }
+
+  logger.info({ linesExtracted: extracted.lines.length }, 'Lines extracted');
+
+  // Step 4: Build prompt
+  const { prompt, truncated } = buildExplainPrompt(filename, extracted.lines, startLine, endLine);
+
+  // Step 5: Call Z.ai API
+  try {
+    logger.info({ filename, startLine, endLine }, 'Calling Z.ai API for explanation');
+
+    const result = await apiClient.call({
+      apiKey,
+      model,
+      prompt
+    });
+
+    if (!result.success) {
+      const errorMsg = result.error?.message || 'Failed to get explanation';
+      logger.error({ error: errorMsg }, 'API call failed');
+      await upsertComment(
+        octokit, owner, repo, issueNumber,
+        `**Error:** ${errorMsg}`,
+        EXPLAIN_MARKER
+      );
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return { success: false, error: errorMsg };
+    }
+
+    let response = result.data;
+
+    if (truncated) {
+      response += '\n\n_(Note: Context was truncated due to size limits)_';
+    }
+
+    const formattedResponse = `## 📖 Explanation: ${filename}:${startLine}-${endLine}\n\n${response}`;
+
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      formattedResponse,
+      EXPLAIN_MARKER
+    );
+
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+
+    logger.info({ filename, startLine, endLine }, 'Explanation posted successfully');
+    return { success: true };
+
+  } catch (error) {
+    logger.error({ error: error.message }, 'Explain command failed');
+
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** Failed to complete explanation. Please try again later.`,
+      EXPLAIN_MARKER
+    );
+
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = {
+  handleExplainCommand,
+  parseLineRange,
+  buildExplainPrompt,
+  EXPLAIN_MARKER,
+};
+
+
+/***/ }),
+
+/***/ 903:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Review command handler for /zai review
+ * 
+ * Validates file is in PR changed files and builds targeted review prompt.
+ */
+
+const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+const { REACTIONS, upsertComment, setReaction } = __nccwpck_require__(6819);
+const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
+
+// Marker for identifying review comments
+const REVIEW_MARKER = '<!-- ZAI_REVIEW_COMMAND -->';
+
+/**
+ * Parse file path from command arguments
+ * @param {string[]} args - Command arguments
+ * @returns {{ filePath: string|null, error?: string }}
+ */
+function parseFilePath(args) {
+  if (!args || args.length === 0) {
+    return { filePath: null, error: 'No file path provided. Usage: /zai review <filepath>' };
+  }
+  
+  const filePath = args.join('/');
+  
+  // Basic validation - no path traversal attempts
+  if (filePath.includes('..') || filePath.startsWith('/')) {
+    return { filePath: null, error: 'Invalid file path. Path traversal is not allowed.' };
+  }
+  
+  return { filePath };
+}
+
+/**
+ * Check if a file is in the PR's changed files
+ * @param {string} filePath - The file path to check
+ * @param {Array} changedFiles - Array of changed file objects from PR
+ * @returns {{ valid: boolean, error?: string, file?: object }}
+ */
+function validateFileInPr(filePath, changedFiles) {
+  if (!changedFiles || !Array.isArray(changedFiles)) {
+    return { valid: false, error: 'Unable to get PR changed files list' };
+  }
+  
+  // Try to find the file - check both filename and full path
+  const normalizedInputPath = filePath.replace(/^\//, '').toLowerCase();
+  
+  const foundFile = changedFiles.find(file => {
+    const filename = file.filename?.toLowerCase();
+    return filename === normalizedInputPath || 
+           filename?.endsWith(`/${normalizedInputPath}`);
+  });
+  
+  if (!foundFile) {
+    const availableFiles = changedFiles.map(f => f.filename).join(', ');
+    return { 
+      valid: false, 
+      error: `File "${filePath}" not found in PR changed files. Available files: ${availableFiles}` 
+    };
+  }
+  
+  return { valid: true, file: foundFile };
+}
+
+/**
+ * Build review prompt for a specific file
+ * @param {object} file - The file object from PR changes
+ * @param {number} maxChars - Maximum characters for prompt
+ * @returns {{ prompt: string, truncated: boolean }}
+ */
+function buildReviewPrompt(file, maxChars = DEFAULT_MAX_CHARS) {
+  const { filename, patch, status } = file;
+  
+  let content = `Please review the following code change in file: ${filename}\n`;
+  content += `Change type: ${status}\n\n`;
+  
+  if (patch) {
+    content += `--- DIFF ---\n${patch}\n--- END DIFF ---`;
+  } else {
+    content += '(No diff available - file may be binary or too large)';
+  }
+  
+  const truncated = truncateContext(content, maxChars);
+  return { prompt: truncated.content, truncated: truncated.truncated };
+}
+
+/**
+ * Handle the /zai review command
+ * @param {Object} context - Application context
+ * @param {Object} context.octokit - GitHub Octokit instance
+ * @param {string} context.owner - Repository owner
+ * @param {string} context.repo - Repository name
+ * @param {number} context.issueNumber - PR number
+ * @param {Array} context.changedFiles - Changed files in PR
+ * @param {Object} context.apiClient - Z.ai API client
+ * @param {string} context.apiKey - Z.ai API key
+ * @param {string} context.model - Z.ai model to use
+ * @param {Object} context.logger - Logger instance
+ * @param {string[]} args - Command arguments (file path)
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+async function handleReviewCommand(context, args) {
+  const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model, commentId } = context;
+  const logger = context.logger || createLogger(generateCorrelationId(), { command: 'review' });
+  
+  // Step 1: Parse file path from args
+  const parsed = parseFilePath(args);
+  if (parsed.error) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** ${parsed.error}`,
+      REVIEW_MARKER
+    );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: parsed.error };
+  }
+  
+  const filePath = parsed.filePath;
+  logger.info({ filePath }, 'Validating file in PR');
+  
+  // Step 2: Validate file is in PR changed files
+  const validation = validateFileInPr(filePath, changedFiles);
+  if (!validation.valid) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** ${validation.error}`,
+      REVIEW_MARKER
+    );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: validation.error };
+  }
+  
+  const targetFile = validation.file;
+  logger.info({ filePath, status: targetFile.status }, 'File validated, building prompt');
+  
+  // Step 3: Build targeted prompt
+  const { prompt, truncated } = buildReviewPrompt(targetFile);
+  
+  // Step 4: Call Z.ai API
+  try {
+    logger.info({ filePath }, 'Calling Z.ai API for review');
+    
+    const result = await apiClient.call({
+      apiKey,
+      model,
+      prompt
+    });
+    
+    if (!result.success) {
+      const errorMsg = result.error?.message || 'Failed to get review';
+      logger.error({ error: errorMsg }, 'API call failed');
+      await upsertComment(
+        octokit, owner, repo, issueNumber,
+        `**Error:** ${errorMsg}`,
+        REVIEW_MARKER
+      );
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return { success: false, error: errorMsg };
+    }
+    
+    let response = result.data;
+    
+    // Add truncation note if needed
+    if (truncated) {
+      response += '\n\n_(Note: Context was truncated due to size limits)_';
+    }
+    
+    // Format the response with header
+    const formattedResponse = `## 📝 Code Review: ${targetFile.filename}\n\n${response}`;
+    
+    // Step 5: Post comment
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      formattedResponse,
+      REVIEW_MARKER
+    );
+    
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+    
+    logger.info({ filePath }, 'Review posted successfully');
+    return { success: true };
+    
+  } catch (error) {
+    logger.error({ error: error.message }, 'Review command failed');
+    
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** Failed to complete review. Please try again later.`,
+      REVIEW_MARKER
+    );
+    
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = {
+  handleReviewCommand,
+  parseFilePath,
+  validateFileInPr,
+  buildReviewPrompt,
+  REVIEW_MARKER,
+};
+
+
+/***/ }),
+
+/***/ 4361:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Suggest Command Handler
+ * 
+ * Handles `/zai suggest <prompt>` command for prompt-guided improvements.
+ * Uses user's suggestion prompt to guide analysis of code changes.
+ */
+
+const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+const { createApiClient } = __nccwpck_require__(9729);
+const { createLogger, generateCorrelationId, getUserMessage } = __nccwpck_require__(2120);
+const { REACTIONS, setReaction } = __nccwpck_require__(6819);
+
+/**
+ * Builds a suggestion prompt combining diff with user's guidance
+ * @param {Array} files - Array of changed files with patches
+ * @param {string} userPrompt - User's suggestion prompt
+ * @returns {string} Formatted prompt for the API
+ */
+function buildSuggestPrompt(files, userPrompt) {
+  const diffs = files
+    .filter(f => f.patch)
+    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
+    .join('\n\n');
+
+  return `You are an expert code reviewer. Based on the following code changes, ${userPrompt}\n\nProvide specific, actionable suggestions with code examples where appropriate.\n\n## Changed Files:\n\n${diffs}`;
+}
+
+/**
+ * Formats suggestions response with markdown code blocks
+ * @param {string} suggestions - Raw suggestions from API
+ * @returns {string} Formatted response with code blocks
+ */
+function formatSuggestionsResponse(suggestions) {
+  // Ensure suggestions are wrapped in code blocks for proper formatting
+  if (!suggestions.includes('```')) {
+    return `## Suggested Improvements\n\n${suggestions}`;
+  }
+  return `## Suggested Improvements\n\n${suggestions}`;
+}
+
+/**
+ * Handles the /zai suggest command
+ * @param {Object} context - Handler context object
+ * @param {Object} context.octokit - GitHub Octokit instance
+ * @param {Object} context.context - GitHub context object
+ * @param {Object} context.payload - Event payload with pull request
+ * @param {string} context.apiKey - Z.ai API key
+ * @param {string} context.model - Z.ai model to use
+ * @param {string} context.userPrompt - User's suggestion prompt (remaining args after 'suggest')
+ * @returns {Promise<{success: boolean, response?: string, error?: string}>}
+ */
+async function handleSuggestCommand(context) {
+  const { octokit, context: githubContext, payload, apiKey, model, userPrompt, commentId } = context;
+  const { owner, repo } = githubContext.repo;
+
+  // Generate correlation ID for tracking
+  const correlationId = generateCorrelationId();
+  const logger = createLogger(correlationId, {
+    eventName: githubContext.eventName,
+    prNumber: payload.pull_request?.number,
+    command: 'suggest',
+  });
+
+  logger.info({ userPrompt }, 'Processing suggest command');
+
+  // Validate user prompt
+  if (!userPrompt || userPrompt.trim().length === 0) {
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return {
+      success: false,
+      error: 'Please provide a suggestion prompt. Usage: /zai suggest <your suggestion>',
+    };
+  }
+
+  try {
+    // Fetch changed files from the PR
+    const pullNumber = payload.pull_request.number;
+
+    logger.info({ pullNumber }, 'Fetching changed files');
+
+    const { data: files } = await octokit.rest.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+    });
+
+    if (!files || files.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return {
+        success: false,
+        error: 'No changed files found in this pull request.',
+      };
+    }
+
+    // Check if any files have patches
+    const filesWithPatches = files.filter(f => f.patch);
+    if (filesWithPatches.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return {
+        success: false,
+        error: 'No patchable changes found in this pull request.',
+      };
+    }
+
+    // Build the suggestion prompt
+    const prompt = buildSuggestPrompt(files, userPrompt);
+
+    // Apply context budget truncation
+    const truncated = truncateContext(prompt, DEFAULT_MAX_CHARS);
+    if (truncated.truncated) {
+      logger.info({ originalLength: prompt.length, truncatedLength: truncated.content.length },
+        'Context truncated due to size');
+    }
+
+    // Call the Z.ai API
+    logger.info({ promptLength: truncated.content.length }, 'Calling Z.ai API');
+
+    const apiClient = createApiClient({ timeout: 30000, maxRetries: 3 });
+    const result = await apiClient.call({
+      apiKey,
+      model,
+      prompt: truncated.content,
+    });
+
+    if (!result.success) {
+      const category = result.error.category || 'provider';
+      const userMessage = getUserMessage(category, new Error(result.error.message));
+      
+      logger.error({ error: result.error }, 'API call failed');
+      
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      
+      return {
+        success: false,
+        error: userMessage,
+      };
+    }
+
+    // Format the response with markdown code blocks
+    const response = formatSuggestionsResponse(result.data);
+
+    logger.info({ responseLength: response.length }, 'Suggest command completed successfully');
+
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+
+    return {
+      success: true,
+      response,
+    };
+
+  } catch (error) {
+    logger.error({ error: error.message }, 'Unexpected error in suggest command');
+    
+    const category = 'internal';
+    const userMessage = getUserMessage(category, error);
+    
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    
+    return {
+      success: false,
+      error: userMessage,
+    };
+  }
+}
+
+module.exports = {
+  handleSuggestCommand,
+  buildSuggestPrompt,
+  formatSuggestionsResponse,
+};
+
+
+/***/ }),
+
+/***/ 2120:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Structured logging and error taxonomy for Z.ai Code Review
+ * Provides correlation IDs, standardized log fields, and user-safe error messages
+ */
+
+const core = __nccwpck_require__(7484);
+
+/**
+ * Error categories for classification
+ * @readonly
+ * @enum {string}
+ */
+const ERROR_CATEGORIES = {
+  /** Authentication/authorization failures */
+  AUTH: 'AUTH',
+  /** Input validation failures */
+  VALIDATION: 'VALIDATION',
+  /** External provider/API failures */
+  PROVIDER: 'PROVIDER',
+  /** Rate limiting errors */
+  RATE_LIMIT: 'RATE_LIMIT',
+  /** Timeout errors */
+  TIMEOUT: 'TIMEOUT',
+  /** Internal/unexpected errors */
+  INTERNAL: 'INTERNAL',
+};
+
+/**
+ * Fields that should be redacted from logs to prevent secret leakage
+ */
+const REDACT_FIELDS = [
+  'ZAI_API_KEY',
+  'GITHUB_TOKEN',
+  'authorization',
+  'Authorization',
+  'Bearer',
+  'token',
+  'api_key',
+  'apikey',
+  'secret',
+  'password',
+  'credential',
+];
+
+/**
+ * Mapping from internal error categories to user-safe messages
+ * These messages are designed to be displayed to end users
+ * without exposing internal implementation details
+ */
+const USER_MESSAGES = {
+  [ERROR_CATEGORIES.AUTH]: 'Authentication failed. Please verify your API credentials.',
+  [ERROR_CATEGORIES.VALIDATION]: 'Invalid input provided. Please check your action configuration.',
+  [ERROR_CATEGORIES.PROVIDER]: 'External service request failed. Please try again later.',
+  [ERROR_CATEGORIES.RATE_LIMIT]: 'Rate limit exceeded. Please wait before retrying.',
+  [ERROR_CATEGORIES.TIMEOUT]: 'Request timed out. Please try again.',
+  [ERROR_CATEGORIES.INTERNAL]: 'An unexpected error occurred. Please try again.',
+};
+
+/**
+ * Fields that should always be included in log context
+ */
+const STANDARD_FIELDS = [
+  'correlationId',
+  'eventName',
+  'prNumber',
+  'command',
+  'duration',
+];
+
+/**
+ * Generates a unique correlation ID for event tracking
+ * Format: timestamp-randomhex (e.g., "1700000000-a1b2c3d4")
+ * @returns {string} Unique correlation ID
+ */
+function generateCorrelationId() {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).substring(2, 10);
+  return `${timestamp}-${random}`;
+}
+
+/**
+ * Redacts sensitive fields from an object for safe logging
+ * @param {Object} data - Data object to redact
+ * @returns {Object} Data with sensitive fields redacted
+ */
+function redactSensitiveData(data) {
+  if (data === null || data === undefined) {
+    return data;
+  }
+
+  if (typeof data !== 'object') {
+    return data;
+  }
+
+  const redacted = Array.isArray(data) ? [] : {};
+  
+  for (const [key, value] of Object.entries(data)) {
+    const shouldRedact = REDACT_FIELDS.some(
+      field => key.toLowerCase().includes(field.toLowerCase())
+    );
+    
+    if (shouldRedact) {
+      redacted[key] = '[REDACTED]';
+    } else if (typeof value === 'object' && value !== null) {
+      redacted[key] = redactSensitiveData(value);
+    } else {
+      redacted[key] = value;
+    }
+  }
+
+  return redacted;
+}
+
+/**
+ * Formats log data as a JSON-ish string for easier parsing
+ * @param {Object} fields - Log fields
+ * @returns {string} Formatted log string
+ */
+function formatLogData(fields) {
+  const safeFields = redactSensitiveData(fields);
+  const entries = Object.entries(safeFields)
+    .filter(([_, value]) => value !== undefined && value !== null)
+    .map(([key, value]) => {
+      const formatted = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return `${key}=${formatted}`;
+    });
+  return entries.join(' ');
+}
+
+/**
+ * Creates a logger instance with context fields
+ * @param {string} correlationId - Unique event correlation ID
+ * @param {Object} context - Context fields (eventName, prNumber, command, etc.)
+ * @returns {Object} Logger instance with info, warn, error methods
+ */
+function createLogger(correlationId, context = {}) {
+  const baseContext = {
+    correlationId,
+    ...context,
+  };
+
+  return {
+    /**
+     * Log informational message
+     * @param {Object} fields - Additional fields to log
+     * @param {string} message - Log message
+     */
+    info(fields = {}, message) {
+      const logData = {
+        ...baseContext,
+        ...fields,
+        timestamp: new Date().toISOString(),
+      };
+      core.info(formatLogData(logData) + (message ? ` ${message}` : ''));
+    },
+
+    /**
+     * Log warning message
+     * @param {Object} fields - Additional fields to log
+     * @param {string} message - Log message
+     */
+    warn(fields = {}, message) {
+      const logData = {
+        ...baseContext,
+        ...fields,
+        timestamp: new Date().toISOString(),
+      };
+      core.warning(formatLogData(logData) + (message ? ` ${message}` : ''));
+    },
+
+    /**
+     * Log error message
+     * @param {Object} fields - Additional fields to log
+     * @param {string} message - Log message
+     */
+    error(fields = {}, message) {
+      const logData = {
+        ...baseContext,
+        ...fields,
+        timestamp: new Date().toISOString(),
+      };
+      core.error(formatLogData(logData) + (message ? ` ${message}` : ''));
+    },
+
+    /**
+     * Set failure status with user-safe message
+     * @param {Object} fields - Additional fields to log
+     * @param {string} message - User-safe message
+     */
+    setFailed(fields = {}, message) {
+      const logData = {
+        ...baseContext,
+        ...fields,
+        timestamp: new Date().toISOString(),
+      };
+      core.setFailed(formatLogData(logData) + (message ? ` ${message}` : ''));
+    },
+  };
+}
+
+/**
+ * Maps internal errors to user-safe messages
+ * @param {string} category - Error category from ERROR_CATEGORIES
+ * @param {Error} [internalError] - Original error (not exposed to users)
+ * @returns {string} User-safe message
+ */
+function getUserMessage(category, internalError = null) {
+  const message = USER_MESSAGES[category] || USER_MESSAGES[ERROR_CATEGORIES.INTERNAL];
+  
+  // Log the internal error details separately for debugging
+  if (internalError) {
+    const internalLogger = createLogger(generateCorrelationId());
+    internalLogger.error(
+      { category, errorType: internalError.name },
+      `Internal error: ${internalError.message}`
+    );
+  }
+  
+  return message;
+}
+
+/**
+ * Categorizes an error based on its characteristics
+ * @param {Error} error - Error to categorize
+ * @returns {string} Error category from ERROR_CATEGORIES
+ */
+function categorizeError(error) {
+  const message = error.message?.toLowerCase() || '';
+
+  // Auth errors
+  if (
+    message.includes('auth') ||
+    message.includes('unauthorized') ||
+    message.includes('forbidden') ||
+    message.includes('invalid token') ||
+    message.includes('401') ||
+    message.includes('403')
+  ) {
+    return ERROR_CATEGORIES.AUTH;
+  }
+
+  // Rate limit errors
+  if (
+    message.includes('rate limit') ||
+    message.includes('too many requests') ||
+    message.includes('429')
+  ) {
+    return ERROR_CATEGORIES.RATE_LIMIT;
+  }
+
+  // Timeout errors
+  if (
+    message.includes('timeout') ||
+    message.includes('etimedout') ||
+    message.includes('timed out')
+  ) {
+    return ERROR_CATEGORIES.TIMEOUT;
+  }
+
+  // Validation errors
+  if (
+    message.includes('validation') ||
+    message.includes('invalid input') ||
+    message.includes('required') ||
+    message.includes('schema')
+  ) {
+    return ERROR_CATEGORIES.VALIDATION;
+  }
+
+  // Provider errors (external API failures)
+  if (
+    message.includes('api') ||
+    message.includes('provider') ||
+    message.includes('external') ||
+    message.includes('5')
+  ) {
+    return ERROR_CATEGORIES.PROVIDER;
+  }
+
+  // Default to internal
+  return ERROR_CATEGORIES.INTERNAL;
+}
+
+module.exports = {
+  ERROR_CATEGORIES,
+  REDACT_FIELDS,
+  STANDARD_FIELDS,
+  generateCorrelationId,
+  createLogger,
+  getUserMessage,
+  categorizeError,
+  redactSensitiveData,
+};
+
+
+/***/ }),
+
 /***/ 2613:
 /***/ ((module) => {
 
@@ -31838,8 +34352,55 @@ const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
 const https = __nccwpck_require__(5692);
 
+const { getEventType, isBotComment, shouldProcessEvent, getEventInfo } = __nccwpck_require__(2500);
+const { parseCommand, isValid } = __nccwpck_require__(5055);
+const { checkForkAuthorization, getUnauthorizedMessage } = __nccwpck_require__(6495);
+const { handleSuggestCommand } = __nccwpck_require__(4361);
+const { handleCompareCommand } = __nccwpck_require__(3016);
+const reviewHandler = __nccwpck_require__(903);
+const explainHandler = __nccwpck_require__(1248);
+
+const { truncateContext, DEFAULT_MAX_CHARS, fetchChangedFiles } = __nccwpck_require__(9990);
+const { loadContinuityState, saveContinuityState, mergeState, MAX_STATE_SIZE } = __nccwpck_require__(4575);
+const { createApiClient } = __nccwpck_require__(9729);
+const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
 const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
 const COMMENT_MARKER = '<!-- zai-code-review -->';
+const CONTINUITY_MARKER = '<!-- zai-continuity:';
+
+// Safe guidance messages for error cases
+const GUIDANCE_MESSAGES = {
+  unknown_command: `## Z.ai Help
+
+Unknown command. Available commands:
+- \`/zai ask <question>\` - Ask a question about the code
+- \`/zai review\` - Request a full code review
+- \`/zai explain <lines>\` - Explain specific lines
+- \`/zai suggest\` - Get improvement suggestions
+- \`/zai compare\` - Compare changes
+- \`/zai help\` - Show this help message
+
+You can also use @zai-bot instead of /zai.
+
+${COMMENT_MARKER}`,
+
+  malformed_input: `## Z.ai Help
+
+I couldn't understand that command. Commands should start with \`/zai\` or @zai-bot.
+
+Examples:
+- \`/zai ask what does this function do?\`
+- \`/zai review\`
+- \`/zai explain 10-20\`
+
+${COMMENT_MARKER}`,
+
+  empty_input: `## Z.ai Help
+
+No command detected. Use \`/zai help\` to see available commands.
+
+${COMMENT_MARKER}`,
+};
 
 async function getChangedFiles(octokit, owner, repo, pullNumber) {
   const { data: files } = await octokit.rest.pulls.listFiles({
@@ -31854,7 +34415,7 @@ async function getChangedFiles(octokit, owner, repo, pullNumber) {
 function buildPrompt(files) {
   const diffs = files
     .filter(f => f.patch)
-    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
+    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\`\n`)
     .join('\n\n');
 
   return `Please review the following pull request changes and provide concise, constructive feedback. Focus on bugs, logic errors, security issues, and meaningful improvements. Skip trivial style comments.\n\n${diffs}`;
@@ -31915,18 +34476,38 @@ function callZaiApi(apiKey, model, prompt) {
 async function run() {
   const apiKey = core.getInput('ZAI_API_KEY', { required: true });
   const model = core.getInput('ZAI_MODEL') || 'glm-4.7';
-  const token = core.getInput('GITHUB_TOKEN') || process.env.GITHUB_TOKEN;
+  
 
   const { context } = github;
   const { owner, repo } = context.repo;
-  const pullNumber = context.payload.pull_request?.number;
 
-  if (!pullNumber) {
-    core.setFailed('This action only runs on pull_request events.');
+  // Event routing and filtering
+  const { process, reason } = shouldProcessEvent(context);
+  if (!process) {
+    core.info(`Skipping event: ${reason}`);
     return;
   }
 
-  const octokit = github.getOctokit(token);
+  const eventType = getEventType(context);
+  core.info(`Processing event type: ${eventType}`);
+
+  // Route to appropriate handler
+  if (eventType === 'pull_request') {
+    await handlePullRequestEvent(context, apiKey, model, owner, repo);
+  } else if (eventType === 'issue_comment_pr') {
+    await handleIssueCommentEvent(context, apiKey, model, owner, repo);
+  }
+}
+
+async function handlePullRequestEvent(context, apiKey, model, owner, repo) {
+  const pullNumber = context.payload.pull_request?.number;
+
+  if (!pullNumber) {
+    core.setFailed('No pull request number found.');
+    return;
+  }
+
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
 
   core.info(`Fetching changed files for PR #${pullNumber}...`);
   const files = await getChangedFiles(octokit, owner, repo, pullNumber);
@@ -31966,6 +34547,319 @@ async function run() {
     });
     core.info('Review comment posted.');
   }
+}
+
+async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
+  const comment = context.payload.comment;
+  const commentBody = comment?.body || '';
+
+  core.info(`Processing issue_comment on PR: ${commentBody.substring(0, 50)}...`);
+
+  // Parse the command from comment body
+  const parseResult = parseCommand(commentBody);
+
+  // If parsing failed, post safe guidance message
+  if (!isValid(parseResult)) {
+    const errorType = parseResult.error.type;
+    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
+
+    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+    const pullNumber = context.payload.issue?.number;
+
+    if (!pullNumber) {
+      core.setFailed('No issue/PR number found.');
+      return;
+    }
+
+    // Check if there's already a comment from us
+    const { data: comments } = await octokit.rest.issues.listComments({
+      owner,
+      repo,
+      issue_number: pullNumber,
+    });
+
+    const existingBotComment = comments.find(c =>
+      c.user?.type === 'Bot' && c.body.includes(COMMENT_MARKER)
+    );
+
+    if (existingBotComment) {
+      await octokit.rest.issues.updateComment({
+        owner,
+        repo,
+        comment_id: existingBotComment.id,
+        body: guidance,
+      });
+      core.info(`Updated guidance comment for error: ${errorType}`);
+    } else {
+      await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: pullNumber,
+        body: guidance,
+      });
+      core.info(`Posted guidance comment for error: ${errorType}`);
+    }
+    return;
+  }
+
+  // Valid command - check authorization before dispatching
+  core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
+
+  // Get commenter info for auth check
+  const commenter = comment?.user;
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+  // Check authorization using fork-aware auth check
+  const authResult = await checkForkAuthorization(octokit, context, commenter);
+
+  if (!authResult.authorized) {
+    // Silent block for fork PRs (reason: null per SECURITY.md)
+    if (authResult.reason === null) {
+      core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
+      return;
+    }
+
+    // For regular PRs, post an error message
+    core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
+    const pullNumber = context.payload.issue?.number;
+    await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: pullNumber,
+      body: getUnauthorizedMessage(),
+    });
+    return;
+  }
+
+  core.info(`Authorized command from collaborator: ${commenter.login}`);
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo);
+}
+
+async function dispatchCommand(context, parseResult, apiKey, model, owner, repo) {
+  const { command, args } = parseResult;
+  const pullNumber = context.payload.issue?.number;
+
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+  let responseMessage = '';
+
+  // Build handler context with required fields
+  const correlationId = generateCorrelationId();
+  const logger = createLogger(correlationId, { 
+    eventName: 'issue_comment', 
+    prNumber: pullNumber,
+    command 
+  });
+
+  // Fetch changed files for handlers that need them
+  let changedFiles = [];
+  try {
+    changedFiles = await fetchChangedFiles(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    logger.warn({ error: error.message }, 'Failed to fetch changed files');
+  }
+
+  // Build base handler context
+  const handlerContext = {
+    octokit,
+    owner,
+    repo,
+    issueNumber: pullNumber,
+    changedFiles,
+    apiClient: createApiClient(),
+    apiKey,
+    model,
+    logger,
+    maxChars: DEFAULT_MAX_CHARS,
+  };
+
+  switch (command) {
+    case 'help':
+      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai suggest\` - Get improvement suggestions\n- \`/zai compare\` - Compare changes\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
+      break;
+
+    case 'review':
+      // Route to review handler with file path from args
+      logger.info({ args }, 'Dispatching to review handler');
+      
+      try {
+        const result = await reviewHandler.handleReviewCommand(handlerContext, args);
+        if (result.success) {
+          // Handler already posted the comment, no need to post again
+          logger.info({ success: true }, 'Review command completed');
+          return;
+        } else {
+          // Handler already posted error, log and return
+          logger.warn({ error: result.error }, 'Review command failed');
+          return;
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Review handler threw error');
+        responseMessage = `## Z.ai Code Review
+
+**Error:** Failed to complete review. Please try again later.
+
+${COMMENT_MARKER}`;
+      }
+      break;
+
+    case 'explain':
+      // Route to explain handler with line range from args
+      logger.info({ args }, 'Dispatching to explain handler');
+      
+      // Check if line range argument is provided
+      if (args.length === 0) {
+        responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${COMMENT_MARKER}`;
+        break;
+      }
+
+      // For explain, we need file content. Try to get it from changed files.
+      // If no specific file is mentioned in args, use the first changed file
+      const firstChangedFile = changedFiles.find(f => f.patch);
+      if (!firstChangedFile) {
+        responseMessage = `## Z.ai Explanation
+
+No files with changes found in this PR to explain.
+
+${COMMENT_MARKER}`;
+        break;
+      }
+
+      // Add file-specific context for explain handler
+      const explainContext = {
+        ...handlerContext,
+        filename: firstChangedFile.filename,
+        fileContent: firstChangedFile.patch || '',
+      };
+
+      try {
+        const result = await explainHandler.handleExplainCommand(explainContext, args);
+        if (result.success) {
+          logger.info({ success: true }, 'Explain command completed');
+          return;
+        } else {
+          logger.warn({ error: result.error }, 'Explain command failed');
+          return;
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Explain handler threw error');
+        responseMessage = `## Z.ai Explanation
+
+**Error:** Failed to complete explanation. Please try again later.
+
+${COMMENT_MARKER}`;
+      }
+      break;
+
+    case 'ask':
+      // Placeholder response - TODO: implement actual command handler
+      responseMessage = `## Z.ai: ask\n\nCommand \`ask\` with args: \`${args.join(' ')}\` received.\n\nThis feature is coming soon!${COMMENT_MARKER}`;
+      break;
+
+    case 'suggest': {
+      // Extract user prompt from args (everything after 'suggest')
+      const userPrompt = args.join(' ').trim();
+      
+      const handlerContextSuggest = {
+        octokit,
+        context,
+        payload: context.payload,
+        apiKey,
+        model,
+        userPrompt
+      };
+      
+      core.info(`Processing suggest command with prompt: ${userPrompt.substring(0, 50)}...`);
+      
+      const result = await handleSuggestCommand(handlerContextSuggest);
+      
+      if (result.success) {
+        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
+      } else {
+        responseMessage = `## Z.ai Suggest\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
+      }
+      break;
+    }
+
+    case 'compare': {
+      const handlerContextCompare = {
+        octokit,
+        context,
+        payload: context.payload,
+        apiKey,
+        model
+      };
+      
+      core.info('Processing compare command');
+      
+      const result = await handleCompareCommand(handlerContextCompare);
+      
+      if (result.success) {
+        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
+      } else {
+        responseMessage = `## Z.ai Compare\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
+      }
+      break;
+    }
+
+    default:
+      responseMessage = GUIDANCE_MESSAGES.unknown_command;
+  }
+
+  // Post or update comment (only for cases that didn't return early)
+  if (!responseMessage) {
+    return;
+  }
+
+  const { data: comments } = await octokit.rest.issues.listComments({
+    owner,
+    repo,
+    issue_number: pullNumber,
+  });
+
+  const existingBotComment = comments.find(c =>
+    c.user?.type === 'Bot' && c.body.includes(COMMENT_MARKER)
+  );
+
+  if (existingBotComment) {
+    await octokit.rest.issues.updateComment({
+      owner,
+      repo,
+      comment_id: existingBotComment.id,
+      body: responseMessage,
+    });
+    core.info(`Updated response for command: ${command}`);
+  } else {
+    await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: pullNumber,
+      body: responseMessage,
+    });
+    core.info(`Posted response for command: ${command}`);
+  }
+}
+
+async function performReview(octokit, owner, repo, pullNumber, apiKey, model) {
+  core.info(`Fetching changed files for PR #${pullNumber}...`);
+  const files = await getChangedFiles(octokit, owner, repo, pullNumber);
+
+  if (!files.some(f => f.patch)) {
+    return `## Z.ai Code Review
+
+No patchable changes found.${COMMENT_MARKER}`;
+  }
+
+  const prompt = buildPrompt(files);
+
+  core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
+  const review = await callZaiApi(apiKey, model, prompt);
+
+  return `## Z.ai Code Review
+
+${review}
+
+${COMMENT_MARKER}`;
 }
 
 run().catch(err => core.setFailed(err.message));
