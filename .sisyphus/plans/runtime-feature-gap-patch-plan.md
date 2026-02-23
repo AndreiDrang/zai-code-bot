@@ -585,16 +585,16 @@ Max Concurrent: 5
 
 ## Final Verification Wave
 
-- [ ] F1. Plan Compliance Audit (`oracle`)
+- [x] F1. Plan Compliance Audit (`oracle`)
   Verify every plan task maps to implemented runtime behavior and evidence artifacts.
 
-- [ ] F2. Build/Test/Quality Sweep (`unspecified-high`)
+- [x] F2. Build/Test/Quality Sweep (`unspecified-high`)
   Run `node --test` and `npm run build`; reject on failures or runtime regressions.
 
-- [ ] F3. Command Matrix QA Replay (`unspecified-high`)
+- [x] F3. Command Matrix QA Replay (`unspecified-high`)
   Re-run happy + negative command scenarios for all six commands and capture evidence.
 
-- [ ] F4. Scope Fidelity Check (`deep`)
+- [x] F4. Scope Fidelity Check (`deep`)
   Ensure no out-of-scope features were added while patching runtime wiring.
 
 ---
@@ -617,7 +617,7 @@ git diff --exit-code dist/
 ```
 
 ### Final Checklist
-- [ ] All required runtime features from `ZAI-BOT-FEATURES.md` are active in shipped path.
-- [ ] All command handlers are dispatched through runtime, not dead code.
-- [ ] Security and budget guardrails remain enforced.
-- [ ] Dist artifact is regenerated and in sync.
+- [x] All required runtime features from `ZAI-BOT-FEATURES.md` are active in shipped path.
+- [x] All command handlers are dispatched through runtime, not dead code.
+- [x] Security and budget guardrails remain enforced.
+- [x] Dist artifact is regenerated and in sync.
