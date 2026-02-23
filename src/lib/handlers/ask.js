@@ -11,7 +11,7 @@ const comments = require('../comments');
 const context = require('../context');
 const logging = require('../logging');
 
-const REACTION = 'thinking';
+const { REACTIONS, setReaction } = require('../comments');
 
 /**
  * Validates the ask command arguments
@@ -80,9 +80,9 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   // Build the prompt
   const prompt = buildPrompt(question, truncatedContext.content);
 
-  // Add reaction to show we're processing
+  // Add reaction to show we're processing (acknowledgment)
   if (commentId) {
-    await comments.setReaction(octokit, owner, repo, commentId, REACTION);
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
   }
 
   // Call the API
@@ -99,6 +99,12 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
       `API call failed: ${result.error.message}`
     );
     const userMessage = logging.getUserMessage(result.error.category, new Error(result.error.message));
+    
+    // Add error reaction
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    
     return { success: false, error: userMessage };
   }
 
@@ -117,10 +123,20 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   );
 
   if (commentResult.action === 'created' || commentResult.action === 'updated') {
+    // Add success reaction
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+    
     logger.info({ command: 'ask', question: question.substring(0, 50) }, 'Ask command completed successfully');
     return { success: true };
   }
 
+  // Add error reaction for failed comment post
+  if (commentId) {
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+  }
+  
   return { success: false, error: 'Failed to post response' };
 }
 

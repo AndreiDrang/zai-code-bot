@@ -8,7 +8,7 @@
 const comments = require('../comments');
 const auth = require('../auth');
 
-const REACTION = 'eyes';
+const { REACTIONS, setReaction } = require('../comments');
 
 const HELP_TEXT = `## Available Commands
 
@@ -48,8 +48,9 @@ async function handleHelpCommand({ octokit, context: githubContext, commenter, a
     return { success: false, error: null };
   }
 
+  // Add acknowledgment reaction
   if (commentId) {
-    await comments.setReaction(octokit, owner, repo, commentId, REACTION);
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
   }
 
   const commentResult = await comments.upsertComment(
@@ -63,10 +64,20 @@ async function handleHelpCommand({ octokit, context: githubContext, commenter, a
   );
 
   if (commentResult.action === 'created' || commentResult.action === 'updated') {
+    // Add success reaction
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+    
     logger.info({ command: 'help' }, 'Help command completed successfully');
     return { success: true };
   }
 
+  // Add error reaction for failed comment post
+  if (commentId) {
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+  }
+  
   return { success: false, error: 'Failed to post help response' };
 }
 

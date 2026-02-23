@@ -303,7 +303,7 @@ Max Concurrent: 5
   - Happy: run one handler from runtime and confirm context-dependent fields resolve.
   - Negative: omit required context field in fixture and assert safe error handling.
 
-- [ ] T6. Route `/zai ask` and `/zai help` through unified runtime dispatcher
+ [x] T6. Route `/zai ask` and `/zai help` through unified runtime dispatcher
 
   **What to do**:
   - Replace ad hoc command handling with registry-driven dispatch for ask/help.
@@ -334,7 +334,7 @@ Max Concurrent: 5
   - Happy: execute `/zai ask explain auth flow` fixture and assert response comment exists.
   - Negative: empty ask input returns validation guidance.
 
-- [ ] T7. Route `/zai review` and `/zai explain` through runtime dispatcher
+ [x] T7. Route `/zai review` and `/zai explain` through runtime dispatcher
 
   **What to do**:
   - Dispatch review/explain commands via registry into existing handlers.
@@ -365,7 +365,7 @@ Max Concurrent: 5
   - Happy: `/zai explain 10-15` returns focused explanation.
   - Negative: `/zai explain 10000-10020` returns safe out-of-range message.
 
-- [ ] T8. Route `/zai suggest` and `/zai compare` through runtime dispatcher
+ [x] T8. Route `/zai suggest` and `/zai compare` through runtime dispatcher
 
   **What to do**:
   - Dispatch suggest/compare commands and apply context truncation before API call.
@@ -396,7 +396,7 @@ Max Concurrent: 5
   - Happy: `/zai compare` produces old-vs-new analysis response.
   - Negative: provider timeout surfaces sanitized timeout category message.
 
-- [ ] T9. Standardize reactions + progress feedback in command pipeline
+ [x] T9. Standardize reactions + progress feedback in command pipeline
 
   **What to do**:
   - Ensure command lifecycle includes acknowledgement reaction and completion/error state update.
@@ -427,7 +427,7 @@ Max Concurrent: 5
   - Happy: valid command gets initial reaction then final response.
   - Negative: provider failure yields error reaction/message with sanitized text.
 
-- [ ] T10. Integrate continuity state through runtime command loop
+ [x] T10. Integrate continuity state through runtime command loop
 
   **What to do**:
   - Load continuity state from prior bot comment/thread context and save updated state after command completion.

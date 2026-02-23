@@ -6,7 +6,7 @@
  */
 
 const { extractLines, validateRange, truncateContext, DEFAULT_MAX_CHARS } = require('../context');
-const { upsertComment } = require('../comments');
+const { REACTIONS, upsertComment, setReaction } = require('../comments');
 const { createLogger, generateCorrelationId } = require('../logging');
 
 const EXPLAIN_MARKER = '<!-- ZAI_EXPLAIN_COMMAND -->';
@@ -84,7 +84,7 @@ function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFA
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function handleExplainCommand(context, args) {
-  const { octokit, owner, repo, issueNumber, fileContent, filename, apiClient, apiKey, model } = context;
+  const { octokit, owner, repo, issueNumber, fileContent, filename, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
 
   if (!args || args.length === 0) {
@@ -93,6 +93,10 @@ async function handleExplainCommand(context, args) {
       `**Error:** No line range provided. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER
     );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     return { success: false, error: 'No line range provided' };
   }
 
@@ -104,6 +108,10 @@ async function handleExplainCommand(context, args) {
       `**Error:** ${parsed.error}`,
       EXPLAIN_MARKER
     );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     return { success: false, error: parsed.error };
   }
 
@@ -121,6 +129,10 @@ async function handleExplainCommand(context, args) {
       `**Error:** ${validation.error}. File has ${maxLines} lines.`,
       EXPLAIN_MARKER
     );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     return { success: false, error: validation.error };
   }
 
@@ -132,6 +144,10 @@ async function handleExplainCommand(context, args) {
       `**Error:** ${extracted.error}`,
       EXPLAIN_MARKER
     );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     return { success: false, error: extracted.error };
   }
 
@@ -158,6 +174,10 @@ async function handleExplainCommand(context, args) {
         `**Error:** ${errorMsg}`,
         EXPLAIN_MARKER
       );
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
       return { success: false, error: errorMsg };
     }
 
@@ -175,6 +195,11 @@ async function handleExplainCommand(context, args) {
       EXPLAIN_MARKER
     );
 
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+
     logger.info({ filename, startLine, endLine }, 'Explanation posted successfully');
     return { success: true };
 
@@ -186,6 +211,11 @@ async function handleExplainCommand(context, args) {
       `**Error:** Failed to complete explanation. Please try again later.`,
       EXPLAIN_MARKER
     );
+
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
 
     return { success: false, error: error.message };
   }

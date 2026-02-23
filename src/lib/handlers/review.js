@@ -5,7 +5,7 @@
  */
 
 const { truncateContext, DEFAULT_MAX_CHARS } = require('../context');
-const { upsertComment } = require('../comments');
+const { REACTIONS, upsertComment, setReaction } = require('../comments');
 const { createLogger, generateCorrelationId } = require('../logging');
 
 // Marker for identifying review comments
@@ -100,7 +100,7 @@ function buildReviewPrompt(file, maxChars = DEFAULT_MAX_CHARS) {
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function handleReviewCommand(context, args) {
-  const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model } = context;
+  const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'review' });
   
   // Step 1: Parse file path from args
@@ -111,6 +111,10 @@ async function handleReviewCommand(context, args) {
       `**Error:** ${parsed.error}`,
       REVIEW_MARKER
     );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     return { success: false, error: parsed.error };
   }
   
@@ -125,6 +129,10 @@ async function handleReviewCommand(context, args) {
       `**Error:** ${validation.error}`,
       REVIEW_MARKER
     );
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     return { success: false, error: validation.error };
   }
   
@@ -152,6 +160,10 @@ async function handleReviewCommand(context, args) {
         `**Error:** ${errorMsg}`,
         REVIEW_MARKER
       );
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
       return { success: false, error: errorMsg };
     }
     
@@ -172,6 +184,11 @@ async function handleReviewCommand(context, args) {
       REVIEW_MARKER
     );
     
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+    
     logger.info({ filePath }, 'Review posted successfully');
     return { success: true };
     
@@ -183,6 +200,11 @@ async function handleReviewCommand(context, args) {
       `**Error:** Failed to complete review. Please try again later.`,
       REVIEW_MARKER
     );
+    
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     
     return { success: false, error: error.message };
   }

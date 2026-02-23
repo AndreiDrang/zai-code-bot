@@ -5,9 +5,18 @@ const https = require('https');
 const { getEventType, isBotComment, shouldProcessEvent, getEventInfo } = require('./lib/events.js');
 const { parseCommand, isValid } = require('./lib/commands.js');
 const { checkForkAuthorization, getUnauthorizedMessage } = require('./lib/auth.js');
+const { handleSuggestCommand } = require('./lib/handlers/suggest.js');
+const { handleCompareCommand } = require('./lib/handlers/compare.js');
+const reviewHandler = require('./lib/handlers/review.js');
+const explainHandler = require('./lib/handlers/explain.js');
 
+const { truncateContext, DEFAULT_MAX_CHARS, fetchChangedFiles } = require('./lib/context.js');
+const { loadContinuityState, saveContinuityState, mergeState, MAX_STATE_SIZE } = require('./lib/continuity.js');
+const { createApiClient } = require('./lib/api.js');
+const { createLogger, generateCorrelationId } = require('./lib/logging.js');
 const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
 const COMMENT_MARKER = '<!-- zai-code-review -->';
+const CONTINUITY_MARKER = '<!-- zai-continuity:';
 
 // Safe guidance messages for error cases
 const GUIDANCE_MESSAGES = {
@@ -27,7 +36,7 @@ ${COMMENT_MARKER}`,
 
   malformed_input: `## Z.ai Help
 
-I couldn't understand that command. Commands should start with \`/zai\` or \`@zai-bot\`.
+I couldn't understand that command. Commands should start with \`/zai\` or @zai-bot.
 
 Examples:
 - \`/zai ask what does this function do?\`
@@ -56,7 +65,7 @@ async function getChangedFiles(octokit, owner, repo, pullNumber) {
 function buildPrompt(files) {
   const diffs = files
     .filter(f => f.patch)
-    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
+    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\`\n`)
     .join('\n\n');
 
   return `Please review the following pull request changes and provide concise, constructive feedback. Focus on bugs, logic errors, security issues, and meaningful improvements. Skip trivial style comments.\n\n${diffs}`;
@@ -284,42 +293,174 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo)
 
   let responseMessage = '';
 
+  // Build handler context with required fields
+  const correlationId = generateCorrelationId();
+  const logger = createLogger(correlationId, { 
+    eventName: 'issue_comment', 
+    prNumber: pullNumber,
+    command 
+  });
+
+  // Fetch changed files for handlers that need them
+  let changedFiles = [];
+  try {
+    changedFiles = await fetchChangedFiles(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    logger.warn({ error: error.message }, 'Failed to fetch changed files');
+  }
+
+  // Build base handler context
+  const handlerContext = {
+    octokit,
+    owner,
+    repo,
+    issueNumber: pullNumber,
+    changedFiles,
+    apiClient: createApiClient(),
+    apiKey,
+    model,
+    logger,
+    maxChars: DEFAULT_MAX_CHARS,
+  };
+
   switch (command) {
     case 'help':
-      responseMessage = `## Z.ai Help
-
-Available commands:
-- \`/zai ask <question>\` - Ask a question about the code
-- \`/zai review\` - Request a full code review  
-- \`/zai explain <lines>\` - Explain specific lines
-- \`/zai suggest\` - Get improvement suggestions
-- \`/zai compare\` - Compare changes
-- \`/zai help\` - Show this help message
-
-${COMMENT_MARKER}`;
+      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai suggest\` - Get improvement suggestions\n- \`/zai compare\` - Compare changes\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
       break;
 
     case 'review':
-      responseMessage = await performReview(octokit, owner, repo, pullNumber, apiKey, model);
+      // Route to review handler with file path from args
+      logger.info({ args }, 'Dispatching to review handler');
+      
+      try {
+        const result = await reviewHandler.handleReviewCommand(handlerContext, args);
+        if (result.success) {
+          // Handler already posted the comment, no need to post again
+          logger.info({ success: true }, 'Review command completed');
+          return;
+        } else {
+          // Handler already posted error, log and return
+          logger.warn({ error: result.error }, 'Review command failed');
+          return;
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Review handler threw error');
+        responseMessage = `## Z.ai Code Review
+
+**Error:** Failed to complete review. Please try again later.
+
+${COMMENT_MARKER}`;
+      }
+      break;
+
+    case 'explain':
+      // Route to explain handler with line range from args
+      logger.info({ args }, 'Dispatching to explain handler');
+      
+      // Check if line range argument is provided
+      if (args.length === 0) {
+        responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${COMMENT_MARKER}`;
+        break;
+      }
+
+      // For explain, we need file content. Try to get it from changed files.
+      // If no specific file is mentioned in args, use the first changed file
+      const firstChangedFile = changedFiles.find(f => f.patch);
+      if (!firstChangedFile) {
+        responseMessage = `## Z.ai Explanation
+
+No files with changes found in this PR to explain.
+
+${COMMENT_MARKER}`;
+        break;
+      }
+
+      // Add file-specific context for explain handler
+      const explainContext = {
+        ...handlerContext,
+        filename: firstChangedFile.filename,
+        fileContent: firstChangedFile.patch || '',
+      };
+
+      try {
+        const result = await explainHandler.handleExplainCommand(explainContext, args);
+        if (result.success) {
+          logger.info({ success: true }, 'Explain command completed');
+          return;
+        } else {
+          logger.warn({ error: result.error }, 'Explain command failed');
+          return;
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Explain handler threw error');
+        responseMessage = `## Z.ai Explanation
+
+**Error:** Failed to complete explanation. Please try again later.
+
+${COMMENT_MARKER}`;
+      }
       break;
 
     case 'ask':
-    case 'explain':
-    case 'suggest':
-    case 'compare':
-      // Placeholder responses - TODO: implement actual command handlers
-      responseMessage = `## Z.ai: ${command}
-
-Command \`${command}\` with args: \`${args.join(' ')}\` received.
-
-This feature is coming soon!${COMMENT_MARKER}`;
+      // Placeholder response - TODO: implement actual command handler
+      responseMessage = `## Z.ai: ask\n\nCommand \`ask\` with args: \`${args.join(' ')}\` received.\n\nThis feature is coming soon!${COMMENT_MARKER}`;
       break;
+
+    case 'suggest': {
+      // Extract user prompt from args (everything after 'suggest')
+      const userPrompt = args.join(' ').trim();
+      
+      const handlerContextSuggest = {
+        octokit,
+        context,
+        payload: context.payload,
+        apiKey,
+        model,
+        userPrompt
+      };
+      
+      core.info(`Processing suggest command with prompt: ${userPrompt.substring(0, 50)}...`);
+      
+      const result = await handleSuggestCommand(handlerContextSuggest);
+      
+      if (result.success) {
+        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
+      } else {
+        responseMessage = `## Z.ai Suggest\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
+      }
+      break;
+    }
+
+    case 'compare': {
+      const handlerContextCompare = {
+        octokit,
+        context,
+        payload: context.payload,
+        apiKey,
+        model
+      };
+      
+      core.info('Processing compare command');
+      
+      const result = await handleCompareCommand(handlerContextCompare);
+      
+      if (result.success) {
+        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
+      } else {
+        responseMessage = `## Z.ai Compare\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
+      }
+      break;
+    }
 
     default:
       responseMessage = GUIDANCE_MESSAGES.unknown_command;
   }
 
-  // Post or update comment
+  // Post or update comment (only for cases that didn't return early)
+  if (!responseMessage) {
+    return;
+  }
+
   const { data: comments } = await octokit.rest.issues.listComments({
     owner,
     repo,

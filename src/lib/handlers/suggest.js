@@ -8,6 +8,7 @@
 const { truncateContext, DEFAULT_MAX_CHARS } = require('../context');
 const { createApiClient } = require('../api');
 const { createLogger, generateCorrelationId, getUserMessage } = require('../logging');
+const { REACTIONS, setReaction } = require('../comments');
 
 /**
  * Builds a suggestion prompt combining diff with user's guidance
@@ -49,7 +50,8 @@ function formatSuggestionsResponse(suggestions) {
  * @returns {Promise<{success: boolean, response?: string, error?: string}>}
  */
 async function handleSuggestCommand(context) {
-  const { octokit, context: githubContext, payload, apiKey, model, userPrompt } = context;
+  const { octokit, context: githubContext, payload, apiKey, model, userPrompt, commentId } = context;
+  const { owner, repo } = githubContext.repo;
 
   // Generate correlation ID for tracking
   const correlationId = generateCorrelationId();
@@ -63,6 +65,10 @@ async function handleSuggestCommand(context) {
 
   // Validate user prompt
   if (!userPrompt || userPrompt.trim().length === 0) {
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     return {
       success: false,
       error: 'Please provide a suggestion prompt. Usage: /zai suggest <your suggestion>',
@@ -71,7 +77,6 @@ async function handleSuggestCommand(context) {
 
   try {
     // Fetch changed files from the PR
-    const { owner, repo } = githubContext.repo;
     const pullNumber = payload.pull_request.number;
 
     logger.info({ pullNumber }, 'Fetching changed files');
@@ -84,6 +89,10 @@ async function handleSuggestCommand(context) {
     });
 
     if (!files || files.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
       return {
         success: false,
         error: 'No changed files found in this pull request.',
@@ -93,6 +102,10 @@ async function handleSuggestCommand(context) {
     // Check if any files have patches
     const filesWithPatches = files.filter(f => f.patch);
     if (filesWithPatches.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
       return {
         success: false,
         error: 'No patchable changes found in this pull request.',
@@ -125,6 +138,11 @@ async function handleSuggestCommand(context) {
       
       logger.error({ error: result.error }, 'API call failed');
       
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      
       return {
         success: false,
         error: userMessage,
@@ -136,6 +154,11 @@ async function handleSuggestCommand(context) {
 
     logger.info({ responseLength: response.length }, 'Suggest command completed successfully');
 
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
+
     return {
       success: true,
       response,
@@ -146,6 +169,11 @@ async function handleSuggestCommand(context) {
     
     const category = 'internal';
     const userMessage = getUserMessage(category, error);
+    
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     
     return {
       success: false,

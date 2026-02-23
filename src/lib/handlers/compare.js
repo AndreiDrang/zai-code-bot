@@ -1,6 +1,7 @@
 const { truncateContext, DEFAULT_MAX_CHARS } = require('../context');
 const { createApiClient } = require('../api');
 const { createLogger, generateCorrelationId, getUserMessage } = require('../logging');
+const { REACTIONS, setReaction } = require('../comments');
 
 function buildComparePrompt(files) {
   const diffs = files
@@ -27,7 +28,8 @@ function formatCompareResponse(comparison) {
 }
 
 async function handleCompareCommand(context) {
-  const { octokit, context: githubContext, payload, apiKey, model } = context;
+  const { octokit, context: githubContext, payload, apiKey, model, commentId } = context;
+  const { owner, repo } = githubContext.repo;
 
   const correlationId = generateCorrelationId();
   const logger = createLogger(correlationId, {
@@ -39,7 +41,6 @@ async function handleCompareCommand(context) {
   logger.info({}, 'Processing compare command');
 
   try {
-    const { owner, repo } = githubContext.repo;
     const pullNumber = payload.pull_request.number;
 
     logger.info({ pullNumber }, 'Fetching changed files');
@@ -52,6 +53,10 @@ async function handleCompareCommand(context) {
     });
 
     if (!files || files.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
       return {
         success: false,
         error: 'No changed files found in this pull request.',
@@ -60,6 +65,10 @@ async function handleCompareCommand(context) {
 
     const filesWithPatches = files.filter(f => f.patch);
     if (filesWithPatches.length === 0) {
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
       return {
         success: false,
         error: 'No patchable changes found in this pull request.',
@@ -89,6 +98,11 @@ async function handleCompareCommand(context) {
       
       logger.error({ error: result.error }, 'API call failed');
       
+      // Add error reaction if commentId available
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      
       return {
         success: false,
         error: userMessage,
@@ -98,6 +112,11 @@ async function handleCompareCommand(context) {
     const response = formatCompareResponse(result.data);
 
     logger.info({ responseLength: response.length }, 'Compare command completed successfully');
+
+    // Add success reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    }
 
     return {
       success: true,
@@ -109,6 +128,11 @@ async function handleCompareCommand(context) {
     
     const category = 'internal';
     const userMessage = getUserMessage(category, error);
+    
+    // Add error reaction if commentId available
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
     
     return {
       success: false,
