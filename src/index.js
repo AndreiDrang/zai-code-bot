@@ -2,7 +2,7 @@ const core = require('@actions/core');
 const github = require('@actions/github');
 const https = require('https');
 
-const { getEventType, shouldProcessEvent } = require('./lib/events.js');
+const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = require('./lib/events.js');
 const { parseCommand, isValid } = require('./lib/commands.js');
 const { checkForkAuthorization, getUnauthorizedMessage } = require('./lib/auth.js');
 const { handleAskCommand } = require('./lib/handlers/ask.js');
@@ -151,6 +151,8 @@ async function run() {
     await handlePullRequestEvent(context, apiKey, model, owner, repo);
   } else if (eventType === 'issue_comment_pr') {
     await handleIssueCommentEvent(context, apiKey, model, owner, repo);
+  } else if (eventType === 'pull_request_review_comment') {
+    await handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo);
   }
 }
 
@@ -321,10 +323,151 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
   });
 }
 
+async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo) {
+  const comment = context.payload.comment;
+  const commentBody = comment?.body || '';
+  const commentId = comment?.id;
+  
+  // Get PR number from pull_request in the payload
+  const pullNumber = context.payload.pull_request?.number;
+
+  if (!pullNumber) {
+    core.setFailed('No pull request number found in review comment event.');
+    return;
+  }
+
+  core.info(`Processing pull_request_review_comment on PR #${pullNumber}: ${commentBody.substring(0, 50)}...`);
+
+  // Parse the command from comment body
+  const parseResult = parseCommand(commentBody);
+
+  // If parsing failed, post safe guidance message
+  if (!isValid(parseResult)) {
+    const errorType = parseResult.error.type;
+    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
+
+    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+    await upsertComment(
+      octokit,
+      owner,
+      repo,
+      pullNumber,
+      guidance,
+      GUIDANCE_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+    core.info(`Posted guidance comment for error: ${errorType}`);
+
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  // Valid command - check authorization before dispatching
+  core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
+
+  // Get commenter info for auth check
+  const commenter = comment?.user;
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+  // Check authorization using fork-aware auth check
+  const authResult = await checkForkAuthorization(octokit, context, commenter);
+
+  if (!authResult.authorized) {
+    // Silent block for fork PRs (reason: null per SECURITY.md)
+    if (authResult.reason === null) {
+      core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
+      return;
+    }
+
+    // For regular PRs, post an error message
+    core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
+    await upsertComment(
+      octokit,
+      owner,
+      repo,
+      pullNumber,
+      getUnauthorizedMessage(),
+      AUTH_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set auth-failure reaction: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  // Load continuity state
+  let continuityState = null;
+  try {
+    continuityState = await loadContinuityState(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    core.warning(`Failed to load continuity state: ${error.message}`);
+  }
+
+  // Set acknowledgment reaction
+  if (commentId && parseResult.command !== 'ask') {
+    try {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
+    } catch (error) {
+      core.warning(`Failed to set acknowledgment reaction: ${error.message}`);
+    }
+  }
+
+  // Post progress message
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
+    PROGRESS_MARKER,
+    { replyToId: commentId, updateExisting: false }
+  );
+
+  // Extract anchor metadata from review comment
+  const anchorMetadata = extractReviewCommentAnchor(context.payload);
+  
+  // Get base and head refs from PR
+  const baseRef = context.payload.pull_request?.base?.ref || null;
+  const headRef = context.payload.pull_request?.head?.ref || null;
+
+  core.info(`Authorized command from collaborator: ${commenter.login}`);
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, {
+    commentId,
+    continuityState,
+    commenter,
+    baseRef,
+    headRef,
+    ...anchorMetadata,
+  });
+}
+
 async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, options = {}) {
   const { command, args } = parseResult;
-  const pullNumber = context.payload.issue?.number;
-  const { commentId = null, continuityState = null, commenter = null } = options;
+  const pullNumber = context.payload.issue?.number || context.payload.pull_request?.number;
+  const { 
+    commentId = null, 
+    continuityState = null, 
+    commenter = null,
+    baseRef = null,
+    headRef = null,
+    commentPath = null,
+    commentLine = null,
+    commentStartLine = null,
+    commentDiffHunk = null,
+  } = options;
 
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
 
@@ -347,7 +490,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     logger.warn({ error: error.message }, 'Failed to fetch changed files');
   }
 
-  // Build base handler context
+  // Build base handler context with normalized context inputs
   const handlerContext = {
     octokit,
     owner,
@@ -361,6 +504,13 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     logger,
     maxChars: DEFAULT_MAX_CHARS,
     continuityState,
+    // Normalized context inputs for explain/suggest/compare handlers
+    baseRef,
+    headRef,
+    commentPath,
+    commentLine,
+    commentStartLine,
+    commentDiffHunk,
   };
 
   switch (command) {
@@ -405,24 +555,37 @@ ${COMMENT_MARKER}`;
         break;
       }
 
-      // For explain, we need file content. Try to get it from changed files.
-      // If no specific file is mentioned in args, use the first changed file
-      const firstChangedFile = changedFiles.find(f => f.patch);
-      if (!firstChangedFile) {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Explanation
+      // For explain, use anchor metadata if available (from review comment)
+      // Otherwise, try to get it from changed files
+      let filename = null;
+      let fileContent = null;
+
+      if (handlerContext.commentPath) {
+        // Use anchor metadata from review comment
+        filename = handlerContext.commentPath;
+        // Don't use first-changed-file patch - let handler fetch content based on path
+        fileContent = handlerContext.commentDiffHunk || null;
+      } else {
+        // Fall back to first changed file for issue_comment
+        const firstChangedFile = changedFiles.find(f => f.patch);
+        if (!firstChangedFile) {
+          terminalReaction = REACTIONS.X;
+          responseMessage = `## Z.ai Explanation
 
 No files with changes found in this PR to explain.
 
 ${COMMENT_MARKER}`;
-        break;
+          break;
+        }
+        filename = firstChangedFile.filename;
+        fileContent = firstChangedFile.patch || '';
       }
 
       // Add file-specific context for explain handler
       const explainContext = {
         ...handlerContext,
-        filename: firstChangedFile.filename,
-        fileContent: firstChangedFile.patch || '',
+        filename,
+        fileContent,
       };
 
       try {
