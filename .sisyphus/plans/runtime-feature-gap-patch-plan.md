@@ -457,7 +457,7 @@ Max Concurrent: 5
   - Happy: run two sequential commands, second reflects stored context.
   - Negative: inject invalid continuity marker, assert fallback path and no crash.
 
-- [ ] T11. Add runtime-path integration tests for full issue_comment command matrix
+- [x] T11. Add runtime-path integration tests for full issue_comment command matrix
 
   **What to do**:
   - Add/extend integration tests to execute runtime entrypoint for each command: ask/help/review/explain/suggest/compare.
@@ -488,7 +488,7 @@ Max Concurrent: 5
   - Happy: `node --test tests/integration` passes command matrix tests.
   - Negative: unauthorized command fixture asserts zero provider call.
 
-- [ ] T12. Add runtime regression tests for pull_request auto-review compatibility
+- [x] T12. Add runtime regression tests for pull_request auto-review compatibility
 
   **What to do**:
   - Validate existing PR opened/synchronize auto-review behavior remains intact after routing changes.
@@ -519,7 +519,7 @@ Max Concurrent: 5
   - Happy: opened event creates review comment.
   - Negative: synchronize event updates existing marker comment instead of duplicating.
 
-- [ ] T13. Rebuild dist and enforce dist-drift guard alignment
+- [x] T13. Rebuild dist and enforce dist-drift guard alignment
 
   **What to do**:
   - Run build to regenerate `dist/index.js` from patched `src/index.js`.
@@ -550,7 +550,7 @@ Max Concurrent: 5
   - Happy: build and drift check pass.
   - Negative: intentionally stale dist in fixture branch triggers drift failure.
 
-- [ ] T14. Align docs with runtime truth (no feature overstatement)
+- [x] T14. Align docs with runtime truth (no feature overstatement)
 
   **What to do**:
   - Update docs to reflect actual runtime-supported command and trigger behavior.

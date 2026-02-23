@@ -97,3 +97,97 @@ Standardized reaction feedback across all six command handlers (ask, help, revie
  The `commentId` is expected to be passed in context from the caller
  Review.js and explain.js use `upsertComment` pattern, suggest.js and compare.js return results for caller to handle
  All handlers now have consistent reaction behavior regardless of their return pattern
+
+
+---
+
+# Align Docs with Runtime Truth (T14)
+
+## Date: 2026-02-23
+
+## Summary
+Updated README.md to accurately reflect tested runtime behavior for commands and trigger events. No feature overstatement.
+
+## Changes Made
+
+### 1. Updated README.md Features section
+ Added: Automatic PR review on open/synchronize
+ Added: Interactive commands listing (all 6 tested commands)
+ Added: Collaborator-only command access
+ Added: Marker-based comment updates (idempotent)
+
+### 2. Added Commands section
+Documented all 6 tested commands:
+ `/zai ask <question>` - Ask questions about PR code
+ `/zai help` - Show available commands
+ `/zai review` - Review specific file
+ `/zai explain <lines>` - Explain line ranges
+ `/zai suggest <prompt>` - Get suggestions
+ `/zai compare` - Compare old vs new
+
+Also documented `@zai-bot` alias support.
+
+### 3. Added Authorization section
+ Clarified: collaborators (write permission) only
+ Clarified: fork PR authors who are not collaborators blocked
+
+### 4. Added Trigger Behavior section
+ PR opened: creates new review comment
+ PR synchronize: updates existing comment (marker-based)
+ Issue comment on PR: processes commands if collaborator
+
+## Verification
+ All 41 integration tests pass
+ Command pipeline tests verify all 6 commands
+ PR auto-review tests verify marker-based upsert idempotency
+ Authorization tests verify collaborator-only access
+
+## Notes
+ RUNBOOK.md already accurate - no changes needed
+ ZAI-BOT-FEATURES.md is roadmap/ideal state, not current behavior
+ Documentation now matches what tests verify at runtime
+
+
+---
+
+# Rebuild dist + CI Drift Guard Alignment (T13)
+
+## Date: 2026-02-23
+
+## Summary
+Rebuilt `dist/` artifacts from current runtime source and verified CI drift guard is properly aligned.
+
+## Changes Made
+
+### 1. Rebuilt dist artifacts
+ Ran `npm run build` to regenerate `dist/index.js` from `src/index.js`
+ New modules bundled: API client (9729), authorization (6495), command parser (5055), comments (6819), context (9990), continuity (4575), event routing (2500), compare handler (3016), explain handler (1248)
+ Result: +2898 lines in dist/index.js
+
+### 2. Verified CI drift guard alignment
+ Examined `.github/workflows/ci.yml`
+ The `dist-drift` job properly:
+  1. Builds (`npm run build`)
+  2. Checks for drift (`git diff --exit-code dist/`)
+ This correctly validates that dist/ in repo matches the build output
+ No workflow changes needed - guard is properly configured
+
+### 3. Committed rebuilt artifacts
+ Committed `dist/index.js` with message referencing T11/T12 new modules
+ Verified `git diff --exit-code dist/` passes after rebuild
+
+## Acceptance Criteria Met
+ [x] `npm run build` succeeds
+ [x] `git diff --exit-code dist/` passes after rebuild
+ [x] `node --test` passes (316 tests)
+ [x] CI drift guard is properly aligned (no workflow changes needed)
+
+## Technical Details
+ Build output: dist/index.js (1188kB), dist/licenses.txt (32kB)
+ ncc version: 0.38.4
+ Tests: 316 passing, 0 failures
+
+## Notes
+ The dist drift was caused by T11/T12 adding new source modules that were never bundled into dist
+ CI correctly detects this drift - the guard is working as intended
+ Future changes to src/ should always rebuild and commit dist/ in the same PR

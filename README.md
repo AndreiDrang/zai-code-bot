@@ -4,10 +4,12 @@ AI-powered GitHub Pull Request code review using Z.ai models. Automatic PR comme
 
 ## Features
 
-- 🚀 Detect bugs
-- 🔍 Suggest improvements
+- 🚀 Automatic PR review on open/synchronize
+- 🔍 Interactive commands (`/zai ask`, `/zai help`, `/zai review`, `/zai explain`, `/zai suggest`, `/zai compare`)
 - 🧠 AI-driven PR feedback
 - ⚡ Works with GitHub Actions
+- 🔐 Collaborator-only command access
+- 🔄 Marker-based comment updates (idempotent)
 
 ## Quickstart
 
@@ -43,6 +45,29 @@ jobs:
 |---|---|---|---|
 | `ZAI_API_KEY` | Yes | — | Your Z.ai API key |
 | `ZAI_MODEL` | No | `glm-4.7` | Z.ai model to use for review |
+
+## Commands
+
+The action responds to comments on pull requests. Use `/zai` or `@zai-bot` prefix.
+
+| Command | Example | Description |
+|---|---|---|
+| `/zai ask <question>` | `/zai ask what does this function do?` | Ask questions about the PR code |
+| `/zai help` | `/zai help` | Show available commands |
+| `/zai review` | `/zai review src/utils.ts` | Review a specific file in the PR |
+| `/zai explain <lines>` | `/zai explain 10-20` | Explain specific line numbers |
+| `/zai suggest <prompt>` | `/zai suggest better variable naming` | Get improvement suggestions |
+| `/zai compare` | `/zai compare` | Compare old vs new version in PR |
+
+### Authorization
+
+Interactive commands require collaborator access (write permission). Fork PR authors who are not collaborators receive an authorization error.
+
+### Trigger Behavior
+
+- **PR opened**: Creates a new review comment
+- **PR synchronize**: Updates the existing review comment (marker-based idempotent)
+- **Issue comment on PR**: Processes `/zai` commands if commenter is a collaborator
 
 ## Configuration
 
