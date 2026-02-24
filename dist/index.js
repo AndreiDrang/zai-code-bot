@@ -30327,6 +30327,27 @@ function isForkPullRequest(pullRequest) {
   return pullRequest.head.repo.fork === true;
 }
 
+async function getPullRequestForAuthorization(octokit, context) {
+  const directPullRequest = context?.payload?.pull_request;
+  if (directPullRequest) {
+    return directPullRequest;
+  }
+
+  const issuePullRequest = context?.payload?.issue?.pull_request;
+  const pullNumber = context?.payload?.issue?.number;
+  if (!issuePullRequest || !pullNumber) {
+    return null;
+  }
+
+  const { owner, repo } = context.repo;
+  const response = await octokit.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  });
+  return response?.data || null;
+}
+
 /**
  * Check authorization for fork PR scenarios
  * According to SECURITY.md:
@@ -30339,7 +30360,13 @@ function isForkPullRequest(pullRequest) {
  * @returns {Promise<{authorized: boolean, reason?: string}>}
  */
 async function checkForkAuthorization(octokit, context, commenter) {
-  const pullRequest = context.payload.pull_request;
+  let pullRequest = null;
+  try {
+    pullRequest = await getPullRequestForAuthorization(octokit, context);
+  } catch (_error) {
+    return checkAuthorization(octokit, context, commenter);
+  }
+
   const isFork = isForkPullRequest(pullRequest);
 
   // For non-fork PRs, use standard authorization
@@ -30353,6 +30380,14 @@ async function checkForkAuthorization(octokit, context, commenter) {
     return {
       authorized: false,
       reason: null, // Silent block for fork PRs
+    };
+  }
+
+  // Allow fork PR creator to use commands on their own PR.
+  const pullRequestAuthor = pullRequest?.user?.login;
+  if (pullRequestAuthor && commenter.login === pullRequestAuthor) {
+    return {
+      authorized: true,
     };
   }
 
@@ -30392,11 +30427,378 @@ module.exports = {
   isCollaborator,
   checkAuthorization,
   checkForkAuthorization,
+  getPullRequestForAuthorization,
   isForkPullRequest,
   getUnauthorizedMessage,
   getUnknownCommandMessage,
   AUTHORIZED_PERMISSIONS,
   API_TIMEOUT_MS,
+};
+
+
+/***/ }),
+
+/***/ 7437:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Code scope extraction utilities.
+ * Provides helpers for surrounding window extraction, target block extraction,
+ * and nearest function/class block selection.
+ * 
+ * Uses deterministic bounds checking (1-indexed lines) and always returns
+ * fallback objects instead of throwing errors.
+ */
+
+const { extractLines: contextExtractLines, validateRange } = __nccwpck_require__(9990);
+
+const DEFAULT_WINDOW_SIZE = 15;
+
+/**
+ * Clamps a line number to valid bounds [1, maxLines].
+ * @param {number} line - Line number to clamp
+ * @param {number} maxLines - Maximum number of lines
+ * @returns {number} Clamped line number
+ */
+function clampLine(line, maxLines) {
+  return Math.max(1, Math.min(line, maxLines));
+}
+
+/**
+ * Extracts target lines plus surrounding window (N lines before/after).
+ * @param {string} content - File content
+ * @param {number} startLine - Start line (1-indexed)
+ * @param {number} endLine - End line (1-indexed)
+ * @param {number} windowSize - Lines before/after to include (default: 15)
+ * @returns {Object} Result with target, surrounding, bounds, and metadata
+ */
+function extractWindow(content, startLine, endLine, windowSize = DEFAULT_WINDOW_SIZE) {
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
+  // Handle invalid input gracefully
+  if (!content || typeof content !== 'string') {
+    return {
+      target: [],
+      surrounding: null,
+      bounds: { start: 1, end: 0, maxLines: 0 },
+      fallback: true,
+      note: 'Invalid content provided'
+    };
+  }
+
+  // Validate and clamp target range
+  const validTarget = validateRange(startLine, endLine, maxLines);
+  if (!validTarget.valid) {
+    // Return full file as fallback
+    return {
+      target: lines,
+      surrounding: null,
+      bounds: { start: 1, end: maxLines, maxLines },
+      fallback: true,
+      note: `Invalid target range: ${validTarget.error}. Returning full file.`
+    };
+  }
+
+  // Calculate window bounds with clamping
+  const windowStart = clampLine(startLine - windowSize, maxLines);
+  const windowEnd = clampLine(endLine + windowSize, maxLines);
+
+  // Extract surrounding window
+  const surroundingResult = contextExtractLines(content, windowStart, windowEnd);
+  const surrounding = surroundingResult.valid ? surroundingResult.lines : [];
+
+  // Extract target within window
+  const targetResult = contextExtractLines(content, startLine, endLine);
+  const target = targetResult.valid ? targetResult.lines : [];
+
+  return {
+    target,
+    surrounding,
+    bounds: {
+      start: windowStart,
+      end: windowEnd,
+      maxLines
+    },
+    fallback: false
+  };
+}
+
+/**
+ * Extracts exact line range from content.
+ * Wrapper around context.extractLines with improved return shape.
+ * @param {string} content - File content
+ * @param {number} startLine - Start line (1-indexed)
+ * @param {number} endLine - End line (1-indexed)
+ * @returns {Object} Result with target, bounds, and metadata
+ */
+function extractTargetBlock(content, startLine, endLine) {
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
+  // Handle invalid input gracefully
+  if (!content || typeof content !== 'string') {
+    return {
+      target: [],
+      bounds: { start: 1, end: 0, maxLines: 0 },
+      fallback: true,
+      note: 'Invalid content provided'
+    };
+  }
+
+  // Validate range
+  const validation = validateRange(startLine, endLine, maxLines);
+  if (!validation.valid) {
+    return {
+      target: [],
+      bounds: { start: 1, end: maxLines, maxLines },
+      fallback: true,
+      note: `Invalid range: ${validation.error}`
+    };
+  }
+
+  // Extract exact lines
+  const result = contextExtractLines(content, startLine, endLine);
+  
+  if (!result.valid) {
+    return {
+      target: [],
+      bounds: { start: startLine, end: endLine, maxLines },
+      fallback: true,
+      note: result.error || 'Extraction failed'
+    };
+  }
+
+  return {
+    target: result.lines,
+    bounds: { start: startLine, end: endLine, maxLines },
+    fallback: false
+  };
+}
+
+/**
+ * Finds enclosing function/class block around an anchor line using simple heuristics.
+ * Looks for: function declarations, class declarations, arrow functions, and { } matching.
+ * @param {string} content - File content
+ * @param {number} anchorLine - Line to find enclosing block for (1-indexed)
+ * @param {Object} options - Optional configuration
+ * @param {number} options.maxSearchLines - Max lines to search backward (default: 100)
+ * @param {number} options.windowSize - Window size when returning fallback (default: 15)
+ * @returns {Object} Result with target, bounds, and metadata
+ */
+function extractEnclosingBlock(content, anchorLine, options = {}) {
+  const { maxSearchLines = 100, windowSize = DEFAULT_WINDOW_SIZE } = options;
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
+  // Handle invalid input gracefully
+  if (!content || typeof content !== 'string') {
+    return {
+      target: [],
+      bounds: { start: 1, end: 0, maxLines: 0 },
+      fallback: true,
+      note: 'Invalid content provided'
+    };
+  }
+
+  // Validate anchor line
+  if (anchorLine < 1 || anchorLine > maxLines) {
+    return extractWindow(content, Math.max(1, anchorLine - windowSize), Math.min(maxLines, anchorLine + windowSize), windowSize);
+  }
+
+  // Search for block start
+  const blockStart = findBlockStart(lines, anchorLine, maxSearchLines);
+  
+  // Search for block end
+  const blockEnd = findBlockEnd(lines, blockStart, anchorLine, maxLines);
+
+  // Extract the block
+  const result = contextExtractLines(content, blockStart, blockEnd);
+
+  if (!result.valid) {
+    // Fallback to window extraction
+    const fallbackResult = extractWindow(content, anchorLine - windowSize, anchorLine + windowSize, windowSize);
+    return {
+      target: fallbackResult.target,
+      bounds: fallbackResult.bounds,
+      fallback: true,
+      note: 'Could not determine block boundaries precisely, using window fallback'
+    };
+  }
+
+  // Check if we actually found a meaningful block (not just the anchor line itself)
+  const isMeaningfullyLarger = (blockEnd - blockStart) > (anchorLine - blockStart);
+  
+  if (!isMeaningfullyLarger) {
+    // No real block found, return bounded local chunk
+    const fallbackStart = clampLine(anchorLine - windowSize, maxLines);
+    const fallbackEnd = clampLine(anchorLine + windowSize, maxLines);
+    const fallbackResult = contextExtractLines(content, fallbackStart, fallbackEnd);
+    
+    return {
+      target: fallbackResult.valid ? fallbackResult.lines : [],
+      bounds: { start: fallbackStart, end: fallbackEnd, maxLines },
+      fallback: true,
+      note: 'No function/class block detected around anchor line, returning local context window'
+    };
+  }
+
+  return {
+    target: result.lines,
+    bounds: { start: blockStart, end: blockEnd, maxLines },
+    fallback: false
+  };
+}
+
+/**
+ * Find the start of a code block by searching backward for function/class declarations.
+ * @param {string[]} lines - Array of lines
+ * @param {number} anchorLine - Line to search around (1-indexed)
+ * @param {number} maxSearch - Maximum lines to search backward
+ * @returns {number} Line number where block starts (1-indexed)
+ */
+function findBlockStart(lines, anchorLine, maxSearch) {
+  const startSearch = Math.max(1, anchorLine - maxSearch);
+  
+  // Keywords that indicate block starts
+  const blockKeywords = [
+    /^(\s*)(function\s+\w+|async\s+function|export\s+(default\s+)?function)/,
+    /^(\s*)class\s+\w+/,
+    /^(\s*)(\w+)\s*=\s*(async\s*)?\(/,  // function assigned to variable
+    /^(\s*)(\w+)\s*:\s*.*=>/,            // object method arrow function
+  ];
+
+  // First, look for explicit block keywords near the anchor
+  for (let i = anchorLine - 1; i >= startSearch; i--) {
+    const line = lines[i - 1]; // Convert to 0-indexed
+    
+    // Check for block-opening keywords
+    for (const keyword of blockKeywords) {
+      if (keyword.test(line)) {
+        return i;
+      }
+    }
+
+    // Check for arrow function with =>
+    if (line.includes('=>')) {
+      // Find the start of this line (may be continuation)
+      const trimmed = line.trim();
+      if (trimmed.startsWith('=>') || /^\)\s*=>/.test(trimmed)) {
+        // This is likely the end of an arrow function, search for its start
+        const arrowStart = findArrowFunctionStart(lines, i);
+        if (arrowStart > 0) {
+          return arrowStart;
+        }
+      }
+    }
+  }
+
+  // No explicit keyword found, search for { } matching
+  // Look for { that might be a block start
+  for (let i = anchorLine - 1; i >= startSearch; i--) {
+    const line = lines[i - 1];
+    const openBraces = (line.match(/{/g) || []).length;
+    const closeBraces = (line.match(/}/g) || []).length;
+    
+    if (openBraces > closeBraces) {
+      return i;
+    }
+  }
+
+  // Default: return window start
+  return Math.max(1, anchorLine - 10);
+}
+
+/**
+ * Find the start of an arrow function given a line with =>.
+ * @param {string[]} lines - Array of lines
+ * @param {number} arrowLine - Line containing => (1-indexed)
+ * @returns {number} Line where arrow function starts (1-indexed)
+ */
+function findArrowFunctionStart(lines, arrowLine) {
+  // Search backward for the start of the arrow function
+  // Look for patterns like: const x = (a, b) =>
+  // or: (a, b) =>
+  // or: a => 
+  
+  let parenDepth = 0;
+  const searchStart = Math.max(1, arrowLine - 5);
+
+  for (let i = arrowLine - 1; i >= searchStart; i--) {
+    const line = lines[i - 1];
+    
+    parenDepth += (line.match(/\(/g) || []).length - (line.match(/\)/g) || []).length;
+    
+    // If we found the start (no open parens left and line ends with => or identifier)
+    if (parenDepth <= 0) {
+      const trimmed = line.trim();
+      // Check if this looks like the start of an arrow function
+      if (trimmed.endsWith('=>') || /^\(?[\w,\s]*\)?\s*=>/.test(trimmed)) {
+        return i;
+      }
+    }
+  }
+
+  return arrowLine - 1;
+}
+
+/**
+ * Find the end of a code block.
+ * @param {string[]} lines - Array of lines
+ * @param {number} blockStart - Where block starts (1-indexed)
+ * @param {number} anchorLine - Original anchor line (1-indexed)
+ * @param {number} maxLines - Maximum lines in file
+ * @returns {number} Line where block ends (1-indexed)
+ */
+function findBlockEnd(lines, blockStart, anchorLine, maxLines) {
+  // Simple { } matching to find block end
+  let braceDepth = 0;
+  let foundOpenBrace = false;
+  const searchEnd = maxLines;
+
+  for (let i = blockStart; i <= searchEnd; i++) {
+    const line = lines[i - 1]; // Convert to 0-indexed
+    
+    const openBraces = (line.match(/{/g) || []).length;
+    const closeBraces = (line.match(/}/g) || []).length;
+    
+    if (openBraces > 0) {
+      foundOpenBrace = true;
+    }
+    
+    if (foundOpenBrace) {
+      braceDepth += openBraces - closeBraces;
+      
+      // Check for standalone close brace or end of block
+      if (braceDepth <= 0) {
+        return i;
+      }
+    }
+  }
+
+  // If no matching brace found, look for common block endings
+  // Search for lines that typically end blocks
+  for (let i = anchorLine; i <= searchEnd; i++) {
+    const line = lines[i - 1];
+    const trimmed = line.trim();
+    
+    // Common block endings
+    if (trimmed === '}' || 
+        trimmed.startsWith('}') ||
+        /^\s*(return|throw|break|continue)\s+/.test(trimmed)) {
+      return i;
+    }
+  }
+
+  // Default: return anchor line or nearby
+  return Math.min(maxLines, anchorLine + 20);
+}
+
+module.exports = {
+  extractWindow,
+  extractTargetBlock,
+  extractEnclosingBlock,
+  DEFAULT_WINDOW_SIZE,
 };
 
 
@@ -31210,15 +31612,43 @@ module.exports = {
  */
 
 /**
+ * Extracts anchor metadata from a review comment payload
+ * @param {Object} payload - GitHub webhook payload
+ * @returns {Object|null} Anchor metadata or null if not available
+ */
+function extractReviewCommentAnchor(payload) {
+  const comment = payload?.comment;
+  if (!comment) {
+    return null;
+  }
+
+  // Review comments have path, line, and diff_hunk properties
+  if (comment.path) {
+    return {
+      commentPath: comment.path,
+      commentLine: comment.line,
+      commentStartLine: comment.start_line || null,
+      commentDiffHunk: comment.diff_hunk || null,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Determines the type of GitHub event from the context
  * @param {Object} context - GitHub actions context object
- * @returns {string} Event type: 'pull_request', 'issue_comment_pr', or 'issue_comment_non_pr'
+ * @returns {string} Event type: 'pull_request', 'issue_comment_pr', 'pull_request_review_comment', or 'issue_comment_non_pr'
  */
 function getEventType(context) {
   const eventName = context.eventName;
 
   if (eventName === 'pull_request') {
     return 'pull_request';
+  }
+
+  if (eventName === 'pull_request_review_comment') {
+    return 'pull_request_review_comment';
   }
 
   if (eventName === 'issue_comment') {
@@ -31271,6 +31701,18 @@ function shouldProcessEvent(context) {
     return { process: true, reason: 'issue_comment on pull request' };
   }
 
+  // Handle pull_request_review_comment events
+  if (eventType === 'pull_request_review_comment') {
+    const comment = context.payload.comment;
+
+    // Check if comment is from a bot (anti-loop protection)
+    if (isBotComment(comment)) {
+      return { process: false, reason: 'bot comment - skipping to prevent loop' };
+    }
+
+    return { process: true, reason: 'pull_request_review_comment event' };
+  }
+
   // Handle non-PR issue comments - reject
   if (eventType === 'issue_comment_non_pr') {
     return { process: false, reason: 'non-PR issue comment - not supported' };
@@ -31303,11 +31745,22 @@ function getEventInfo(context) {
     info.pullNumber = context.payload.issue.number;
   }
 
-  // Add comment info if available
+  // Add comment info if available (including review comments)
   if (context.payload.comment) {
     info.commentId = context.payload.comment.id;
     info.commentAuthor = context.payload.comment.user?.login;
     info.isBot = isBotComment(context.payload.comment);
+  }
+
+  // Add anchor metadata for review comments
+  if (eventType === 'pull_request_review_comment') {
+    const anchor = extractReviewCommentAnchor(context.payload);
+    if (anchor) {
+      info.commentPath = anchor.commentPath;
+      info.commentLine = anchor.commentLine;
+      info.commentStartLine = anchor.commentStartLine;
+      info.commentDiffHunk = anchor.commentDiffHunk;
+    }
   }
 
   return info;
@@ -31318,6 +31771,7 @@ module.exports = {
   isBotComment,
   shouldProcessEvent,
   getEventInfo,
+  extractReviewCommentAnchor,
 };
 
 
@@ -31804,14 +32258,48 @@ const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
 const { createApiClient } = __nccwpck_require__(9729);
 const { createLogger, generateCorrelationId, getUserMessage } = __nccwpck_require__(2120);
 const { REACTIONS, setReaction } = __nccwpck_require__(6819);
+const { fetchFileAtRef, resolvePrRefs, fetchPrFiles } = __nccwpck_require__(1669);
 
-function buildComparePrompt(files) {
-  const diffs = files
-    .filter(f => f.patch)
-    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
-    .join('\n\n');
+// Constants for file comparison limits
+const MAX_COMPARE_FILES = 5;
+const MAX_FILE_CHARS = 15000;
 
-  return `You are an expert code reviewer. Compare the OLD version with the NEW version in the following pull request changes.
+/**
+ * Builds a comparison prompt with old and new versions of changed files.
+ * @param {Array} filesData - Array of file objects with {filename, status, oldVersion, newVersion}
+ * @param {number} maxChars - Maximum characters for the prompt
+ * @returns {string} Formatted prompt for comparison
+ */
+function buildComparePrompt(filesData, maxChars = MAX_FILE_CHARS, totalChangedFiles = null) {
+  const fileSections = filesData.map(file => {
+    const { filename, status, oldVersion, newVersion } = file;
+    
+    let oldContent = oldVersion || '[File did not exist in base branch]';
+    let newContent = newVersion || '[File was deleted in this PR]';
+    
+    // Truncate individual file contents if needed
+    if (oldVersion && oldVersion.length > MAX_FILE_CHARS) {
+      oldContent = `${oldVersion.substring(0, MAX_FILE_CHARS)}\n...[truncated, ${oldVersion.length - MAX_FILE_CHARS} chars omitted]`;
+    }
+    if (newVersion && newVersion.length > MAX_FILE_CHARS) {
+      newContent = `${newVersion.substring(0, MAX_FILE_CHARS)}\n...[truncated, ${newVersion.length - MAX_FILE_CHARS} chars omitted]`;
+    }
+    
+    return `### ${filename} (${status})
+
+Compare the old logic with the new logic in this PR.
+<old_version>
+${oldContent}
+</old_version>
+<new_version>
+${newContent}
+</new_version>
+
+Task: Summarize the functional changes. Did the behavior change? Are there any breaking changes for API consumers? Focus on 'what' changed in behavior, not just 'how' the syntax changed.
+`;
+  });
+  
+  let prompt = `You are an expert code reviewer. Compare the OLD version with the NEW version in the following pull request changes.
 
 Analyze the differences and provide:
 1. What changed between old and new versions
@@ -31819,7 +32307,18 @@ Analyze the differences and provide:
 3. Potential implications of these changes
 4. Any concerns or things to watch out for
 
-## Changed Files:\n\n${diffs}`;
+## Changed Files:\n\n`;
+  
+  prompt += fileSections.join('\n\n');
+  
+  // Add note if there are more files than we can compare
+  if (totalChangedFiles && totalChangedFiles > MAX_COMPARE_FILES) {
+    prompt += `\n\n[Comparison limited to first ${MAX_COMPARE_FILES} of ${totalChangedFiles} changed files]`;
+  }
+  
+  // Truncate the entire prompt if needed
+  const truncated = truncateContext(prompt, maxChars);
+  return truncated.content;
 }
 
 function formatCompareResponse(comparison) {
@@ -31843,19 +32342,51 @@ async function handleCompareCommand(context) {
   logger.info({}, 'Processing compare command');
 
   try {
-    const pullNumber = payload.pull_request.number;
+    const pullNumber = payload.pull_request?.number || payload.issue?.number;
 
+    if (!pullNumber) {
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return {
+        success: false,
+        error: 'No pull request number found.',
+      };
+    }
+
+    logger.info({ pullNumber }, 'Resolving PR refs');
+
+    // Step 1: Resolve PR base and head refs
+    const refsResult = await resolvePrRefs(octokit, owner, repo, pullNumber);
+    if (!refsResult.success) {
+      logger.warn({ error: refsResult.error }, 'Failed to resolve PR refs, falling back to base/head from payload');
+    }
+
+    const baseRef = refsResult.success ? refsResult.data.base.sha : (payload.pull_request?.base?.sha || 'HEAD');
+    const headRef = refsResult.success ? refsResult.data.head.sha : (payload.pull_request?.head?.sha || 'HEAD');
+    const baseBranch = refsResult.success ? refsResult.data.base.ref : (payload.pull_request?.base?.ref || 'base');
+    const headBranch = refsResult.success ? refsResult.data.head.ref : (payload.pull_request?.head?.ref || 'head');
+
+    logger.info({ baseRef, headRef, baseBranch, headBranch }, 'Resolved PR refs');
+
+    // Step 2: Fetch changed files list
     logger.info({ pullNumber }, 'Fetching changed files');
 
-    const { data: files } = await octokit.rest.pulls.listFiles({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      per_page: 100,
-    });
+    const filesResult = await fetchPrFiles(octokit, owner, repo, pullNumber);
+    if (!filesResult.success || !filesResult.data || filesResult.data.length === 0) {
+      if (commentId) {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      }
+      return {
+        success: false,
+        error: filesResult.fallback || 'No changed files found in this pull request.',
+      };
+    }
 
-    if (!files || files.length === 0) {
-      // Add error reaction if commentId available
+    const files = filesResult.data;
+    const changedFiles = files.filter(f => f.status !== 'unchanged');
+    
+    if (changedFiles.length === 0) {
       if (commentId) {
         await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
@@ -31865,33 +32396,64 @@ async function handleCompareCommand(context) {
       };
     }
 
-    const filesWithPatches = files.filter(f => f.patch);
-    if (filesWithPatches.length === 0) {
-      // Add error reaction if commentId available
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    logger.info({ totalFiles: changedFiles.length }, 'Fetching base and head versions for changed files');
+
+    // Step 3: Fetch base and head versions for each file (up to MAX_COMPARE_FILES)
+    const filesToCompare = changedFiles.slice(0, MAX_COMPARE_FILES);
+    const filesData = await Promise.all(filesToCompare.map(async (file) => {
+      const { filename, status } = file;
+
+      const [baseResult, headResult] = await Promise.all([
+        status === 'added'
+          ? Promise.resolve(null)
+          : fetchFileAtRef(octokit, owner, repo, filename, baseRef, {
+              maxFileSize: MAX_FILE_CHARS,
+              maxFileLines: 10000,
+              patch: file.patch,
+              patchSide: 'old',
+            }),
+        status === 'removed'
+          ? Promise.resolve(null)
+          : fetchFileAtRef(octokit, owner, repo, filename, headRef, {
+              maxFileSize: MAX_FILE_CHARS,
+              maxFileLines: 10000,
+              patch: file.patch,
+              patchSide: 'new',
+            }),
+      ]);
+
+      let oldVersion = null;
+      if (baseResult && baseResult.success) {
+        oldVersion = baseResult.data;
+      } else if (baseResult && baseResult.error?.status !== 404) {
+        logger.warn({ filename, error: baseResult.error }, 'Failed to fetch base version');
       }
+
+      let newVersion = null;
+      if (headResult && headResult.success) {
+        newVersion = headResult.data;
+      } else if (headResult && headResult.error?.status !== 404) {
+        logger.warn({ filename, error: headResult.error }, 'Failed to fetch head version');
+      }
+
       return {
-        success: false,
-        error: 'No patchable changes found in this pull request.',
+        filename,
+        status,
+        oldVersion,
+        newVersion,
       };
-    }
+    }));
 
-    const prompt = buildComparePrompt(files);
+    // Step 4: Build the comparison prompt
+    const prompt = buildComparePrompt(filesData, DEFAULT_MAX_CHARS, changedFiles.length);
 
-    const truncated = truncateContext(prompt, DEFAULT_MAX_CHARS);
-    if (truncated.truncated) {
-      logger.info({ originalLength: prompt.length, truncatedLength: truncated.content.length },
-        'Context truncated due to size');
-    }
-
-    logger.info({ promptLength: truncated.content.length }, 'Calling Z.ai API');
+    logger.info({ promptLength: prompt.length, filesCompared: filesData.length }, 'Calling Z.ai API');
 
     const apiClient = createApiClient({ timeout: 30000, maxRetries: 3 });
     const result = await apiClient.call({
       apiKey,
       model,
-      prompt: truncated.content,
+      prompt: prompt,
     });
 
     if (!result.success) {
@@ -31947,6 +32509,8 @@ module.exports = {
   handleCompareCommand,
   buildComparePrompt,
   formatCompareResponse,
+  MAX_COMPARE_FILES,
+  MAX_FILE_CHARS,
 };
 
 
@@ -31958,11 +32522,13 @@ module.exports = {
 /**
  * Explain command handler for /zai explain <lines>
  * 
- * Parses line range, validates with context.validateRange, extracts lines,
+ * Parses line range, fetches file at PR head, extracts target + surrounding context,
  * and requests explanation from Z.ai API.
  */
 
-const { extractLines, validateRange, truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+const { validateRange, truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+const { fetchFileAtPrHead } = __nccwpck_require__(1669);
+const { extractWindow } = __nccwpck_require__(7437);
 const { REACTIONS, upsertComment, setReaction } = __nccwpck_require__(6819);
 const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
 
@@ -32005,20 +32571,39 @@ function parseLineRange(arg) {
 }
 
 /**
- * Build explanation prompt with extracted lines
+ * Build explanation prompt with extracted lines and surrounding context
  * @param {string} filename - File being explained
- * @param {string[]} lines - Extracted lines
+ * @param {Object|Array} scopeResult - Result from extractWindow OR legacy lines array
  * @param {number} startLine - Start line number
  * @param {number} endLine - End line number
  * @param {number} maxChars - Maximum prompt characters
  * @returns {{ prompt: string, truncated: boolean }}
  */
-function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFAULT_MAX_CHARS) {
-  const codeContent = lines.join('\n');
+function buildExplainPrompt(filename, scopeResult, startLine, endLine, maxChars = DEFAULT_MAX_CHARS) {
+  // Handle backward compatibility: if scopeResult is an array (old format), wrap it
+  let target, surrounding;
   
-  let prompt = `Please explain the following code from file: ${filename}\n`;
-  prompt += `Lines ${startLine}-${endLine}:\n\n`;
-  prompt += `\`\`\`\n${codeContent}\n\`\`\``;
+  if (Array.isArray(scopeResult)) {
+    // Legacy format: scopeResult is the lines array
+    target = scopeResult;
+    surrounding = scopeResult; // No surrounding context in legacy format
+  } else {
+    // New format: scopeResult is extractWindow result
+    target = scopeResult.target || [];
+    surrounding = scopeResult.surrounding || [];
+  }
+
+  const targetContent = target.join('\n');
+  const surroundingContent = surrounding.join('\n');
+  
+  // Include filename in the prompt for clarity
+  let prompt = `Explain the following code block from file: ${filename}\n`;
+  prompt += `Context (Surrounding Code):\n`;
+  prompt += `<surrounding_scope>\n${surroundingContent}\n</surrounding_scope>\n\n`;
+  prompt += `Target block to explain:\n`;
+  prompt += `<target_lines>${startLine}-${endLine}</target_lines>\n`;
+  prompt += `<code>\n${targetContent}\n</code>\n\n`;
+  prompt += `Task: Explain what this specific block does, why it's written this way, and identify any dependencies it uses from the surrounding scope.`;
   
   const truncated = truncateContext(prompt, maxChars);
   return { prompt: truncated.content, truncated: truncated.truncated };
@@ -32031,8 +32616,9 @@ function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFA
  * @param {string} context.owner - Repository owner
  * @param {string} context.repo - Repository name
  * @param {number} context.issueNumber - PR number
- * @param {string} context.fileContent - File content to explain
- * @param {string} context.filename - File name
+ * @param {string} context.commentPath - File path from command comment (if specified)
+ * @param {string} context.filename - Fallback file name
+ * @param {Array} context.changedFiles - List of changed files in PR
  * @param {Object} context.apiClient - Z.ai API client
  * @param {string} context.apiKey - Z.ai API key
  * @param {string} context.model - Z.ai model to use
@@ -32041,7 +32627,7 @@ function buildExplainPrompt(filename, lines, startLine, endLine, maxChars = DEFA
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function handleExplainCommand(context, args) {
-  const { octokit, owner, repo, issueNumber, fileContent, filename, apiClient, apiKey, model, commentId } = context;
+  const { octokit, owner, repo, issueNumber, commentPath, filename, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
 
   if (!args || args.length === 0) {
@@ -32075,12 +32661,60 @@ async function handleExplainCommand(context, args) {
   }
 
   const { startLine, endLine } = parsed;
-  logger.info({ startLine, endLine, filename }, 'Parsed line range');
 
-  // Step 2: Validate line range bounds
-  const lines = fileContent.split('\n');
-  const maxLines = lines.length;
+  // Step 2: Determine target file path
+  // Use commentPath if provided, otherwise use filename or first changed file
+  const targetPath = commentPath || filename;
   
+  // If no path available, try to get first changed file
+  let resolvedPath = targetPath;
+  if (!resolvedPath && changedFiles && changedFiles.length > 0) {
+    resolvedPath = changedFiles[0].filename;
+  }
+
+  if (!resolvedPath) {
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** No target file specified. Usage: /zai explain 10-15`,
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: 'No target file specified' };
+  }
+
+  logger.info({ startLine, endLine, path: resolvedPath }, 'Parsed line range, fetching file at PR head');
+
+  // Step 3: Fetch file content at PR head
+  const fileResult = await fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber, {
+    maxFileLines: 10000,
+    changedRanges: [{ start: startLine, end: endLine }],
+    windowSize: 20,
+    maxWindows: 1,
+  });
+  
+  if (!fileResult.success) {
+    const errorMsg = fileResult.fallback || `Failed to fetch ${resolvedPath}`;
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      `**Error:** ${errorMsg}`,
+      EXPLAIN_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+    if (commentId) {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    }
+    return { success: false, error: errorMsg };
+  }
+
+  const fileContent = fileResult.data;
+  const maxLines = Number.isFinite(fileResult.lineCount)
+    ? fileResult.lineCount
+    : fileContent.split('\n').length;
+
+  // Step 4: Validate line range against actual file line count
   const validation = validateRange(startLine, endLine, maxLines);
   if (!validation.valid) {
     await upsertComment(
@@ -32096,30 +32730,32 @@ async function handleExplainCommand(context, args) {
     return { success: false, error: validation.error };
   }
 
-  // Step 3: Extract lines
-  const extracted = extractLines(fileContent, startLine, endLine);
-  if (!extracted.valid) {
-    await upsertComment(
-      octokit, owner, repo, issueNumber,
-      `**Error:** ${extracted.error}`,
-      EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
-    );
-    // Add error reaction if commentId available
-    if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-    }
-    return { success: false, error: extracted.error };
+  // Step 5: Extract target + surrounding context using extractWindow
+  let scopedStart = startLine;
+  let scopedEnd = endLine;
+
+  if (fileResult.scoped && Number.isFinite(fileResult.scopeStartLine)) {
+    scopedStart = startLine - fileResult.scopeStartLine + 1;
+    scopedEnd = endLine - fileResult.scopeStartLine + 1;
   }
 
-  logger.info({ linesExtracted: extracted.lines.length }, 'Lines extracted');
+  const scopeResult = extractWindow(fileContent, scopedStart, scopedEnd);
+  
+  if (scopeResult.fallback) {
+    logger.warn({ note: scopeResult.note }, 'Using fallback for scope extraction');
+  }
 
-  // Step 4: Build prompt
-  const { prompt, truncated } = buildExplainPrompt(filename, extracted.lines, startLine, endLine);
+  logger.info({ 
+    targetLines: scopeResult.target.length, 
+    surroundingLines: scopeResult.surrounding.length 
+  }, 'Extracted target and surrounding context');
 
-  // Step 5: Call Z.ai API
+  // Step 6: Build prompt with scope result
+  const { prompt, truncated } = buildExplainPrompt(resolvedPath, scopeResult, startLine, endLine);
+
+  // Step 7: Call Z.ai API
   try {
-    logger.info({ filename, startLine, endLine }, 'Calling Z.ai API for explanation');
+    logger.info({ path: resolvedPath, startLine, endLine }, 'Calling Z.ai API for explanation');
 
     const result = await apiClient.call({
       apiKey,
@@ -32149,7 +32785,7 @@ async function handleExplainCommand(context, args) {
       response += '\n\n_(Note: Context was truncated due to size limits)_';
     }
 
-    const formattedResponse = `## 📖 Explanation: ${filename}:${startLine}-${endLine}\n\n${response}`;
+    const formattedResponse = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${response}`;
 
     await upsertComment(
       octokit, owner, repo, issueNumber,
@@ -32163,7 +32799,7 @@ async function handleExplainCommand(context, args) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
 
-    logger.info({ filename, startLine, endLine }, 'Explanation posted successfully');
+    logger.info({ path: resolvedPath, startLine, endLine }, 'Explanation posted successfully');
     return { success: true };
 
   } catch (error) {
@@ -32205,17 +32841,12 @@ module.exports = {
  */
 
 const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+const { fetchFileAtPrHead } = __nccwpck_require__(1669);
 const { REACTIONS, upsertComment, setReaction } = __nccwpck_require__(6819);
 const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
 
-// Marker for identifying review comments
 const REVIEW_MARKER = '<!-- ZAI_REVIEW_COMMAND -->';
 
-/**
- * Parse file path from command arguments
- * @param {string[]} args - Command arguments
- * @returns {{ filePath: string|null, error?: string }}
- */
 function parseFilePath(args) {
   if (!args || args.length === 0) {
     return { filePath: null, error: 'No file path provided. Usage: /zai review <filepath>' };
@@ -32223,7 +32854,6 @@ function parseFilePath(args) {
   
   const filePath = args.join('/');
   
-  // Basic validation - no path traversal attempts
   if (filePath.includes('..') || filePath.startsWith('/')) {
     return { filePath: null, error: 'Invalid file path. Path traversal is not allowed.' };
   }
@@ -32231,18 +32861,11 @@ function parseFilePath(args) {
   return { filePath };
 }
 
-/**
- * Check if a file is in the PR's changed files
- * @param {string} filePath - The file path to check
- * @param {Array} changedFiles - Array of changed file objects from PR
- * @returns {{ valid: boolean, error?: string, file?: object }}
- */
 function validateFileInPr(filePath, changedFiles) {
   if (!changedFiles || !Array.isArray(changedFiles)) {
     return { valid: false, error: 'Unable to get PR changed files list' };
   }
   
-  // Try to find the file - check both filename and full path
   const normalizedInputPath = filePath.replace(/^\//, '').toLowerCase();
   
   const foundFile = changedFiles.find(file => {
@@ -32262,48 +32885,33 @@ function validateFileInPr(filePath, changedFiles) {
   return { valid: true, file: foundFile };
 }
 
-/**
- * Build review prompt for a specific file
- * @param {object} file - The file object from PR changes
- * @param {number} maxChars - Maximum characters for prompt
- * @returns {{ prompt: string, truncated: boolean }}
- */
-function buildReviewPrompt(file, maxChars = DEFAULT_MAX_CHARS) {
-  const { filename, patch, status } = file;
-  
-  let content = `Please review the following code change in file: ${filename}\n`;
-  content += `Change type: ${status}\n\n`;
-  
-  if (patch) {
-    content += `--- DIFF ---\n${patch}\n--- END DIFF ---`;
+function buildReviewPrompt(filePath, fullContent, patch, maxChars = DEFAULT_MAX_CHARS) {
+  let content = `You are a Senior Code Reviewer.\nContext:\n<file_path>${filePath}</file_path>\n`;
+
+  if (fullContent) {
+    const truncatedFullCode = truncateContext(fullContent, Math.floor(maxChars * 0.6));
+    content += `<full_code>\n${truncatedFullCode.content}\n</full_code>\n`;
   } else {
-    content += '(No diff available - file may be binary or too large)';
+    content += `<full_code>\n[Full file content unavailable: file not found, binary, or too large]\n</full_code>\n`;
   }
-  
+
+  if (patch) {
+    const truncatedPatch = truncateContext(patch, Math.floor(maxChars * 0.35));
+    content += `<changes_in_this_pr>\n${truncatedPatch.content}\n</changes_in_this_pr>\n`;
+  } else {
+    content += `<changes_in_this_pr>\n[No diff available - file may be binary, too large, or unchanged]\n</changes_in_this_pr>\n`;
+  }
+
+  content += `\nTask: Review the changes in the context of the whole file. Look for logic errors, security vulnerabilities, and architectural mismatches. Focus on how the new changes interact with existing code.`;
+
   const truncated = truncateContext(content, maxChars);
   return { prompt: truncated.content, truncated: truncated.truncated };
 }
 
-/**
- * Handle the /zai review command
- * @param {Object} context - Application context
- * @param {Object} context.octokit - GitHub Octokit instance
- * @param {string} context.owner - Repository owner
- * @param {string} context.repo - Repository name
- * @param {number} context.issueNumber - PR number
- * @param {Array} context.changedFiles - Changed files in PR
- * @param {Object} context.apiClient - Z.ai API client
- * @param {string} context.apiKey - Z.ai API key
- * @param {string} context.model - Z.ai model to use
- * @param {Object} context.logger - Logger instance
- * @param {string[]} args - Command arguments (file path)
- * @returns {Promise<{success: boolean, error?: string}>}
- */
 async function handleReviewCommand(context, args) {
   const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'review' });
   
-  // Step 1: Parse file path from args
   const parsed = parseFilePath(args);
   if (parsed.error) {
     await upsertComment(
@@ -32312,7 +32920,6 @@ async function handleReviewCommand(context, args) {
       REVIEW_MARKER,
       { replyToId: commentId, updateExisting: false }
     );
-    // Add error reaction if commentId available
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
@@ -32322,7 +32929,6 @@ async function handleReviewCommand(context, args) {
   const filePath = parsed.filePath;
   logger.info({ filePath }, 'Validating file in PR');
   
-  // Step 2: Validate file is in PR changed files
   const validation = validateFileInPr(filePath, changedFiles);
   if (!validation.valid) {
     await upsertComment(
@@ -32331,7 +32937,6 @@ async function handleReviewCommand(context, args) {
       REVIEW_MARKER,
       { replyToId: commentId, updateExisting: false }
     );
-    // Add error reaction if commentId available
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
@@ -32339,12 +32944,29 @@ async function handleReviewCommand(context, args) {
   }
   
   const targetFile = validation.file;
-  logger.info({ filePath, status: targetFile.status }, 'File validated, building prompt');
+  const patch = targetFile.patch || null;
+  logger.info({ filePath, status: targetFile.status }, 'File validated, fetching full content at PR head');
+
+  const pullNumber = context.pullNumber || context.issueNumber;
+  const fullContentResult = await fetchFileAtPrHead(
+    context.octokit,
+    context.owner,
+    context.repo,
+    filePath,
+    pullNumber,
+    {
+      maxFileSize: DEFAULT_MAX_CHARS,
+      maxFileLines: 10000,
+      patch,
+      patchSide: 'new',
+    }
+  );
+
+  const fullContent = fullContentResult.success ? fullContentResult.data : null;
+
+  const maxChars = context.maxChars || DEFAULT_MAX_CHARS;
+  const { prompt, truncated } = buildReviewPrompt(filePath, fullContent, patch, maxChars);
   
-  // Step 3: Build targeted prompt
-  const { prompt, truncated } = buildReviewPrompt(targetFile);
-  
-  // Step 4: Call Z.ai API
   try {
     logger.info({ filePath }, 'Calling Z.ai API for review');
     
@@ -32363,7 +32985,6 @@ async function handleReviewCommand(context, args) {
         REVIEW_MARKER,
         { replyToId: commentId, updateExisting: false }
       );
-      // Add error reaction if commentId available
       if (commentId) {
         await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
@@ -32372,15 +32993,12 @@ async function handleReviewCommand(context, args) {
     
     let response = result.data;
     
-    // Add truncation note if needed
     if (truncated) {
       response += '\n\n_(Note: Context was truncated due to size limits)_';
     }
     
-    // Format the response with header
     const formattedResponse = `## 📝 Code Review: ${targetFile.filename}\n\n${response}`;
     
-    // Step 5: Post comment
     await upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
@@ -32388,7 +33006,6 @@ async function handleReviewCommand(context, args) {
       { replyToId: commentId, updateExisting: false }
     );
     
-    // Add success reaction if commentId available
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
@@ -32406,7 +33023,6 @@ async function handleReviewCommand(context, args) {
       { replyToId: commentId, updateExisting: false }
     );
     
-    // Add error reaction if commentId available
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
@@ -32433,27 +33049,106 @@ module.exports = {
  * Suggest Command Handler
  * 
  * Handles `/zai suggest <prompt>` command for prompt-guided improvements.
- * Uses user's suggestion prompt to guide analysis of code changes.
+ * Uses user's suggestion prompt to guide analysis of specific code blocks.
+ * Supports anchor resolution from comment metadata (review-comment) or instruction text.
  */
 
 const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
 const { createApiClient } = __nccwpck_require__(9729);
 const { createLogger, generateCorrelationId, getUserMessage } = __nccwpck_require__(2120);
 const { REACTIONS, setReaction } = __nccwpck_require__(6819);
+const { fetchFileAtPrHead } = __nccwpck_require__(1669);
+const { extractEnclosingBlock } = __nccwpck_require__(7437);
 
 /**
- * Builds a suggestion prompt combining diff with user's guidance
- * @param {Array} files - Array of changed files with patches
- * @param {string} userPrompt - User's suggestion prompt
- * @returns {string} Formatted prompt for the API
+ * Parse file:line pattern from instruction text
+ * Supports formats: "path/to/file.js:42", "src/lib/auth.js:100"
+ * @param {string} instruction - User instruction text
+ * @returns {{path: string|null, line: number|null}}
  */
-function buildSuggestPrompt(files, userPrompt) {
-  const diffs = files
-    .filter(f => f.patch)
-    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
-    .join('\n\n');
+function parseFileLineAnchor(instruction) {
+  if (!instruction || typeof instruction !== 'string') {
+    return { path: null, line: null };
+  }
 
-  return `You are an expert code reviewer. Based on the following code changes, ${userPrompt}\n\nProvide specific, actionable suggestions with code examples where appropriate.\n\n## Changed Files:\n\n${diffs}`;
+  // Match file:line patterns - filename followed by colon and number
+  const match = instruction.match(/([\w\-./\\]+):(\d+)/);
+  
+  if (!match) {
+    return { path: null, line: null };
+  }
+
+  const path = match[1];
+  const line = parseInt(match[2], 10);
+
+  // Validate line number
+  if (line < 1 || Number.isNaN(line)) {
+    return { path: null, line: null };
+  }
+
+  return { path, line };
+}
+
+/**
+ * Resolves anchor from context or instruction text
+ * @param {Object} context - Handler context
+ * @param {string} userInstruction - User's instruction text
+ * @returns {{path: string|null, line: number|null, source: string}}
+ */
+function resolveAnchor(context, userInstruction) {
+  // First: check commentPath/commentLine from context (review-comment event)
+  const commentPath = context.commentPath || null;
+  const commentLine = context.commentLine || null;
+
+  if (commentPath && commentLine) {
+    return {
+      path: commentPath,
+      line: commentLine,
+      source: 'comment_metadata'
+    };
+  }
+
+  // Second: try parsing file:line from instruction text
+  const parsed = parseFileLineAnchor(userInstruction);
+  if (parsed.path && parsed.line) {
+    return {
+      path: parsed.path,
+      line: parsed.line,
+      source: 'instruction_parse'
+    };
+  }
+
+  // Third: no reliable anchor found
+  return {
+    path: null,
+    line: null,
+    source: 'none'
+  };
+}
+
+/**
+ * Builds a suggestion prompt combining code block with user's guidance
+ * @param {string} path - File path being suggested on
+ * @param {Object} blockResult - Result from extractEnclosingBlock
+ * @param {string} userInstruction - User's suggestion prompt
+ * @param {number} maxChars - Maximum characters for prompt
+ * @returns {{prompt: string, truncated: boolean}}
+ */
+function buildSuggestPrompt(path, blockResult, userInstruction, maxChars = DEFAULT_MAX_CHARS) {
+  const codeContent = blockResult.target.join('\n');
+  const blockNote = blockResult.fallback 
+    ? `\n\n_(Note: ${blockResult.note || 'Could not determine precise function/class block, using context window'})_`
+    : '';
+
+  let prompt = `You are an expert programmer. The user wants to improve or change a specific part of the code.\n`;
+  prompt += `Current code context:\n`;
+  prompt += `<file>${path}</file>\n`;
+  prompt += `<code>\n${codeContent}\n</code>\n\n`;
+  prompt += `User Instruction: ${userInstruction}${blockNote}\n\n`;
+  prompt += `Task: Provide a code suggestion that fulfills the instruction. Output ONLY the code diff or the new code block in a format that can be easily applied.`;
+
+  const truncated = truncateContext(prompt, maxChars);
+  return { prompt: truncated.content, truncated: truncated.truncated };
 }
 
 /**
@@ -32478,10 +33173,12 @@ function formatSuggestionsResponse(suggestions) {
  * @param {string} context.apiKey - Z.ai API key
  * @param {string} context.model - Z.ai model to use
  * @param {string} context.userPrompt - User's suggestion prompt (remaining args after 'suggest')
+ * @param {string} [context.commentPath] - File path from comment metadata (review-comment)
+ * @param {number} [context.commentLine] - Line number from comment metadata
  * @returns {Promise<{success: boolean, response?: string, error?: string}>}
  */
 async function handleSuggestCommand(context) {
-  const { octokit, context: githubContext, payload, apiKey, model, userPrompt, commentId } = context;
+  const { octokit, context: githubContext, payload, apiKey, model, userPrompt, commentId, commentPath, commentLine } = context;
   const { owner, repo } = githubContext.repo;
 
   // Generate correlation ID for tracking
@@ -32492,7 +33189,7 @@ async function handleSuggestCommand(context) {
     command: 'suggest',
   });
 
-  logger.info({ userPrompt }, 'Processing suggest command');
+  logger.info({ userPrompt, commentPath, commentLine }, 'Processing suggest command');
 
   // Validate user prompt
   if (!userPrompt || userPrompt.trim().length === 0) {
@@ -32530,37 +33227,93 @@ async function handleSuggestCommand(context) {
       };
     }
 
-    // Check if any files have patches
-    const filesWithPatches = files.filter(f => f.patch);
-    if (filesWithPatches.length === 0) {
-      // Add error reaction if commentId available
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    // Resolve anchor: comment metadata -> instruction parse -> fallback
+    const anchor = resolveAnchor({ commentPath, commentLine }, userPrompt);
+    logger.info({ anchor }, 'Resolved anchor');
+
+    let prompt = null;
+    let truncated = false;
+
+    if (anchor.path && anchor.line) {
+      // Fetch file content at PR head for the anchor file
+      const fileResult = await fetchFileAtPrHead(octokit, owner, repo, anchor.path, pullNumber, {
+        maxFileSize: 200000,
+        maxFileLines: 10000,
+        anchorLine: anchor.line,
+        preferEnclosingBlock: true,
+      });
+      
+      if (fileResult.success && fileResult.data) {
+        const fileContent = fileResult.data;
+        
+        // Extract surrounding function/class block around anchor line
+        const blockResult = extractEnclosingBlock(fileContent, anchor.line);
+        logger.info({ 
+          blockLines: blockResult.target.length, 
+          fallback: blockResult.fallback 
+        }, 'Extracted enclosing block');
+
+        // Build prompt with extracted block
+        const promptResult = buildSuggestPrompt(anchor.path, blockResult, userPrompt);
+        prompt = promptResult.prompt;
+        truncated = promptResult.truncated;
+      } else {
+        // Failed to fetch anchor file, fall back to changed files
+        logger.warn({ anchorPath: anchor.path, error: fileResult.error }, 'Failed to fetch anchor file, using fallback');
+        anchor.source = 'fallback';
       }
-      return {
-        success: false,
-        error: 'No patchable changes found in this pull request.',
-      };
     }
 
-    // Build the suggestion prompt
-    const prompt = buildSuggestPrompt(files, userPrompt);
+    // Fallback: use changed files when no anchor or fetch failed
+    if (!prompt) {
+      const filesWithPatches = files.filter(f => f.patch);
+      
+      if (filesWithPatches.length === 0) {
+        // Add error reaction if commentId available
+        if (commentId) {
+          await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        }
+        return {
+          success: false,
+          error: 'No patchable changes found in this pull request.',
+        };
+      }
 
-    // Apply context budget truncation
-    const truncated = truncateContext(prompt, DEFAULT_MAX_CHARS);
-    if (truncated.truncated) {
-      logger.info({ originalLength: prompt.length, truncatedLength: truncated.content.length },
-        'Context truncated due to size');
+      // Build fallback prompt using diffs
+      const diffs = filesWithPatches
+        .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
+        .join('\n\n');
+
+      const fallbackNote = anchor.source === 'none' 
+        ? '\n\n_(Note: No specific anchor detected. Providing suggestions based on all changed files.)_'
+        : '';
+
+      prompt = `You are an expert code reviewer. Based on the following code changes, ${userPrompt}${fallbackNote}\n\nProvide specific, actionable suggestions with code examples where appropriate.\n\n## Changed Files:\n\n${diffs}`;
+
+      const truncatedResult = truncateContext(prompt, DEFAULT_MAX_CHARS);
+      prompt = truncatedResult.content;
+      truncated = truncatedResult.truncated;
+    }
+
+    // Apply context budget truncation (if not already truncated)
+    if (!truncated) {
+      const truncatedResult = truncateContext(prompt, DEFAULT_MAX_CHARS);
+      prompt = truncatedResult.content;
+      truncated = truncatedResult.truncated;
+    }
+
+    if (truncated) {
+      logger.info({ promptLength: prompt.length }, 'Context truncated due to size');
     }
 
     // Call the Z.ai API
-    logger.info({ promptLength: truncated.content.length }, 'Calling Z.ai API');
+    logger.info({ promptLength: prompt.length }, 'Calling Z.ai API');
 
     const apiClient = createApiClient({ timeout: 30000, maxRetries: 3 });
     const result = await apiClient.call({
       apiKey,
       model,
-      prompt: truncated.content,
+      prompt: prompt,
     });
 
     if (!result.success) {
@@ -32617,6 +33370,8 @@ module.exports = {
   handleSuggestCommand,
   buildSuggestPrompt,
   formatSuggestionsResponse,
+  resolveAnchor,
+  parseFileLineAnchor,
 };
 
 
@@ -32917,6 +33672,451 @@ module.exports = {
   getUserMessage,
   categorizeError,
   redactSensitiveData,
+};
+
+
+/***/ }),
+
+/***/ 1669:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Shared PR context fetch module with reusable async helpers.
+ * Provides functions for fetching PR files, file content at ref, and base/head refs.
+ * All functions return structured responses with user-safe error fallbacks.
+ */
+
+const context = __nccwpck_require__(9990);
+const logging = __nccwpck_require__(2120);
+const { extractEnclosingBlock } = __nccwpck_require__(7437);
+
+// Default size limits
+const DEFAULT_MAX_FILE_SIZE = 100000;
+const DEFAULT_MAX_FILE_LINES = 10000;
+const DEFAULT_PER_PAGE = 100;
+const DEFAULT_SLIDING_WINDOW = 40;
+const DEFAULT_MAX_WINDOWS = 4;
+
+/**
+ * User-safe fallback messages for common error types
+ */
+const FALLBACK_MESSAGES = {
+  NOT_FOUND: 'Content not found',
+  RATE_LIMITED: 'GitHub API rate limit exceeded. Please try again later.',
+  PERMISSION_DENIED: 'Permission denied to access this resource.',
+  UNAVAILABLE: 'Resource temporarily unavailable',
+  UNKNOWN: 'Failed to retrieve content'
+};
+
+/**
+ * Checks if error is a rate limit error (429)
+ * @param {Error} error - Error to check
+ * @returns {boolean} True if rate limit error
+ */
+function isRateLimitError(error) {
+  const message = (error?.message || '').toLowerCase();
+  return error?.status === 429 || message.includes('rate limit') || message.includes('secondary rate limit');
+}
+
+/**
+ * Maps error to user-safe fallback message
+ * @param {Error} error - Error to map
+ * @param {string} resource - Resource being fetched (for context)
+ * @returns {{fallback: string, category: string}} Fallback message and error category
+ */
+function mapErrorToFallback(error, resource = 'content') {
+  if (error?.status === 404) {
+    return { fallback: `${FALLBACK_MESSAGES.NOT_FOUND}: ${resource}`, category: 'NOT_FOUND' };
+  }
+  if (isRateLimitError(error)) {
+    return { fallback: FALLBACK_MESSAGES.RATE_LIMITED, category: 'RATE_LIMIT' };
+  }
+  if (error?.status === 403) {
+    return { fallback: FALLBACK_MESSAGES.PERMISSION_DENIED, category: 'PERMISSION' };
+  }
+  if (error?.status >= 500) {
+    return { fallback: FALLBACK_MESSAGES.UNAVAILABLE, category: 'PROVIDER' };
+  }
+  return { fallback: FALLBACK_MESSAGES.UNKNOWN, category: 'UNKNOWN' };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function parsePatchLineRanges(patch, side = 'new') {
+  if (!patch || typeof patch !== 'string') {
+    return [];
+  }
+
+  const ranges = [];
+  const regex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/gm;
+  let match = regex.exec(patch);
+  while (match !== null) {
+    const start = side === 'old' ? Number(match[1]) : Number(match[3]);
+    const countRaw = side === 'old' ? match[2] : match[4];
+    const count = countRaw ? Number(countRaw) : 1;
+    const safeCount = Number.isFinite(count) ? Math.max(1, count) : 1;
+    const end = start + safeCount - 1;
+    if (Number.isFinite(start) && start >= 1) {
+      ranges.push({ start, end });
+    }
+    match = regex.exec(patch);
+  }
+
+  return ranges;
+}
+
+function buildSlidingWindowsContent(content, changedRanges, options = {}) {
+  const windowSize = options.windowSize || DEFAULT_SLIDING_WINDOW;
+  const maxWindows = options.maxWindows || DEFAULT_MAX_WINDOWS;
+  const lines = String(content).split('\n');
+  const maxLines = lines.length;
+
+  const windows = (changedRanges || [])
+    .map((range) => {
+      const start = clamp(range.start - windowSize, 1, maxLines);
+      const end = clamp(range.end + windowSize, 1, maxLines);
+      return { start, end };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  const merged = [];
+  for (const window of windows) {
+    const last = merged[merged.length - 1];
+    if (!last || window.start > last.end + 1) {
+      merged.push({ ...window });
+      continue;
+    }
+    last.end = Math.max(last.end, window.end);
+  }
+
+  const selected = merged.slice(0, maxWindows);
+  if (selected.length === 1) {
+    const only = selected[0];
+    return {
+      content: lines.slice(only.start - 1, only.end).join('\n'),
+      scopeStrategy: 'sliding_window',
+      scopeStartLine: only.start,
+      scopeEndLine: only.end,
+    };
+  }
+
+  const chunks = selected.map((window, idx) => {
+    const snippet = lines.slice(window.start - 1, window.end).join('\n');
+    return `# Window ${idx + 1} (lines ${window.start}-${window.end})\n${snippet}`;
+  });
+
+  if (chunks.length === 0) {
+    const fallbackEnd = clamp(windowSize * 2, 1, maxLines);
+    return {
+      content: lines.slice(0, fallbackEnd).join('\n'),
+      scopeStrategy: 'top_window',
+      scopeStartLine: 1,
+      scopeEndLine: fallbackEnd,
+    };
+  }
+
+  return {
+    content: chunks.join('\n\n---\n\n'),
+    scopeStrategy: 'sliding_window',
+    scopeStartLine: selected.length === 1 ? selected[0].start : null,
+    scopeEndLine: selected.length === 1 ? selected[0].end : null,
+  };
+}
+
+function scopeLargeFileContent(content, options = {}) {
+  const lines = String(content).split('\n');
+  const lineCount = lines.length;
+  const maxFileLines = options.maxFileLines || DEFAULT_MAX_FILE_LINES;
+
+  if (lineCount <= maxFileLines) {
+    return {
+      scoped: false,
+      scopeStrategy: 'full_file',
+      content,
+      lineCount,
+      scopeStartLine: 1,
+      scopeEndLine: lineCount,
+    };
+  }
+
+  const anchorLine = options.anchorLine;
+  const preferEnclosingBlock = Boolean(options.preferEnclosingBlock);
+  let changedRanges = options.changedRanges;
+  if ((!changedRanges || changedRanges.length === 0) && options.patch) {
+    changedRanges = parsePatchLineRanges(options.patch, options.patchSide || 'new');
+  }
+
+  if (preferEnclosingBlock && Number.isFinite(anchorLine) && anchorLine >= 1) {
+    const block = extractEnclosingBlock(content, anchorLine, {
+      windowSize: options.windowSize || DEFAULT_SLIDING_WINDOW,
+    });
+
+    return {
+      scoped: true,
+      scopeStrategy: 'enclosing_block',
+      content: block.target.join('\n'),
+      lineCount,
+      scopeStartLine: block?.bounds?.start || null,
+      scopeEndLine: block?.bounds?.end || null,
+      note: block.note,
+    };
+  }
+
+  if (Array.isArray(changedRanges) && changedRanges.length > 0) {
+    const scoped = buildSlidingWindowsContent(content, changedRanges, {
+      windowSize: options.windowSize,
+      maxWindows: options.maxWindows,
+    });
+    return {
+      scoped: true,
+      lineCount,
+      ...scoped,
+    };
+  }
+
+  const topFallback = buildSlidingWindowsContent(content, [], {
+    windowSize: options.windowSize,
+    maxWindows: 1,
+  });
+
+  return {
+    scoped: true,
+    lineCount,
+    ...topFallback,
+  };
+}
+
+/**
+ * Fetches the list of files changed in a PR.
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} pullNumber - PR number
+ * @param {Object} [options={}] - Optional configuration
+ * @param {number} [options.perPage=100] - Files per page
+ * @returns {Promise<{success: boolean, data?: Array, error?: string, fallback?: string}>}
+ */
+async function fetchPrFiles(octokit, owner, repo, pullNumber, options = {}) {
+  const perPage = options.perPage || DEFAULT_PER_PAGE;
+
+  try {
+    const { data } = await octokit.rest.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: perPage,
+    });
+
+    const files = Array.isArray(data) ? data : [];
+    return { success: true, data: files };
+  } catch (error) {
+    const { fallback, category } = mapErrorToFallback(error, `files for PR #${pullNumber}`);
+
+    // Log internal error details
+    const internalLogger = logging.createLogger(logging.generateCorrelationId());
+    internalLogger.warn(
+      { status: error?.status, operation: 'pulls.listFiles', pullNumber },
+      `Failed to fetch PR files: ${error.message}`
+    );
+
+    return { success: false, error: error.message, fallback };
+  }
+}
+
+/**
+ * Fetches file content at a specific ref (branch, tag, or SHA).
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} path - File path in repository
+ * @param {string} ref - Git ref (branch, tag, or SHA)
+ * @param {Object} [options={}] - Optional configuration
+ * @param {number} [options.maxFileSize=100000] - Maximum characters to return
+ * @returns {Promise<{success: boolean, data?: string, error?: string, fallback?: string, truncated?: boolean}>}
+ */
+async function fetchFileAtRef(octokit, owner, repo, path, ref, options = {}) {
+  const maxFileSize = options.maxFileSize || DEFAULT_MAX_FILE_SIZE;
+  const maxFileLines = options.maxFileLines || DEFAULT_MAX_FILE_LINES;
+
+  if (!path || !ref) {
+    return {
+      success: false,
+      error: 'path and ref are required',
+      fallback: FALLBACK_MESSAGES.VALIDATION || 'Invalid request parameters'
+    };
+  }
+
+  try {
+    const { data } = await octokit.rest.repos.getContent({
+      owner,
+      repo,
+      path,
+      ref,
+    });
+
+    // Handle directory or symlink responses
+    if (!data || Array.isArray(data)) {
+      return {
+        success: false,
+        error: `Path ${path} is a directory or not accessible`,
+        fallback: `Content not available for ${path}`
+      };
+    }
+
+    // Check for binary files or missing content
+    if (!data.content) {
+      return {
+        success: false,
+        error: 'File content not available (possibly binary)',
+        fallback: `Binary or non-text content for ${path}`
+      };
+    }
+
+    // Decode base64 content
+    const decoded = Buffer.from(data.content, 'base64').toString('utf8');
+
+    const scopedResult = scopeLargeFileContent(decoded, {
+      maxFileLines,
+      anchorLine: options.anchorLine,
+      preferEnclosingBlock: options.preferEnclosingBlock,
+      changedRanges: options.changedRanges,
+      patch: options.patch,
+      patchSide: options.patchSide,
+      windowSize: options.windowSize,
+      maxWindows: options.maxWindows,
+    });
+
+    // Apply truncation if needed
+    const truncated = context.truncateContext(scopedResult.content, maxFileSize);
+
+    return {
+      success: true,
+      data: truncated.content,
+      truncated: truncated.truncated,
+      omitted: truncated.omitted,
+      scoped: scopedResult.scoped,
+      scopeStrategy: scopedResult.scopeStrategy,
+      lineCount: scopedResult.lineCount,
+      scopeStartLine: scopedResult.scopeStartLine,
+      scopeEndLine: scopedResult.scopeEndLine,
+      scopeNote: scopedResult.note,
+    };
+  } catch (error) {
+    const { fallback, category } = mapErrorToFallback(error, path);
+
+    // Log internal error details
+    const internalLogger = logging.createLogger(logging.generateCorrelationId());
+    internalLogger.warn(
+      { status: error?.status, operation: 'repos.getContent', path, ref },
+      `Failed to fetch file content: ${error.message}`
+    );
+
+    return { success: false, error: error.message, fallback };
+  }
+}
+
+/**
+ * Resolves PR refs (base and head) from PR metadata.
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} pullNumber - PR number
+ * @returns {Promise<{success: boolean, data?: {base: {ref: string, sha: string}, head: {ref: string, sha: string}}, error?: string, fallback?: string}>}
+ */
+async function resolvePrRefs(octokit, owner, repo, pullNumber) {
+  if (!pullNumber) {
+    return {
+      success: false,
+      error: 'pullNumber is required',
+      fallback: 'PR number is required'
+    };
+  }
+
+  try {
+    const { data } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pullNumber,
+    });
+
+    const baseRef = data.base?.ref;
+    const baseSha = data.base?.sha;
+    const headRef = data.head?.ref;
+    const headSha = data.head?.sha;
+
+    if (!baseRef || !baseSha || !headRef || !headSha) {
+      return {
+        success: false,
+        error: 'PR base/head refs not found in response',
+        fallback: 'PR ref information unavailable'
+      };
+    }
+
+    return {
+      success: true,
+      data: {
+        base: { ref: baseRef, sha: baseSha },
+        head: { ref: headRef, sha: headSha }
+      }
+    };
+  } catch (error) {
+    const { fallback, category } = mapErrorToFallback(error, `PR #${pullNumber} metadata`);
+
+    // Log internal error details
+    const internalLogger = logging.createLogger(logging.generateCorrelationId());
+    internalLogger.warn(
+      { status: error?.status, operation: 'pulls.get', pullNumber },
+      `Failed to resolve PR refs: ${error.message}`
+    );
+
+    return { success: false, error: error.message, fallback };
+  }
+}
+
+/**
+ * Fetches file content at the PR head commit.
+ * Convenience wrapper around fetchFileAtRef using resolved head SHA.
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} path - File path in repository
+ * @param {number} pullNumber - PR number
+ * @param {Object} [options={}] - Optional configuration
+ * @param {number} [options.maxFileSize=100000] - Maximum characters to return
+ * @returns {Promise<{success: boolean, data?: string, error?: string, fallback?: string, truncated?: boolean}>}
+ */
+async function fetchFileAtPrHead(octokit, owner, repo, path, pullNumber, options = {}) {
+  // First resolve the head SHA
+  const refsResult = await resolvePrRefs(octokit, owner, repo, pullNumber);
+
+  if (!refsResult.success) {
+    return {
+      success: false,
+      error: refsResult.error,
+      fallback: refsResult.fallback
+    };
+  }
+
+  // Fetch file at head
+  return fetchFileAtRef(octokit, owner, repo, path, refsResult.data.head.sha, options);
+}
+
+module.exports = {
+  fetchPrFiles,
+  fetchFileAtRef,
+  fetchFileAtPrHead,
+  resolvePrRefs,
+  isRateLimitError,
+  mapErrorToFallback,
+  DEFAULT_MAX_FILE_SIZE,
+  DEFAULT_MAX_FILE_LINES,
+  DEFAULT_PER_PAGE,
+  DEFAULT_SLIDING_WINDOW,
+  FALLBACK_MESSAGES,
+  parsePatchLineRanges,
+  scopeLargeFileContent,
 };
 
 
@@ -34838,7 +36038,7 @@ const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
 const https = __nccwpck_require__(5692);
 
-const { getEventType, shouldProcessEvent } = __nccwpck_require__(2500);
+const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = __nccwpck_require__(2500);
 const { parseCommand, isValid } = __nccwpck_require__(5055);
 const { checkForkAuthorization, getUnauthorizedMessage } = __nccwpck_require__(6495);
 const { handleAskCommand } = __nccwpck_require__(6630);
@@ -34987,6 +36187,8 @@ async function run() {
     await handlePullRequestEvent(context, apiKey, model, owner, repo);
   } else if (eventType === 'issue_comment_pr') {
     await handleIssueCommentEvent(context, apiKey, model, owner, repo);
+  } else if (eventType === 'pull_request_review_comment') {
+    await handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo);
   }
 }
 
@@ -35157,10 +36359,151 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
   });
 }
 
+async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo) {
+  const comment = context.payload.comment;
+  const commentBody = comment?.body || '';
+  const commentId = comment?.id;
+  
+  // Get PR number from pull_request in the payload
+  const pullNumber = context.payload.pull_request?.number;
+
+  if (!pullNumber) {
+    core.setFailed('No pull request number found in review comment event.');
+    return;
+  }
+
+  core.info(`Processing pull_request_review_comment on PR #${pullNumber}: ${commentBody.substring(0, 50)}...`);
+
+  // Parse the command from comment body
+  const parseResult = parseCommand(commentBody);
+
+  // If parsing failed, post safe guidance message
+  if (!isValid(parseResult)) {
+    const errorType = parseResult.error.type;
+    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
+
+    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+    await upsertComment(
+      octokit,
+      owner,
+      repo,
+      pullNumber,
+      guidance,
+      GUIDANCE_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+    core.info(`Posted guidance comment for error: ${errorType}`);
+
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  // Valid command - check authorization before dispatching
+  core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
+
+  // Get commenter info for auth check
+  const commenter = comment?.user;
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+  // Check authorization using fork-aware auth check
+  const authResult = await checkForkAuthorization(octokit, context, commenter);
+
+  if (!authResult.authorized) {
+    // Silent block for fork PRs (reason: null per SECURITY.md)
+    if (authResult.reason === null) {
+      core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
+      return;
+    }
+
+    // For regular PRs, post an error message
+    core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
+    await upsertComment(
+      octokit,
+      owner,
+      repo,
+      pullNumber,
+      getUnauthorizedMessage(),
+      AUTH_MARKER,
+      { replyToId: commentId, updateExisting: false }
+    );
+
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set auth-failure reaction: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  // Load continuity state
+  let continuityState = null;
+  try {
+    continuityState = await loadContinuityState(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    core.warning(`Failed to load continuity state: ${error.message}`);
+  }
+
+  // Set acknowledgment reaction
+  if (commentId && parseResult.command !== 'ask') {
+    try {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
+    } catch (error) {
+      core.warning(`Failed to set acknowledgment reaction: ${error.message}`);
+    }
+  }
+
+  // Post progress message
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
+    PROGRESS_MARKER,
+    { replyToId: commentId, updateExisting: false }
+  );
+
+  // Extract anchor metadata from review comment
+  const anchorMetadata = extractReviewCommentAnchor(context.payload);
+  
+  // Get base and head refs from PR
+  const baseRef = context.payload.pull_request?.base?.ref || null;
+  const headRef = context.payload.pull_request?.head?.ref || null;
+
+  core.info(`Authorized command from collaborator: ${commenter.login}`);
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, {
+    commentId,
+    continuityState,
+    commenter,
+    baseRef,
+    headRef,
+    ...anchorMetadata,
+  });
+}
+
 async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, options = {}) {
   const { command, args } = parseResult;
-  const pullNumber = context.payload.issue?.number;
-  const { commentId = null, continuityState = null, commenter = null } = options;
+  const pullNumber = context.payload.issue?.number || context.payload.pull_request?.number;
+  const { 
+    commentId = null, 
+    continuityState = null, 
+    commenter = null,
+    baseRef = null,
+    headRef = null,
+    commentPath = null,
+    commentLine = null,
+    commentStartLine = null,
+    commentDiffHunk = null,
+  } = options;
 
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
 
@@ -35183,7 +36526,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     logger.warn({ error: error.message }, 'Failed to fetch changed files');
   }
 
-  // Build base handler context
+  // Build base handler context with normalized context inputs
   const handlerContext = {
     octokit,
     owner,
@@ -35197,6 +36540,13 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     logger,
     maxChars: DEFAULT_MAX_CHARS,
     continuityState,
+    // Normalized context inputs for explain/suggest/compare handlers
+    baseRef,
+    headRef,
+    commentPath,
+    commentLine,
+    commentStartLine,
+    commentDiffHunk,
   };
 
   switch (command) {
@@ -35241,24 +36591,37 @@ ${COMMENT_MARKER}`;
         break;
       }
 
-      // For explain, we need file content. Try to get it from changed files.
-      // If no specific file is mentioned in args, use the first changed file
-      const firstChangedFile = changedFiles.find(f => f.patch);
-      if (!firstChangedFile) {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Explanation
+      // For explain, use anchor metadata if available (from review comment)
+      // Otherwise, try to get it from changed files
+      let filename = null;
+      let fileContent = null;
+
+      if (handlerContext.commentPath) {
+        // Use anchor metadata from review comment
+        filename = handlerContext.commentPath;
+        // Don't use first-changed-file patch - let handler fetch content based on path
+        fileContent = handlerContext.commentDiffHunk || null;
+      } else {
+        // Fall back to first changed file for issue_comment
+        const firstChangedFile = changedFiles.find(f => f.patch);
+        if (!firstChangedFile) {
+          terminalReaction = REACTIONS.X;
+          responseMessage = `## Z.ai Explanation
 
 No files with changes found in this PR to explain.
 
 ${COMMENT_MARKER}`;
-        break;
+          break;
+        }
+        filename = firstChangedFile.filename;
+        fileContent = firstChangedFile.patch || '';
       }
 
       // Add file-specific context for explain handler
       const explainContext = {
         ...handlerContext,
-        filename: firstChangedFile.filename,
-        fileContent: firstChangedFile.patch || '',
+        filename,
+        fileContent,
       };
 
       try {

@@ -94,40 +94,48 @@ describe('review.js - validateFileInPr', () => {
 
 describe('review.js - buildReviewPrompt', () => {
   test('builds prompt with diff content', () => {
-    const file = {
-      filename: 'src/index.js',
-      status: 'modified',
-      patch: '@@ -1,3 +1,4 @@\n+new line\n old line'
-    };
+    const filePath = 'src/index.js';
+    const fullContent = '// existing content\nline 2';
+    const patch = '@@ -1,3 +1,4 @@\n+new line\n old line';
     
-    const result = buildReviewPrompt(file, 10000);
+    const result = buildReviewPrompt(filePath, fullContent, patch, 10000);
     
-    assert.ok(result.prompt.includes('src/index.js'));
-    assert.ok(result.prompt.includes('modified'));
-    assert.ok(result.prompt.includes('DIFF'));
+    assert.ok(result.prompt.includes('<file_path>src/index.js</file_path>'));
+    assert.ok(result.prompt.includes('<full_code>'));
+    assert.ok(result.prompt.includes('<changes_in_this_pr>'));
+    assert.ok(result.prompt.includes('+new line'));
     assert.strictEqual(result.truncated, false);
   });
 
   test('handles file without patch', () => {
-    const file = {
-      filename: 'README.md',
-      status: 'modified',
-      patch: null
-    };
+    const filePath = 'README.md';
+    const fullContent = '# My Project';
+    const patch = null;
     
-    const result = buildReviewPrompt(file, 10000);
+    const result = buildReviewPrompt(filePath, fullContent, patch, 10000);
     
     assert.ok(result.prompt.includes('No diff available'));
+    assert.ok(result.prompt.includes('<full_code>'));
+    assert.ok(result.prompt.includes('<changes_in_this_pr>'));
+  });
+
+  test('handles missing full content gracefully', () => {
+    const filePath = 'src/index.js';
+    const fullContent = null;
+    const patch = '@@ -1,3 +1,4 @@\n+new line';
+    
+    const result = buildReviewPrompt(filePath, fullContent, patch, 10000);
+    
+    assert.ok(result.prompt.includes('Full file content unavailable'));
+    assert.ok(result.prompt.includes('<changes_in_this_pr>'));
   });
 
   test('respects maxChars and truncates', () => {
-    const file = {
-      filename: 'src/index.js',
-      status: 'modified',
-      patch: 'a'.repeat(5000)
-    };
+    const filePath = 'src/index.js';
+    const fullContent = 'a'.repeat(3000);
+    const patch = 'b'.repeat(5000);
     
-    const result = buildReviewPrompt(file, 100);
+    const result = buildReviewPrompt(filePath, fullContent, patch, 100);
     
     assert.ok(result.truncated, true);
     assert.ok(result.prompt.includes('[truncated'));

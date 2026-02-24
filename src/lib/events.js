@@ -4,15 +4,43 @@
  */
 
 /**
+ * Extracts anchor metadata from a review comment payload
+ * @param {Object} payload - GitHub webhook payload
+ * @returns {Object|null} Anchor metadata or null if not available
+ */
+function extractReviewCommentAnchor(payload) {
+  const comment = payload?.comment;
+  if (!comment) {
+    return null;
+  }
+
+  // Review comments have path, line, and diff_hunk properties
+  if (comment.path) {
+    return {
+      commentPath: comment.path,
+      commentLine: comment.line,
+      commentStartLine: comment.start_line || null,
+      commentDiffHunk: comment.diff_hunk || null,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Determines the type of GitHub event from the context
  * @param {Object} context - GitHub actions context object
- * @returns {string} Event type: 'pull_request', 'issue_comment_pr', or 'issue_comment_non_pr'
+ * @returns {string} Event type: 'pull_request', 'issue_comment_pr', 'pull_request_review_comment', or 'issue_comment_non_pr'
  */
 function getEventType(context) {
   const eventName = context.eventName;
 
   if (eventName === 'pull_request') {
     return 'pull_request';
+  }
+
+  if (eventName === 'pull_request_review_comment') {
+    return 'pull_request_review_comment';
   }
 
   if (eventName === 'issue_comment') {
@@ -65,6 +93,18 @@ function shouldProcessEvent(context) {
     return { process: true, reason: 'issue_comment on pull request' };
   }
 
+  // Handle pull_request_review_comment events
+  if (eventType === 'pull_request_review_comment') {
+    const comment = context.payload.comment;
+
+    // Check if comment is from a bot (anti-loop protection)
+    if (isBotComment(comment)) {
+      return { process: false, reason: 'bot comment - skipping to prevent loop' };
+    }
+
+    return { process: true, reason: 'pull_request_review_comment event' };
+  }
+
   // Handle non-PR issue comments - reject
   if (eventType === 'issue_comment_non_pr') {
     return { process: false, reason: 'non-PR issue comment - not supported' };
@@ -97,11 +137,22 @@ function getEventInfo(context) {
     info.pullNumber = context.payload.issue.number;
   }
 
-  // Add comment info if available
+  // Add comment info if available (including review comments)
   if (context.payload.comment) {
     info.commentId = context.payload.comment.id;
     info.commentAuthor = context.payload.comment.user?.login;
     info.isBot = isBotComment(context.payload.comment);
+  }
+
+  // Add anchor metadata for review comments
+  if (eventType === 'pull_request_review_comment') {
+    const anchor = extractReviewCommentAnchor(context.payload);
+    if (anchor) {
+      info.commentPath = anchor.commentPath;
+      info.commentLine = anchor.commentLine;
+      info.commentStartLine = anchor.commentStartLine;
+      info.commentDiffHunk = anchor.commentDiffHunk;
+    }
   }
 
   return info;
@@ -112,4 +163,5 @@ module.exports = {
   isBotComment,
   shouldProcessEvent,
   getEventInfo,
+  extractReviewCommentAnchor,
 };
