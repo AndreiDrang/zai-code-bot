@@ -25,7 +25,7 @@ function parseFileLineAnchor(instruction) {
   }
 
   // Match file:line patterns - filename followed by colon and number
-  const match = instruction.match(/([\w\-\.\/\\]+):(\d+)/);
+  const match = instruction.match(/([\w\-./\\]+):(\d+)/);
   
   if (!match) {
     return { path: null, line: null };
@@ -35,7 +35,7 @@ function parseFileLineAnchor(instruction) {
   const line = parseInt(match[2], 10);
 
   // Validate line number
-  if (line < 1 || isNaN(line)) {
+  if (line < 1 || Number.isNaN(line)) {
     return { path: null, line: null };
   }
 
@@ -189,7 +189,12 @@ async function handleSuggestCommand(context) {
 
     if (anchor.path && anchor.line) {
       // Fetch file content at PR head for the anchor file
-      const fileResult = await fetchFileAtPrHead(octokit, owner, repo, anchor.path, pullNumber, { maxFileSize: 200000 });
+      const fileResult = await fetchFileAtPrHead(octokit, owner, repo, anchor.path, pullNumber, {
+        maxFileSize: 200000,
+        maxFileLines: 10000,
+        anchorLine: anchor.line,
+        preferEnclosingBlock: true,
+      });
       
       if (fileResult.success && fileResult.data) {
         const fileContent = fileResult.data;

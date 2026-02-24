@@ -167,7 +167,12 @@ async function handleExplainCommand(context, args) {
   logger.info({ startLine, endLine, path: resolvedPath }, 'Parsed line range, fetching file at PR head');
 
   // Step 3: Fetch file content at PR head
-  const fileResult = await fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber);
+  const fileResult = await fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber, {
+    maxFileLines: 10000,
+    changedRanges: [{ start: startLine, end: endLine }],
+    windowSize: 20,
+    maxWindows: 1,
+  });
   
   if (!fileResult.success) {
     const errorMsg = fileResult.fallback || `Failed to fetch ${resolvedPath}`;
@@ -184,8 +189,9 @@ async function handleExplainCommand(context, args) {
   }
 
   const fileContent = fileResult.data;
-  const lines = fileContent.split('\n');
-  const maxLines = lines.length;
+  const maxLines = Number.isFinite(fileResult.lineCount)
+    ? fileResult.lineCount
+    : fileContent.split('\n').length;
 
   // Step 4: Validate line range against actual file line count
   const validation = validateRange(startLine, endLine, maxLines);
@@ -204,7 +210,15 @@ async function handleExplainCommand(context, args) {
   }
 
   // Step 5: Extract target + surrounding context using extractWindow
-  const scopeResult = extractWindow(fileContent, startLine, endLine);
+  let scopedStart = startLine;
+  let scopedEnd = endLine;
+
+  if (fileResult.scoped && Number.isFinite(fileResult.scopeStartLine)) {
+    scopedStart = startLine - fileResult.scopeStartLine + 1;
+    scopedEnd = endLine - fileResult.scopeStartLine + 1;
+  }
+
+  const scopeResult = extractWindow(fileContent, scopedStart, scopedEnd);
   
   if (scopeResult.fallback) {
     logger.warn({ note: scopeResult.note }, 'Using fallback for scope extraction');

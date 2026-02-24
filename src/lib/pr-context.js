@@ -6,10 +6,14 @@
 
 const context = require('./context');
 const logging = require('./logging');
+const { extractEnclosingBlock } = require('./code-scope');
 
 // Default size limits
 const DEFAULT_MAX_FILE_SIZE = 100000;
+const DEFAULT_MAX_FILE_LINES = 10000;
 const DEFAULT_PER_PAGE = 100;
+const DEFAULT_SLIDING_WINDOW = 40;
+const DEFAULT_MAX_WINDOWS = 4;
 
 /**
  * User-safe fallback messages for common error types
@@ -52,6 +56,154 @@ function mapErrorToFallback(error, resource = 'content') {
     return { fallback: FALLBACK_MESSAGES.UNAVAILABLE, category: 'PROVIDER' };
   }
   return { fallback: FALLBACK_MESSAGES.UNKNOWN, category: 'UNKNOWN' };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function parsePatchLineRanges(patch, side = 'new') {
+  if (!patch || typeof patch !== 'string') {
+    return [];
+  }
+
+  const ranges = [];
+  const regex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/gm;
+  let match = regex.exec(patch);
+  while (match !== null) {
+    const start = side === 'old' ? Number(match[1]) : Number(match[3]);
+    const countRaw = side === 'old' ? match[2] : match[4];
+    const count = countRaw ? Number(countRaw) : 1;
+    const safeCount = Number.isFinite(count) ? Math.max(1, count) : 1;
+    const end = start + safeCount - 1;
+    if (Number.isFinite(start) && start >= 1) {
+      ranges.push({ start, end });
+    }
+    match = regex.exec(patch);
+  }
+
+  return ranges;
+}
+
+function buildSlidingWindowsContent(content, changedRanges, options = {}) {
+  const windowSize = options.windowSize || DEFAULT_SLIDING_WINDOW;
+  const maxWindows = options.maxWindows || DEFAULT_MAX_WINDOWS;
+  const lines = String(content).split('\n');
+  const maxLines = lines.length;
+
+  const windows = (changedRanges || [])
+    .map((range) => {
+      const start = clamp(range.start - windowSize, 1, maxLines);
+      const end = clamp(range.end + windowSize, 1, maxLines);
+      return { start, end };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  const merged = [];
+  for (const window of windows) {
+    const last = merged[merged.length - 1];
+    if (!last || window.start > last.end + 1) {
+      merged.push({ ...window });
+      continue;
+    }
+    last.end = Math.max(last.end, window.end);
+  }
+
+  const selected = merged.slice(0, maxWindows);
+  if (selected.length === 1) {
+    const only = selected[0];
+    return {
+      content: lines.slice(only.start - 1, only.end).join('\n'),
+      scopeStrategy: 'sliding_window',
+      scopeStartLine: only.start,
+      scopeEndLine: only.end,
+    };
+  }
+
+  const chunks = selected.map((window, idx) => {
+    const snippet = lines.slice(window.start - 1, window.end).join('\n');
+    return `# Window ${idx + 1} (lines ${window.start}-${window.end})\n${snippet}`;
+  });
+
+  if (chunks.length === 0) {
+    const fallbackEnd = clamp(windowSize * 2, 1, maxLines);
+    return {
+      content: lines.slice(0, fallbackEnd).join('\n'),
+      scopeStrategy: 'top_window',
+      scopeStartLine: 1,
+      scopeEndLine: fallbackEnd,
+    };
+  }
+
+  return {
+    content: chunks.join('\n\n---\n\n'),
+    scopeStrategy: 'sliding_window',
+    scopeStartLine: selected.length === 1 ? selected[0].start : null,
+    scopeEndLine: selected.length === 1 ? selected[0].end : null,
+  };
+}
+
+function scopeLargeFileContent(content, options = {}) {
+  const lines = String(content).split('\n');
+  const lineCount = lines.length;
+  const maxFileLines = options.maxFileLines || DEFAULT_MAX_FILE_LINES;
+
+  if (lineCount <= maxFileLines) {
+    return {
+      scoped: false,
+      scopeStrategy: 'full_file',
+      content,
+      lineCount,
+      scopeStartLine: 1,
+      scopeEndLine: lineCount,
+    };
+  }
+
+  const anchorLine = options.anchorLine;
+  const preferEnclosingBlock = Boolean(options.preferEnclosingBlock);
+  let changedRanges = options.changedRanges;
+  if ((!changedRanges || changedRanges.length === 0) && options.patch) {
+    changedRanges = parsePatchLineRanges(options.patch, options.patchSide || 'new');
+  }
+
+  if (preferEnclosingBlock && Number.isFinite(anchorLine) && anchorLine >= 1) {
+    const block = extractEnclosingBlock(content, anchorLine, {
+      windowSize: options.windowSize || DEFAULT_SLIDING_WINDOW,
+    });
+
+    return {
+      scoped: true,
+      scopeStrategy: 'enclosing_block',
+      content: block.target.join('\n'),
+      lineCount,
+      scopeStartLine: block?.bounds?.start || null,
+      scopeEndLine: block?.bounds?.end || null,
+      note: block.note,
+    };
+  }
+
+  if (Array.isArray(changedRanges) && changedRanges.length > 0) {
+    const scoped = buildSlidingWindowsContent(content, changedRanges, {
+      windowSize: options.windowSize,
+      maxWindows: options.maxWindows,
+    });
+    return {
+      scoped: true,
+      lineCount,
+      ...scoped,
+    };
+  }
+
+  const topFallback = buildSlidingWindowsContent(content, [], {
+    windowSize: options.windowSize,
+    maxWindows: 1,
+  });
+
+  return {
+    scoped: true,
+    lineCount,
+    ...topFallback,
+  };
 }
 
 /**
@@ -104,6 +256,7 @@ async function fetchPrFiles(octokit, owner, repo, pullNumber, options = {}) {
  */
 async function fetchFileAtRef(octokit, owner, repo, path, ref, options = {}) {
   const maxFileSize = options.maxFileSize || DEFAULT_MAX_FILE_SIZE;
+  const maxFileLines = options.maxFileLines || DEFAULT_MAX_FILE_LINES;
 
   if (!path || !ref) {
     return {
@@ -142,14 +295,31 @@ async function fetchFileAtRef(octokit, owner, repo, path, ref, options = {}) {
     // Decode base64 content
     const decoded = Buffer.from(data.content, 'base64').toString('utf8');
 
+    const scopedResult = scopeLargeFileContent(decoded, {
+      maxFileLines,
+      anchorLine: options.anchorLine,
+      preferEnclosingBlock: options.preferEnclosingBlock,
+      changedRanges: options.changedRanges,
+      patch: options.patch,
+      patchSide: options.patchSide,
+      windowSize: options.windowSize,
+      maxWindows: options.maxWindows,
+    });
+
     // Apply truncation if needed
-    const truncated = context.truncateContext(decoded, maxFileSize);
+    const truncated = context.truncateContext(scopedResult.content, maxFileSize);
 
     return {
       success: true,
       data: truncated.content,
       truncated: truncated.truncated,
-      omitted: truncated.omitted
+      omitted: truncated.omitted,
+      scoped: scopedResult.scoped,
+      scopeStrategy: scopedResult.scopeStrategy,
+      lineCount: scopedResult.lineCount,
+      scopeStartLine: scopedResult.scopeStartLine,
+      scopeEndLine: scopedResult.scopeEndLine,
+      scopeNote: scopedResult.note,
     };
   } catch (error) {
     const { fallback, category } = mapErrorToFallback(error, path);
@@ -259,6 +429,10 @@ module.exports = {
   isRateLimitError,
   mapErrorToFallback,
   DEFAULT_MAX_FILE_SIZE,
+  DEFAULT_MAX_FILE_LINES,
   DEFAULT_PER_PAGE,
-  FALLBACK_MESSAGES
+  DEFAULT_SLIDING_WINDOW,
+  FALLBACK_MESSAGES,
+  parsePatchLineRanges,
+  scopeLargeFileContent,
 };

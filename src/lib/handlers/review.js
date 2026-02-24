@@ -108,6 +108,7 @@ async function handleReviewCommand(context, args) {
   }
   
   const targetFile = validation.file;
+  const patch = targetFile.patch || null;
   logger.info({ filePath, status: targetFile.status }, 'File validated, fetching full content at PR head');
 
   const pullNumber = context.pullNumber || context.issueNumber;
@@ -117,11 +118,15 @@ async function handleReviewCommand(context, args) {
     context.repo,
     filePath,
     pullNumber,
-    { maxFileSize: DEFAULT_MAX_CHARS }
+    {
+      maxFileSize: DEFAULT_MAX_CHARS,
+      maxFileLines: 10000,
+      patch,
+      patchSide: 'new',
+    }
   );
 
   const fullContent = fullContentResult.success ? fullContentResult.data : null;
-  const patch = targetFile.patch || null;
 
   const maxChars = context.maxChars || DEFAULT_MAX_CHARS;
   const { prompt, truncated } = buildReviewPrompt(filePath, fullContent, patch, maxChars);

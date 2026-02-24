@@ -152,7 +152,12 @@ async function handleCompareCommand(context) {
       // Fetch base version (may be 404 for new files)
       let oldVersion = null;
       if (status !== 'added') {
-        const baseResult = await fetchFileAtRef(octokit, owner, repo, filename, baseRef, { maxFileSize: MAX_FILE_CHARS });
+        const baseResult = await fetchFileAtRef(octokit, owner, repo, filename, baseRef, {
+          maxFileSize: MAX_FILE_CHARS,
+          maxFileLines: 10000,
+          patch: file.patch,
+          patchSide: 'old',
+        });
         if (baseResult.success) {
           oldVersion = baseResult.data;
         } else if (baseResult.error?.status !== 404) {
@@ -163,7 +168,12 @@ async function handleCompareCommand(context) {
       // Fetch head version (may be 404 for deleted files)
       let newVersion = null;
       if (status !== 'removed') {
-        const headResult = await fetchFileAtRef(octokit, owner, repo, filename, headRef, { maxFileSize: MAX_FILE_CHARS });
+        const headResult = await fetchFileAtRef(octokit, owner, repo, filename, headRef, {
+          maxFileSize: MAX_FILE_CHARS,
+          maxFileLines: 10000,
+          patch: file.patch,
+          patchSide: 'new',
+        });
         if (headResult.success) {
           newVersion = headResult.data;
         } else if (headResult.error?.status !== 404) {
