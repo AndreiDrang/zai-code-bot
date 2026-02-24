@@ -548,8 +548,16 @@ ${COMMENT_MARKER}`;
       // Route to explain handler with line range from args
       logger.info({ args }, 'Dispatching to explain handler');
       
-      // Check if line range argument is provided
-      if (args.length === 0) {
+      let explainArgs = args;
+      if (explainArgs.length === 0 && Number.isInteger(commentLine)) {
+        const anchorStart = Number.isInteger(commentStartLine) ? commentStartLine : commentLine;
+        const start = Math.min(anchorStart, commentLine);
+        const end = Math.max(anchorStart, commentLine);
+        explainArgs = [`${start}-${end}`];
+        logger.info({ start, end, commentPath }, 'Inferred explain range from review-comment anchor');
+      }
+
+      if (explainArgs.length === 0) {
         terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${COMMENT_MARKER}`;
         break;
@@ -589,7 +597,7 @@ ${COMMENT_MARKER}`;
       };
 
       try {
-        const result = await explainHandler.handleExplainCommand(explainContext, args);
+        const result = await explainHandler.handleExplainCommand(explainContext, explainArgs);
         if (result.success) {
           logger.info({ success: true }, 'Explain command completed');
           return;
