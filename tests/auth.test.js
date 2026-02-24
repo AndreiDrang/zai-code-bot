@@ -5,6 +5,8 @@ const {
   checkAuthorization,
   checkForkAuthorization,
   isForkPullRequest,
+  isRepoOwner,
+  normalizeLogin,
   getUnauthorizedMessage,
   getUnknownCommandMessage,
   AUTHORIZED_PERMISSIONS,
@@ -123,6 +125,28 @@ describe('isCollaborator', () => {
 });
 
 describe('checkAuthorization', () => {
+  test('allows repository owner without collaborator lookup', async () => {
+    const octokit = createMockOctokit(null, true, 404);
+    const context = createMockContext();
+    const commenter = { login: 'test-owner' };
+
+    const result = await checkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'repo_owner');
+  });
+
+  test('allows repository owner with case-insensitive login match', async () => {
+    const octokit = createMockOctokit(null, true, 404);
+    const context = createMockContext();
+    const commenter = { login: 'Test-Owner' };
+
+    const result = await checkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'repo_owner');
+  });
+
   test('returns authorized for collaborator', async () => {
     const octokit = createMockOctokit('write');
     const context = createMockContext();
@@ -223,6 +247,17 @@ describe('isForkPullRequest', () => {
 });
 
 describe('checkForkAuthorization', () => {
+  test('allows repository owner on regular PR', async () => {
+    const octokit = createMockOctokit('none');
+    const context = createMockContext(false);
+    const commenter = { login: 'test-owner' };
+
+    const result = await checkForkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'repo_owner');
+  });
+
   test('allows collaborator on regular PR', async () => {
     const octokit = createMockOctokit('write');
     const context = createMockContext(false);
@@ -360,5 +395,34 @@ describe('AUTHORIZED_PERMISSIONS', () => {
   test('does not contain triage or none', () => {
     assert.ok(!AUTHORIZED_PERMISSIONS.has('triage'));
     assert.ok(!AUTHORIZED_PERMISSIONS.has('none'));
+  });
+});
+
+describe('normalizeLogin', () => {
+  test('normalizes casing and trims whitespace', () => {
+    assert.strictEqual(normalizeLogin('  Test-Owner  '), 'test-owner');
+  });
+
+  test('returns empty string for invalid input', () => {
+    assert.strictEqual(normalizeLogin(null), '');
+    assert.strictEqual(normalizeLogin(undefined), '');
+  });
+});
+
+describe('isRepoOwner', () => {
+  test('matches context.repo.owner case-insensitively', () => {
+    const context = createMockContext();
+    assert.strictEqual(isRepoOwner(context, 'Test-Owner'), true);
+  });
+
+  test('matches payload.repository.owner.login when available', () => {
+    const context = createMockContext();
+    context.payload.repository = { owner: { login: 'Alt-Owner' } };
+    assert.strictEqual(isRepoOwner(context, 'alt-owner'), true);
+  });
+
+  test('returns false for non-owner login', () => {
+    const context = createMockContext();
+    assert.strictEqual(isRepoOwner(context, 'another-user'), false);
   });
 });

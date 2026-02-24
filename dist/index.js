@@ -31591,6 +31591,22 @@ const AUTHORIZED_PERMISSIONS = new Set(['admin', 'maintain', 'write', 'read']);
 // Timeout for GitHub API calls (in milliseconds)
 const API_TIMEOUT_MS = 10000;
 
+function normalizeLogin(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function isRepoOwner(context, commenterLogin) {
+  const normalizedCommenter = normalizeLogin(commenterLogin);
+  if (!normalizedCommenter) {
+    return false;
+  }
+
+  const ownerFromRepo = normalizeLogin(context?.repo?.owner);
+  const ownerFromPayload = normalizeLogin(context?.payload?.repository?.owner?.login);
+
+  return normalizedCommenter === ownerFromRepo || normalizedCommenter === ownerFromPayload;
+}
+
 /**
  * Check if a user is a collaborator with acceptable permission level
  * 
@@ -31648,6 +31664,13 @@ async function checkAuthorization(octokit, context, commenter) {
     return {
       authorized: false,
       reason: 'Unable to identify commenter',
+    };
+  }
+
+  if (isRepoOwner(context, commenter.login)) {
+    return {
+      authorized: true,
+      reason: 'repo_owner',
     };
   }
 
@@ -31755,10 +31778,8 @@ async function checkForkAuthorization(octokit, context, commenter) {
   }
 
   // Allow repository owner, admin, or maintainer to use commands on any PR (including Dependabot PRs)
-  const repoOwner = context?.repo?.owner;
-  
   // First check: is this user the repo owner?
-  if (repoOwner && commenter.login === repoOwner) {
+  if (isRepoOwner(context, commenter.login)) {
     return {
       authorized: true,
       reason: 'repo_owner',
@@ -31818,6 +31839,8 @@ module.exports = {
   getUnknownCommandMessage,
   AUTHORIZED_PERMISSIONS,
   API_TIMEOUT_MS,
+  isRepoOwner,
+  normalizeLogin,
 };
 
 
