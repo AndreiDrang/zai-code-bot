@@ -31714,6 +31714,14 @@ async function checkForkAuthorization(octokit, context, commenter) {
     };
   }
 
+  // Allow repository owner to use commands on any PR (including Dependabot PRs)
+  const repoOwner = context?.repo?.owner;
+  if (repoOwner && commenter.login === repoOwner) {
+    return {
+      authorized: true,
+    };
+  }
+
   const authResult = await checkAuthorization(octokit, context, commenter);
   
   // If not authorized on fork PR, silent block

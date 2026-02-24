@@ -268,6 +268,21 @@ describe('checkForkAuthorization', () => {
     assert.strictEqual(result.authorized, true);
   });
 
+  test('allows repository owner on fork PR (e.g., Dependabot)', async () => {
+    const pullRequest = {
+      head: { repo: { fork: true } },
+      user: { login: 'dependabot[bot]' },
+    };
+    const octokit = createMockOctokit('none');
+    const context = createMockContext(true, pullRequest);
+    // Repository owner commenting on Dependabot PR
+    const commenter = { login: 'test-owner' };
+
+    const result = await checkForkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
+  });
+
   test('blocks non-collaborator on fork PR silently', async () => {
     const octokit = createMockOctokit('none');
     const context = createMockContext(true);
