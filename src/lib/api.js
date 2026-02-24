@@ -153,11 +153,30 @@ function makeApiRequest({ apiKey, model, prompt, timeout }) {
             reject(new Error(`Failed to parse API response: ${parseError.message}`));
           }
         } else {
-          reject(new Error(`Z.ai API error ${res.statusCode}: ${data}`));
+          // Try to extract meaningful error message from API response
+          let errorMsg = `Z.ai API error ${res.statusCode}`;
+          try {
+            const errorData = JSON.parse(data);
+            const apiMessage = errorData?.error?.message ||
+                               errorData?.error?.error?.message ||
+                               errorData?.message ||
+                               null;
+            if (apiMessage) {
+              errorMsg += `: ${apiMessage}`;
+            } else if (data.length < 200) {
+              // Include raw data only if short and no message found
+              errorMsg += `: ${data}`;
+            }
+          } catch {
+            // JSON parse failed, include raw data if short
+            if (data.length < 200) {
+              errorMsg += `: ${data}`;
+            }
+          }
+          reject(new Error(errorMsg));
         }
-      });
     });
-
+    });
     req.on('error', reject);
     req.on('timeout', () => {
       req.destroy();
@@ -231,7 +250,8 @@ function extractStatusCode(message) {
 
 /**
  * Sanitizes error message to prevent secret leakage.
- * Removes API keys, tokens, URLs with credentials, and raw provider responses.
+ * Removes API keys, tokens, URLs with credentials.
+ * Preserves API error messages by extracting them from JSON responses.
  * @param {Error} error - The error to sanitize
  * @returns {string} Safe user-facing message
  */
@@ -242,6 +262,26 @@ function sanitizeErrorMessage(error) {
 
   let message = error.message;
 
+  // Try to extract meaningful error message from JSON response first
+  try {
+    // Match JSON in error message like: "Z.ai API error 400: {\"error\":...}"
+    const jsonMatch = message.match(/:\s*(\{[\s\S]*\})\s*$/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[1]);
+      // Extract nested error message (common patterns)
+      const apiMessage = parsed?.error?.message ||
+                         parsed?.error?.error?.message ||
+                         parsed?.message ||
+                         null;
+      if (apiMessage && typeof apiMessage === 'string') {
+        // Replace the JSON with just the extracted message
+        message = message.replace(jsonMatch[0], `: ${apiMessage}`);
+      }
+    }
+  } catch {
+    // JSON parsing failed, continue with original message
+  }
+
   // Remove API keys (Bearer tokens, api keys)
   message = message.replace(/(Bearer\s+)[^\s]+/gi, '$1[REDACTED]');
   message = message.replace(/(api[_-]?key[=:]?\s*)[^\s,}]+/gi, '$1[REDACTED]');
@@ -250,9 +290,9 @@ function sanitizeErrorMessage(error) {
   // Remove URLs with potential credentials
   message = message.replace(/https?:\/\/[^\s]*:[^\s@]+@[^\s]*/gi, '[URL_REDACTED]');
 
-  // Remove JSON-like content that might contain sensitive data
-  // This catches raw API response bodies
-  message = message.replace(/\{[^{}]*"[a-zA-Z_]*"\s*:\s*"[^"]*"[^{}]*\}/g, '[DATA_REDACTED]');
+  // Remove any remaining JSON-like structures but keep already extracted messages
+  // Only target JSON that looks like it might contain keys/tokens
+  message = message.replace(/\{[^{}]*"(?:api[_-]?key|token|secret|password|credential)[^"]*"[^{}]*\}/gi, '[REDACTED]');
 
   // Truncate very long error messages that might contain dump
   if (message.length > 500) {
