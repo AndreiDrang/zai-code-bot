@@ -108,13 +108,19 @@ function buildExplainPrompt(filename, scopeResult, startLine, endLine, maxChars 
 async function handleExplainCommand(context, args) {
   const { octokit, owner, repo, issueNumber, commentPath, filename, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
+  const commentOptions = {
+    replyToId: commentId,
+    updateExisting: false,
+    isReviewComment: Boolean(context.isReviewComment),
+    pullNumber: context.pullNumber || issueNumber,
+  };
 
   if (!args || args.length === 0) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No line range provided. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -130,7 +136,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -156,7 +162,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** No target file specified. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -180,7 +186,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${errorMsg}`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -200,7 +206,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}. File has ${maxLines} lines.`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -244,18 +250,51 @@ async function handleExplainCommand(context, args) {
 
     if (!result.success) {
       const errorMsg = result.error?.message || 'Failed to get explanation';
-      logger.error({ error: errorMsg }, 'API call failed');
+      logger.warn({ error: errorMsg, retry: true }, 'API call failed, retrying with compact explain prompt');
+
+      const compactScope = {
+        target: scopeResult.target,
+        surrounding: scopeResult.target,
+      };
+      const compact = buildExplainPrompt(resolvedPath, compactScope, startLine, endLine, Math.min(DEFAULT_MAX_CHARS, 3000));
+      const retryResult = await apiClient.call({
+        apiKey,
+        model,
+        prompt: compact.prompt,
+      });
+
+      if (!retryResult.success) {
+        const retryErrorMsg = retryResult.error?.message || errorMsg;
+        logger.error({ error: retryErrorMsg }, 'Explain retry API call failed');
+        await upsertComment(
+          octokit, owner, repo, issueNumber,
+          `**Error:** ${retryErrorMsg}`,
+          EXPLAIN_MARKER,
+          commentOptions
+        );
+        if (commentId) {
+          await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        }
+        return { success: false, error: retryErrorMsg };
+      }
+
+      let retryResponse = retryResult.data;
+      if (compact.truncated) {
+        retryResponse += '\n\n_(Note: Compact context was used due to model limits)_';
+      }
+
+      const retryFormatted = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${retryResponse}`;
       await upsertComment(
         octokit, owner, repo, issueNumber,
-        `**Error:** ${errorMsg}`,
+        retryFormatted,
         EXPLAIN_MARKER,
-        { replyToId: commentId, updateExisting: false }
+        commentOptions
       );
       // Add error reaction if commentId available
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
       }
-      return { success: false, error: errorMsg };
+      return { success: true };
     }
 
     let response = result.data;
@@ -270,7 +309,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       formattedResponse,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
 
     // Add success reaction if commentId available
@@ -288,7 +327,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete explanation. Please try again later.`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
 
     // Add error reaction if commentId available
