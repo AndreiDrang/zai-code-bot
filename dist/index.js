@@ -32334,9 +32334,9 @@ module.exports = {
 
 const REACTIONS = {
   EYES: 'eyes',
-  THINKING: 'thinking',
+  THINKING: 'eyes',
   ROCKET: 'rocket',
-  X: 'x',
+  X: '-1',
 };
 
 async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {

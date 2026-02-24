@@ -1,4 +1,4 @@
-const { test, describe, beforeEach } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const {
   REACTIONS,
@@ -15,7 +15,7 @@ describe('REACTIONS', () => {
   });
 
   test('has THINKING constant', () => {
-    assert.strictEqual(REACTIONS.THINKING, 'thinking');
+    assert.strictEqual(REACTIONS.THINKING, 'eyes');
   });
 
   test('has ROCKET constant', () => {
@@ -23,7 +23,7 @@ describe('REACTIONS', () => {
   });
 
   test('has X constant', () => {
-    assert.strictEqual(REACTIONS.X, 'x');
+    assert.strictEqual(REACTIONS.X, '-1');
   });
 });
 
