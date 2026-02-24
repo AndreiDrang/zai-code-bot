@@ -75,6 +75,12 @@ function buildReviewPrompt(filePath, fullContent, patch, maxChars = DEFAULT_MAX_
 async function handleReviewCommand(context, args) {
   const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'review' });
+  const commentOptions = {
+    replyToId: commentId,
+    updateExisting: false,
+    isReviewComment: Boolean(context.isReviewComment),
+    pullNumber: context.pullNumber || issueNumber,
+  };
   
   const parsed = parseFilePath(args);
   if (parsed.error) {
@@ -82,7 +88,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -99,7 +105,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}`,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -147,7 +153,7 @@ async function handleReviewCommand(context, args) {
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
         REVIEW_MARKER,
-        { replyToId: commentId, updateExisting: false }
+        commentOptions
       );
       if (commentId) {
         await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -167,7 +173,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       formattedResponse,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     
     if (commentId) {
@@ -184,7 +190,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete review. Please try again later.`,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     
     if (commentId) {

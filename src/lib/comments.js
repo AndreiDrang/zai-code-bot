@@ -16,7 +16,7 @@ async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {
 }
 
 async function upsertComment(octokit, owner, repo, issueNumber, body, marker, options = {}) {
-  const { replyToId = null, updateExisting = true } = options;
+  const { replyToId = null, updateExisting = true, isReviewComment = false, pullNumber = null } = options;
   
   let existingComment = null;
   if (!replyToId && updateExisting) {
@@ -32,6 +32,17 @@ async function upsertComment(octokit, owner, repo, issueNumber, body, marker, op
     });
     return { action: 'updated', comment: updated };
   } else {
+    if (replyToId && isReviewComment) {
+      const { data: createdReply } = await octokit.rest.pulls.createReplyForReviewComment({
+        owner,
+        repo,
+        pull_number: pullNumber || issueNumber,
+        comment_id: replyToId,
+        body,
+      });
+      return { action: 'created', comment: createdReply };
+    }
+
     const createParams = {
       owner,
       repo,

@@ -236,7 +236,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
       pullNumber,
       guidance,
       GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
     );
     core.info(`Posted guidance comment for error: ${errorType}`);
 
@@ -277,7 +277,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
       pullNumber,
       getUnauthorizedMessage(),
       AUTH_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
     );
 
     if (commentId) {
@@ -312,7 +312,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
     pullNumber,
     `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
     PROGRESS_MARKER,
-    { replyToId: commentId, updateExisting: false }
+    { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
   );
 
   core.info(`Authorized command from collaborator: ${commenter.login}`);
@@ -450,6 +450,8 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
     commenter,
     baseRef,
     headRef,
+    isReviewComment: true,
+    eventName: 'pull_request_review_comment',
     ...anchorMetadata,
   });
 }
@@ -467,6 +469,8 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     commentLine = null,
     commentStartLine = null,
     commentDiffHunk = null,
+    isReviewComment = false,
+    eventName = context.eventName || 'issue_comment',
   } = options;
 
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
@@ -477,7 +481,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
   // Build handler context with required fields
   const correlationId = generateCorrelationId();
   const logger = createLogger(correlationId, { 
-    eventName: 'issue_comment', 
+    eventName,
     prNumber: pullNumber,
     command 
   });
@@ -511,6 +515,8 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     commentLine,
     commentStartLine,
     commentDiffHunk,
+    isReviewComment,
+    pullNumber,
   };
 
   switch (command) {
@@ -748,7 +754,12 @@ ${COMMENT_MARKER}`;
     pullNumber,
     responseWithState,
     COMMENT_MARKER,
-    { replyToId: commentId, updateExisting: false }
+    {
+      replyToId: commentId,
+      updateExisting: false,
+      isReviewComment,
+      pullNumber,
+    }
   );
   core.info(`Posted response for command: ${command}`);
 

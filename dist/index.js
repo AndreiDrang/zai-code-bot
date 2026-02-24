@@ -32288,7 +32288,7 @@ async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {
 }
 
 async function upsertComment(octokit, owner, repo, issueNumber, body, marker, options = {}) {
-  const { replyToId = null, updateExisting = true } = options;
+  const { replyToId = null, updateExisting = true, isReviewComment = false, pullNumber = null } = options;
   
   let existingComment = null;
   if (!replyToId && updateExisting) {
@@ -32304,6 +32304,17 @@ async function upsertComment(octokit, owner, repo, issueNumber, body, marker, op
     });
     return { action: 'updated', comment: updated };
   } else {
+    if (replyToId && isReviewComment) {
+      const { data: createdReply } = await octokit.rest.pulls.createReplyForReviewComment({
+        owner,
+        repo,
+        pull_number: pullNumber || issueNumber,
+        comment_id: replyToId,
+        body,
+      });
+      return { action: 'created', comment: createdReply };
+    }
+
     const createParams = {
       owner,
       repo,
@@ -33952,13 +33963,19 @@ function buildExplainPrompt(filename, scopeResult, startLine, endLine, maxChars 
 async function handleExplainCommand(context, args) {
   const { octokit, owner, repo, issueNumber, commentPath, filename, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
+  const commentOptions = {
+    replyToId: commentId,
+    updateExisting: false,
+    isReviewComment: Boolean(context.isReviewComment),
+    pullNumber: context.pullNumber || issueNumber,
+  };
 
   if (!args || args.length === 0) {
     await upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No line range provided. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -33974,7 +33991,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -34000,7 +34017,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** No target file specified. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -34024,7 +34041,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${errorMsg}`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -34044,7 +34061,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}. File has ${maxLines} lines.`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     // Add error reaction if commentId available
     if (commentId) {
@@ -34088,18 +34105,51 @@ async function handleExplainCommand(context, args) {
 
     if (!result.success) {
       const errorMsg = result.error?.message || 'Failed to get explanation';
-      logger.error({ error: errorMsg }, 'API call failed');
+      logger.warn({ error: errorMsg, retry: true }, 'API call failed, retrying with compact explain prompt');
+
+      const compactScope = {
+        target: scopeResult.target,
+        surrounding: scopeResult.target,
+      };
+      const compact = buildExplainPrompt(resolvedPath, compactScope, startLine, endLine, Math.min(DEFAULT_MAX_CHARS, 3000));
+      const retryResult = await apiClient.call({
+        apiKey,
+        model,
+        prompt: compact.prompt,
+      });
+
+      if (!retryResult.success) {
+        const retryErrorMsg = retryResult.error?.message || errorMsg;
+        logger.error({ error: retryErrorMsg }, 'Explain retry API call failed');
+        await upsertComment(
+          octokit, owner, repo, issueNumber,
+          `**Error:** ${retryErrorMsg}`,
+          EXPLAIN_MARKER,
+          commentOptions
+        );
+        if (commentId) {
+          await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        }
+        return { success: false, error: retryErrorMsg };
+      }
+
+      let retryResponse = retryResult.data;
+      if (compact.truncated) {
+        retryResponse += '\n\n_(Note: Compact context was used due to model limits)_';
+      }
+
+      const retryFormatted = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${retryResponse}`;
       await upsertComment(
         octokit, owner, repo, issueNumber,
-        `**Error:** ${errorMsg}`,
+        retryFormatted,
         EXPLAIN_MARKER,
-        { replyToId: commentId, updateExisting: false }
+        commentOptions
       );
       // Add error reaction if commentId available
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
       }
-      return { success: false, error: errorMsg };
+      return { success: true };
     }
 
     let response = result.data;
@@ -34114,7 +34164,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       formattedResponse,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
 
     // Add success reaction if commentId available
@@ -34132,7 +34182,7 @@ async function handleExplainCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete explanation. Please try again later.`,
       EXPLAIN_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
 
     // Add error reaction if commentId available
@@ -34234,6 +34284,12 @@ function buildReviewPrompt(filePath, fullContent, patch, maxChars = DEFAULT_MAX_
 async function handleReviewCommand(context, args) {
   const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model, commentId } = context;
   const logger = context.logger || createLogger(generateCorrelationId(), { command: 'review' });
+  const commentOptions = {
+    replyToId: commentId,
+    updateExisting: false,
+    isReviewComment: Boolean(context.isReviewComment),
+    pullNumber: context.pullNumber || issueNumber,
+  };
   
   const parsed = parseFilePath(args);
   if (parsed.error) {
@@ -34241,7 +34297,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -34258,7 +34314,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}`,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     if (commentId) {
       await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -34306,7 +34362,7 @@ async function handleReviewCommand(context, args) {
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
         REVIEW_MARKER,
-        { replyToId: commentId, updateExisting: false }
+        commentOptions
       );
       if (commentId) {
         await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
@@ -34326,7 +34382,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       formattedResponse,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     
     if (commentId) {
@@ -34343,7 +34399,7 @@ async function handleReviewCommand(context, args) {
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete review. Please try again later.`,
       REVIEW_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      commentOptions
     );
     
     if (commentId) {
@@ -40322,7 +40378,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
       pullNumber,
       guidance,
       GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
     );
     core.info(`Posted guidance comment for error: ${errorType}`);
 
@@ -40363,7 +40419,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
       pullNumber,
       getUnauthorizedMessage(),
       AUTH_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
     );
 
     if (commentId) {
@@ -40398,7 +40454,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
     pullNumber,
     `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
     PROGRESS_MARKER,
-    { replyToId: commentId, updateExisting: false }
+    { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
   );
 
   core.info(`Authorized command from collaborator: ${commenter.login}`);
@@ -40536,6 +40592,8 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
     commenter,
     baseRef,
     headRef,
+    isReviewComment: true,
+    eventName: 'pull_request_review_comment',
     ...anchorMetadata,
   });
 }
@@ -40553,6 +40611,8 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     commentLine = null,
     commentStartLine = null,
     commentDiffHunk = null,
+    isReviewComment = false,
+    eventName = context.eventName || 'issue_comment',
   } = options;
 
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
@@ -40563,7 +40623,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
   // Build handler context with required fields
   const correlationId = generateCorrelationId();
   const logger = createLogger(correlationId, { 
-    eventName: 'issue_comment', 
+    eventName,
     prNumber: pullNumber,
     command 
   });
@@ -40597,6 +40657,8 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     commentLine,
     commentStartLine,
     commentDiffHunk,
+    isReviewComment,
+    pullNumber,
   };
 
   switch (command) {
@@ -40834,7 +40896,12 @@ ${COMMENT_MARKER}`;
     pullNumber,
     responseWithState,
     COMMENT_MARKER,
-    { replyToId: commentId, updateExisting: false }
+    {
+      replyToId: commentId,
+      updateExisting: false,
+      isReviewComment,
+      pullNumber,
+    }
   );
   core.info(`Posted response for command: ${command}`);
 
