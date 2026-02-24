@@ -48,6 +48,18 @@ function isTrustedCommentAuthor(context, commenter) {
   return AUTHORIZED_ASSOCIATIONS.has(association);
 }
 
+function getCommenter(context) {
+  const payload = context?.payload || {};
+
+  return (
+    payload.comment?.user ||
+    payload.sender ||
+    payload.review?.user ||
+    payload.issue?.user ||
+    null
+  );
+}
+
 /**
  * Check if a user is a collaborator with acceptable permission level
  * 
@@ -264,8 +276,22 @@ async function checkForkAuthorization(octokit, context, commenter) {
  * 
  * @returns {string}
  */
-function getUnauthorizedMessage() {
-  return 'You are not authorized to use this command.';
+function getUnauthorizedMessage(reason) {
+  const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
+
+  if (!normalizedReason || normalizedReason === 'You are not authorized to use this command.') {
+    return 'You are not authorized to use this command.';
+  }
+
+  if (normalizedReason === 'Unable to identify commenter') {
+    return 'Unable to identify who authored this command comment. Please post a new /zai command comment and try again.';
+  }
+
+  if (normalizedReason === 'Authorization check failed. Please try again later.') {
+    return 'Authorization could not be verified due to a temporary GitHub permission check issue. Please try again.';
+  }
+
+  return `Command could not be processed: ${normalizedReason}`;
 }
 
 /**
@@ -293,4 +319,5 @@ module.exports = {
   normalizeAssociation,
   getCommentAuthorAssociation,
   isTrustedCommentAuthor,
+  getCommenter,
 };

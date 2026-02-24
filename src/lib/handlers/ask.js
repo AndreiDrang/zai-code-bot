@@ -21,6 +21,27 @@ const SMALL_DIFF_THRESHOLD_CHARS = 12000;
 const MAX_DIFF_FILES = 8;
 const MAX_RAW_FILE_CHARS = 4000;
 
+function resolveRepoRef(githubContext) {
+  const owner = githubContext?.repo?.owner
+    || githubContext?.payload?.repository?.owner?.login
+    || githubContext?.payload?.repo?.owner?.login
+    || null;
+
+  const repo = githubContext?.repo?.repo
+    || githubContext?.repo?.name
+    || githubContext?.payload?.repository?.name
+    || githubContext?.payload?.repo?.name
+    || null;
+
+  return { owner, repo };
+}
+
+function resolveIssueNumber(githubContext) {
+  return githubContext?.payload?.pull_request?.number
+    || githubContext?.payload?.issue?.number
+    || null;
+}
+
 /**
  * Validates the ask command arguments
  * @param {string[]} args - Command arguments
@@ -75,8 +96,22 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   }
 
   const question = args.join(' ').trim();
-  const { owner, repo } = githubContext.repo;
-  const issueNumber = githubContext.payload.pull_request.number;
+  const { owner, repo } = resolveRepoRef(githubContext);
+  const issueNumber = resolveIssueNumber(githubContext);
+
+  if (!owner || !repo) {
+    return {
+      success: false,
+      error: 'Unable to resolve repository context for this command. Please retry from the PR conversation.',
+    };
+  }
+
+  if (!issueNumber) {
+    return {
+      success: false,
+      error: 'Unable to resolve pull request number for this command. Please retry from a PR comment.',
+    };
+  }
 
   // Get the comment ID for threading
   const commentId = githubContext.payload.comment?.id;
@@ -190,10 +225,10 @@ async function buildContext({ octokit, githubContext, logger, maxChars = context
 async function getThreadTranscript(octokit, githubContext, options = {}) {
   const logger = options.logger;
   const limit = options.limit || MAX_TRANSCRIPT_COMMENTS;
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
   const issueNumber = githubContext.payload.issue?.number || githubContext.payload.pull_request?.number;
 
-  if (!issueNumber) {
+  if (!owner || !repo || !issueNumber) {
     return 'No conversation history available.';
   }
 
@@ -267,12 +302,12 @@ async function getRelevantFileContent(octokit, githubContext, options = {}) {
   const maxDiffFiles = options.maxDiffFiles || MAX_DIFF_FILES;
   const maxRawFileChars = options.maxRawFileChars || MAX_RAW_FILE_CHARS;
 
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
   const pullNumber = githubContext.payload.pull_request?.number || githubContext.payload.issue?.number;
   const commentPath = githubContext.payload.comment?.path || null;
   const commentDiffHunk = githubContext.payload.comment?.diff_hunk || '';
 
-  if (!pullNumber) {
+  if (!owner || !repo || !pullNumber) {
     return 'No PR file context available.';
   }
 
@@ -358,8 +393,12 @@ async function getRawFileAtHead(octokit, githubContext, filePath, maxChars, logg
     return null;
   }
 
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
   const pullNumber = githubContext.payload.pull_request?.number || githubContext.payload.issue?.number;
+
+  if (!owner || !repo) {
+    return '[Raw file content unavailable: repository context missing]';
+  }
 
   try {
     const headSha = await resolveHeadSha(octokit, githubContext, pullNumber);
@@ -407,7 +446,10 @@ async function resolveHeadSha(octokit, githubContext, pullNumber) {
     return null;
   }
 
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
+  if (!owner || !repo) {
+    return null;
+  }
   const { data } = await octokit.rest.pulls.get({
     owner,
     repo,
@@ -464,4 +506,6 @@ module.exports = {
   getRelevantFileContent,
   buildPrompt,
   formatResponse,
+  resolveRepoRef,
+  resolveIssueNumber,
 };

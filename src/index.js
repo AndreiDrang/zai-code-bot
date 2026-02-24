@@ -4,7 +4,7 @@ const https = require('https');
 
 const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = require('./lib/events.js');
 const { parseCommand, isValid } = require('./lib/commands.js');
-const { checkForkAuthorization, getUnauthorizedMessage } = require('./lib/auth.js');
+const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = require('./lib/auth.js');
 const { handleAskCommand } = require('./lib/handlers/ask.js');
 const { handleSuggestCommand } = require('./lib/handlers/suggest.js');
 const { handleCompareCommand } = require('./lib/handlers/compare.js');
@@ -126,6 +126,50 @@ function callZaiApi(apiKey, model, prompt) {
     req.write(body);
     req.end();
   });
+}
+
+async function enforceCommandAuthorization(context, octokit, owner, repo, options = {}) {
+  const {
+    issueNumber,
+    pullNumber,
+    replyToId,
+    isReviewComment = false,
+  } = options;
+
+  const commenter = getCommenter(context);
+  const authResult = await checkForkAuthorization(octokit, context, commenter);
+
+  if (authResult.authorized) {
+    return { authorized: true, commenter };
+  }
+
+  if (authResult.reason === null) {
+    core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
+    return { authorized: false, commenter, silent: true };
+  }
+
+  const authMessage = getUnauthorizedMessage(authResult.reason);
+  core.info(`Command authorization failed for ${commenter?.login || 'unknown'}: ${authResult.reason}`);
+
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    issueNumber,
+    authMessage,
+    AUTH_MARKER,
+    { replyToId, updateExisting: false, isReviewComment, pullNumber }
+  );
+
+  if (replyToId) {
+    try {
+      await setReaction(octokit, owner, repo, replyToId, REACTIONS.X);
+    } catch (error) {
+      core.warning(`Failed to set auth-failure reaction: ${error.message}`);
+    }
+  }
+
+  return { authorized: false, commenter, silent: false };
 }
 
 async function run() {
@@ -253,42 +297,17 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
   // Valid command - check authorization before dispatching
   core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
 
-  // Get commenter info for auth check
-  const commenter = comment?.user || context.payload.sender;
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-  // Check authorization using fork-aware auth check
-  const authResult = await checkForkAuthorization(octokit, context, commenter);
-
-  if (!authResult.authorized) {
-    // Silent block for fork PRs (reason: null per SECURITY.md)
-    if (authResult.reason === null) {
-      core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
-      return;
-    }
-
-    // For regular PRs, post an error message
-    core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
-    const pullNumber = context.payload.issue?.number;
-    await upsertComment(
-      octokit,
-      owner,
-      repo,
-      pullNumber,
-      getUnauthorizedMessage(),
-      AUTH_MARKER,
-      { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
-    );
-
-    if (commentId) {
-      try {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      } catch (error) {
-        core.warning(`Failed to set auth-failure reaction: ${error.message}`);
-      }
-    }
+  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
+    issueNumber: pullNumber,
+    pullNumber,
+    replyToId: commentId,
+    isReviewComment: false,
+  });
+  if (!authState.authorized) {
     return;
   }
+  const { commenter } = authState;
 
   let continuityState = null;
   try {
@@ -355,7 +374,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
       pullNumber,
       guidance,
       GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
     );
     core.info(`Posted guidance comment for error: ${errorType}`);
 
@@ -372,41 +391,17 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
   // Valid command - check authorization before dispatching
   core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
 
-  // Get commenter info for auth check
-  const commenter = comment?.user || context.payload.sender;
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-  // Check authorization using fork-aware auth check
-  const authResult = await checkForkAuthorization(octokit, context, commenter);
-
-  if (!authResult.authorized) {
-    // Silent block for fork PRs (reason: null per SECURITY.md)
-    if (authResult.reason === null) {
-      core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
-      return;
-    }
-
-    // For regular PRs, post an error message
-    core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
-    await upsertComment(
-      octokit,
-      owner,
-      repo,
-      pullNumber,
-      getUnauthorizedMessage(),
-      AUTH_MARKER,
-      { replyToId: commentId, updateExisting: false }
-    );
-
-    if (commentId) {
-      try {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      } catch (error) {
-        core.warning(`Failed to set auth-failure reaction: ${error.message}`);
-      }
-    }
+  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
+    issueNumber: pullNumber,
+    pullNumber,
+    replyToId: commentId,
+    isReviewComment: true,
+  });
+  if (!authState.authorized) {
     return;
   }
+  const { commenter } = authState;
 
   // Load continuity state
   let continuityState = null;
@@ -433,7 +428,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
     pullNumber,
     `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
     PROGRESS_MARKER,
-    { replyToId: commentId, updateExisting: false }
+    { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
   );
 
   // Extract anchor metadata from review comment

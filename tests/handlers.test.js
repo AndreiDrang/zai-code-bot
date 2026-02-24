@@ -98,6 +98,38 @@ describe('ask handler', () => {
     assert.ok(transcript.includes('rate limits'));
   });
 
+  test('resolveRepoRef falls back to payload.repository when githubContext.repo is missing', () => {
+    const githubContext = {
+      payload: {
+        repository: {
+          owner: { login: 'AndreiDrang' },
+          name: 'zai-code-bot',
+        },
+      },
+    };
+
+    const resolved = askHandler.resolveRepoRef(githubContext);
+    assert.strictEqual(resolved.owner, 'AndreiDrang');
+    assert.strictEqual(resolved.repo, 'zai-code-bot');
+  });
+
+  test('getThreadTranscript returns safe fallback when repo context is missing', async () => {
+    const octokit = {
+      rest: {
+        issues: {
+          listComments: async () => ({ data: [] }),
+        },
+      },
+    };
+
+    const githubContext = {
+      payload: { issue: { number: 42 } },
+    };
+
+    const transcript = await askHandler.getThreadTranscript(octokit, githubContext);
+    assert.strictEqual(transcript, 'No conversation history available.');
+  });
+
   test('getRelevantFileContent includes focused file and diff context', async () => {
     const octokit = {
       rest: {

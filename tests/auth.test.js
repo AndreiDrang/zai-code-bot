@@ -1,4 +1,4 @@
-const { test, describe, beforeEach } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const {
   isCollaborator,
@@ -10,6 +10,7 @@ const {
   normalizeAssociation,
   getCommentAuthorAssociation,
   isTrustedCommentAuthor,
+  getCommenter,
   getUnauthorizedMessage,
   getUnknownCommandMessage,
   AUTHORIZED_PERMISSIONS,
@@ -385,6 +386,16 @@ describe('getUnauthorizedMessage', () => {
     assert.strictEqual(message, 'You are not authorized to use this command.');
   });
 
+  test('returns specific guidance when commenter cannot be identified', () => {
+    const message = getUnauthorizedMessage('Unable to identify commenter');
+    assert.ok(message.includes('Unable to identify who authored this command comment'));
+  });
+
+  test('returns specific guidance for temporary auth verification failures', () => {
+    const message = getUnauthorizedMessage('Authorization check failed. Please try again later.');
+    assert.ok(message.includes('Authorization could not be verified'));
+  });
+
   test('does not expose internal details', () => {
     const message = getUnauthorizedMessage();
     assert.ok(!message.includes('token'));
@@ -465,6 +476,36 @@ describe('getCommentAuthorAssociation', () => {
     const context = createMockContext();
     context.payload.comment = { author_association: 'OWNER' };
     assert.strictEqual(getCommentAuthorAssociation(context, { login: 'user' }), 'OWNER');
+  });
+});
+
+describe('getCommenter', () => {
+  test('returns comment user when available', () => {
+    const context = createMockContext();
+    context.payload.comment = { user: { login: 'comment-user' } };
+    context.payload.sender = { login: 'sender-user' };
+
+    const commenter = getCommenter(context);
+    assert.strictEqual(commenter.login, 'comment-user');
+  });
+
+  test('falls back to sender when comment user is missing', () => {
+    const context = createMockContext();
+    context.payload.comment = { body: '/zai explain' };
+    context.payload.sender = { login: 'sender-user' };
+
+    const commenter = getCommenter(context);
+    assert.strictEqual(commenter.login, 'sender-user');
+  });
+
+  test('uses review user when comment and sender are missing', () => {
+    const context = createMockContext();
+    context.payload.comment = null;
+    context.payload.sender = null;
+    context.payload.review = { user: { login: 'review-user' } };
+
+    const commenter = getCommenter(context);
+    assert.strictEqual(commenter.login, 'review-user');
   });
 });
 

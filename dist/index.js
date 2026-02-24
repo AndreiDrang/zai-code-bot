@@ -31627,6 +31627,18 @@ function isTrustedCommentAuthor(context, commenter) {
   return AUTHORIZED_ASSOCIATIONS.has(association);
 }
 
+function getCommenter(context) {
+  const payload = context?.payload || {};
+
+  return (
+    payload.comment?.user ||
+    payload.sender ||
+    payload.review?.user ||
+    payload.issue?.user ||
+    null
+  );
+}
+
 /**
  * Check if a user is a collaborator with acceptable permission level
  * 
@@ -31843,8 +31855,22 @@ async function checkForkAuthorization(octokit, context, commenter) {
  * 
  * @returns {string}
  */
-function getUnauthorizedMessage() {
-  return 'You are not authorized to use this command.';
+function getUnauthorizedMessage(reason) {
+  const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
+
+  if (!normalizedReason || normalizedReason === 'You are not authorized to use this command.') {
+    return 'You are not authorized to use this command.';
+  }
+
+  if (normalizedReason === 'Unable to identify commenter') {
+    return 'Unable to identify who authored this command comment. Please post a new /zai command comment and try again.';
+  }
+
+  if (normalizedReason === 'Authorization check failed. Please try again later.') {
+    return 'Authorization could not be verified due to a temporary GitHub permission check issue. Please try again.';
+  }
+
+  return `Command could not be processed: ${normalizedReason}`;
 }
 
 /**
@@ -31872,6 +31898,7 @@ module.exports = {
   normalizeAssociation,
   getCommentAuthorAssociation,
   isTrustedCommentAuthor,
+  getCommenter,
 };
 
 
@@ -33253,6 +33280,27 @@ const SMALL_DIFF_THRESHOLD_CHARS = 12000;
 const MAX_DIFF_FILES = 8;
 const MAX_RAW_FILE_CHARS = 4000;
 
+function resolveRepoRef(githubContext) {
+  const owner = githubContext?.repo?.owner
+    || githubContext?.payload?.repository?.owner?.login
+    || githubContext?.payload?.repo?.owner?.login
+    || null;
+
+  const repo = githubContext?.repo?.repo
+    || githubContext?.repo?.name
+    || githubContext?.payload?.repository?.name
+    || githubContext?.payload?.repo?.name
+    || null;
+
+  return { owner, repo };
+}
+
+function resolveIssueNumber(githubContext) {
+  return githubContext?.payload?.pull_request?.number
+    || githubContext?.payload?.issue?.number
+    || null;
+}
+
 /**
  * Validates the ask command arguments
  * @param {string[]} args - Command arguments
@@ -33307,8 +33355,22 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   }
 
   const question = args.join(' ').trim();
-  const { owner, repo } = githubContext.repo;
-  const issueNumber = githubContext.payload.pull_request.number;
+  const { owner, repo } = resolveRepoRef(githubContext);
+  const issueNumber = resolveIssueNumber(githubContext);
+
+  if (!owner || !repo) {
+    return {
+      success: false,
+      error: 'Unable to resolve repository context for this command. Please retry from the PR conversation.',
+    };
+  }
+
+  if (!issueNumber) {
+    return {
+      success: false,
+      error: 'Unable to resolve pull request number for this command. Please retry from a PR comment.',
+    };
+  }
 
   // Get the comment ID for threading
   const commentId = githubContext.payload.comment?.id;
@@ -33422,10 +33484,10 @@ async function buildContext({ octokit, githubContext, logger, maxChars = context
 async function getThreadTranscript(octokit, githubContext, options = {}) {
   const logger = options.logger;
   const limit = options.limit || MAX_TRANSCRIPT_COMMENTS;
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
   const issueNumber = githubContext.payload.issue?.number || githubContext.payload.pull_request?.number;
 
-  if (!issueNumber) {
+  if (!owner || !repo || !issueNumber) {
     return 'No conversation history available.';
   }
 
@@ -33499,12 +33561,12 @@ async function getRelevantFileContent(octokit, githubContext, options = {}) {
   const maxDiffFiles = options.maxDiffFiles || MAX_DIFF_FILES;
   const maxRawFileChars = options.maxRawFileChars || MAX_RAW_FILE_CHARS;
 
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
   const pullNumber = githubContext.payload.pull_request?.number || githubContext.payload.issue?.number;
   const commentPath = githubContext.payload.comment?.path || null;
   const commentDiffHunk = githubContext.payload.comment?.diff_hunk || '';
 
-  if (!pullNumber) {
+  if (!owner || !repo || !pullNumber) {
     return 'No PR file context available.';
   }
 
@@ -33590,8 +33652,12 @@ async function getRawFileAtHead(octokit, githubContext, filePath, maxChars, logg
     return null;
   }
 
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
   const pullNumber = githubContext.payload.pull_request?.number || githubContext.payload.issue?.number;
+
+  if (!owner || !repo) {
+    return '[Raw file content unavailable: repository context missing]';
+  }
 
   try {
     const headSha = await resolveHeadSha(octokit, githubContext, pullNumber);
@@ -33639,7 +33705,10 @@ async function resolveHeadSha(octokit, githubContext, pullNumber) {
     return null;
   }
 
-  const { owner, repo } = githubContext.repo;
+  const { owner, repo } = resolveRepoRef(githubContext);
+  if (!owner || !repo) {
+    return null;
+  }
   const { data } = await octokit.rest.pulls.get({
     owner,
     repo,
@@ -33696,6 +33765,8 @@ module.exports = {
   getRelevantFileContent,
   buildPrompt,
   formatResponse,
+  resolveRepoRef,
+  resolveIssueNumber,
 };
 
 
@@ -40262,7 +40333,7 @@ const https = __nccwpck_require__(5692);
 
 const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = __nccwpck_require__(2500);
 const { parseCommand, isValid } = __nccwpck_require__(5055);
-const { checkForkAuthorization, getUnauthorizedMessage } = __nccwpck_require__(6495);
+const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = __nccwpck_require__(6495);
 const { handleAskCommand } = __nccwpck_require__(6630);
 const { handleSuggestCommand } = __nccwpck_require__(4361);
 const { handleCompareCommand } = __nccwpck_require__(3016);
@@ -40384,6 +40455,50 @@ function callZaiApi(apiKey, model, prompt) {
     req.write(body);
     req.end();
   });
+}
+
+async function enforceCommandAuthorization(context, octokit, owner, repo, options = {}) {
+  const {
+    issueNumber,
+    pullNumber,
+    replyToId,
+    isReviewComment = false,
+  } = options;
+
+  const commenter = getCommenter(context);
+  const authResult = await checkForkAuthorization(octokit, context, commenter);
+
+  if (authResult.authorized) {
+    return { authorized: true, commenter };
+  }
+
+  if (authResult.reason === null) {
+    core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
+    return { authorized: false, commenter, silent: true };
+  }
+
+  const authMessage = getUnauthorizedMessage(authResult.reason);
+  core.info(`Command authorization failed for ${commenter?.login || 'unknown'}: ${authResult.reason}`);
+
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    issueNumber,
+    authMessage,
+    AUTH_MARKER,
+    { replyToId, updateExisting: false, isReviewComment, pullNumber }
+  );
+
+  if (replyToId) {
+    try {
+      await setReaction(octokit, owner, repo, replyToId, REACTIONS.X);
+    } catch (error) {
+      core.warning(`Failed to set auth-failure reaction: ${error.message}`);
+    }
+  }
+
+  return { authorized: false, commenter, silent: false };
 }
 
 async function run() {
@@ -40511,42 +40626,17 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
   // Valid command - check authorization before dispatching
   core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
 
-  // Get commenter info for auth check
-  const commenter = comment?.user || context.payload.sender;
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-  // Check authorization using fork-aware auth check
-  const authResult = await checkForkAuthorization(octokit, context, commenter);
-
-  if (!authResult.authorized) {
-    // Silent block for fork PRs (reason: null per SECURITY.md)
-    if (authResult.reason === null) {
-      core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
-      return;
-    }
-
-    // For regular PRs, post an error message
-    core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
-    const pullNumber = context.payload.issue?.number;
-    await upsertComment(
-      octokit,
-      owner,
-      repo,
-      pullNumber,
-      getUnauthorizedMessage(),
-      AUTH_MARKER,
-      { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
-    );
-
-    if (commentId) {
-      try {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      } catch (error) {
-        core.warning(`Failed to set auth-failure reaction: ${error.message}`);
-      }
-    }
+  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
+    issueNumber: pullNumber,
+    pullNumber,
+    replyToId: commentId,
+    isReviewComment: false,
+  });
+  if (!authState.authorized) {
     return;
   }
+  const { commenter } = authState;
 
   let continuityState = null;
   try {
@@ -40613,7 +40703,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
       pullNumber,
       guidance,
       GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false }
+      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
     );
     core.info(`Posted guidance comment for error: ${errorType}`);
 
@@ -40630,41 +40720,17 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
   // Valid command - check authorization before dispatching
   core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
 
-  // Get commenter info for auth check
-  const commenter = comment?.user || context.payload.sender;
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-  // Check authorization using fork-aware auth check
-  const authResult = await checkForkAuthorization(octokit, context, commenter);
-
-  if (!authResult.authorized) {
-    // Silent block for fork PRs (reason: null per SECURITY.md)
-    if (authResult.reason === null) {
-      core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
-      return;
-    }
-
-    // For regular PRs, post an error message
-    core.info(`Unauthorized command attempt from: ${commenter?.login || 'unknown'}`);
-    await upsertComment(
-      octokit,
-      owner,
-      repo,
-      pullNumber,
-      getUnauthorizedMessage(),
-      AUTH_MARKER,
-      { replyToId: commentId, updateExisting: false }
-    );
-
-    if (commentId) {
-      try {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      } catch (error) {
-        core.warning(`Failed to set auth-failure reaction: ${error.message}`);
-      }
-    }
+  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
+    issueNumber: pullNumber,
+    pullNumber,
+    replyToId: commentId,
+    isReviewComment: true,
+  });
+  if (!authState.authorized) {
     return;
   }
+  const { commenter } = authState;
 
   // Load continuity state
   let continuityState = null;
@@ -40691,7 +40757,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
     pullNumber,
     `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
     PROGRESS_MARKER,
-    { replyToId: commentId, updateExisting: false }
+    { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
   );
 
   // Extract anchor metadata from review comment
