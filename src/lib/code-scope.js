@@ -184,9 +184,9 @@ function extractEnclosingBlock(content, anchorLine, options = {}) {
   }
 
   // Check if we actually found a meaningful block (not just the anchor line itself)
-  const isMeaninglyLarger = (blockEnd - blockStart) > (anchorLine - blockStart);
+  const isMeaningfullyLarger = (blockEnd - blockStart) > (anchorLine - blockStart);
   
-  if (!isMeaninglyLarger) {
+  if (!isMeaningfullyLarger) {
     // No real block found, return bounded local chunk
     const fallbackStart = clampLine(anchorLine - windowSize, maxLines);
     const fallbackEnd = clampLine(anchorLine + windowSize, maxLines);
@@ -311,7 +311,7 @@ function findBlockEnd(lines, blockStart, anchorLine, maxLines) {
   // Simple { } matching to find block end
   let braceDepth = 0;
   let foundOpenBrace = false;
-  let searchEnd = Math.min(maxLines, anchorLine + 100);
+  const searchEnd = maxLines;
 
   for (let i = blockStart; i <= searchEnd; i++) {
     const line = lines[i - 1]; // Convert to 0-indexed

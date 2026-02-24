@@ -30591,9 +30591,9 @@ function extractEnclosingBlock(content, anchorLine, options = {}) {
   }
 
   // Check if we actually found a meaningful block (not just the anchor line itself)
-  const isMeaninglyLarger = (blockEnd - blockStart) > (anchorLine - blockStart);
+  const isMeaningfullyLarger = (blockEnd - blockStart) > (anchorLine - blockStart);
   
-  if (!isMeaninglyLarger) {
+  if (!isMeaningfullyLarger) {
     // No real block found, return bounded local chunk
     const fallbackStart = clampLine(anchorLine - windowSize, maxLines);
     const fallbackEnd = clampLine(anchorLine + windowSize, maxLines);
@@ -30718,7 +30718,7 @@ function findBlockEnd(lines, blockStart, anchorLine, maxLines) {
   // Simple { } matching to find block end
   let braceDepth = 0;
   let foundOpenBrace = false;
-  let searchEnd = Math.min(maxLines, anchorLine + 100);
+  const searchEnd = maxLines;
 
   for (let i = blockStart; i <= searchEnd; i++) {
     const line = lines[i - 1]; // Convert to 0-indexed
@@ -32364,50 +32364,49 @@ async function handleCompareCommand(context) {
 
     // Step 3: Fetch base and head versions for each file (up to MAX_COMPARE_FILES)
     const filesToCompare = changedFiles.slice(0, MAX_COMPARE_FILES);
-    const filesData = [];
-
-    for (const file of filesToCompare) {
+    const filesData = await Promise.all(filesToCompare.map(async (file) => {
       const { filename, status } = file;
-      
-      // Fetch base version (may be 404 for new files)
+
+      const [baseResult, headResult] = await Promise.all([
+        status === 'added'
+          ? Promise.resolve(null)
+          : fetchFileAtRef(octokit, owner, repo, filename, baseRef, {
+              maxFileSize: MAX_FILE_CHARS,
+              maxFileLines: 10000,
+              patch: file.patch,
+              patchSide: 'old',
+            }),
+        status === 'removed'
+          ? Promise.resolve(null)
+          : fetchFileAtRef(octokit, owner, repo, filename, headRef, {
+              maxFileSize: MAX_FILE_CHARS,
+              maxFileLines: 10000,
+              patch: file.patch,
+              patchSide: 'new',
+            }),
+      ]);
+
       let oldVersion = null;
-      if (status !== 'added') {
-        const baseResult = await fetchFileAtRef(octokit, owner, repo, filename, baseRef, {
-          maxFileSize: MAX_FILE_CHARS,
-          maxFileLines: 10000,
-          patch: file.patch,
-          patchSide: 'old',
-        });
-        if (baseResult.success) {
-          oldVersion = baseResult.data;
-        } else if (baseResult.error?.status !== 404) {
-          logger.warn({ filename, error: baseResult.error }, 'Failed to fetch base version');
-        }
+      if (baseResult && baseResult.success) {
+        oldVersion = baseResult.data;
+      } else if (baseResult && baseResult.error?.status !== 404) {
+        logger.warn({ filename, error: baseResult.error }, 'Failed to fetch base version');
       }
 
-      // Fetch head version (may be 404 for deleted files)
       let newVersion = null;
-      if (status !== 'removed') {
-        const headResult = await fetchFileAtRef(octokit, owner, repo, filename, headRef, {
-          maxFileSize: MAX_FILE_CHARS,
-          maxFileLines: 10000,
-          patch: file.patch,
-          patchSide: 'new',
-        });
-        if (headResult.success) {
-          newVersion = headResult.data;
-        } else if (headResult.error?.status !== 404) {
-          logger.warn({ filename, error: headResult.error }, 'Failed to fetch head version');
-        }
+      if (headResult && headResult.success) {
+        newVersion = headResult.data;
+      } else if (headResult && headResult.error?.status !== 404) {
+        logger.warn({ filename, error: headResult.error }, 'Failed to fetch head version');
       }
 
-      filesData.push({
+      return {
         filename,
         status,
         oldVersion,
         newVersion,
-      });
-    }
+      };
+    }));
 
     // Step 4: Build the comparison prompt
     const prompt = buildComparePrompt(filesData, DEFAULT_MAX_CHARS, changedFiles.length);
