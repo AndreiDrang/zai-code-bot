@@ -44,6 +44,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Zai Code Bot
+        uses: AndreiDrang/zai-code-bot@v0.0.6
+        with:
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          ZAI_MODEL: ${{ vars.ZAI_MODEL }}
+          GITHUB_TOKEN: ${{ github.token }}
         uses: AndreiDrang/zai-code-bot@v0.0.1
         with:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
@@ -62,7 +67,16 @@ jobs:
 
 Commands are processed from PR issue comments and PR review comments. Supported prefixes: `/zai` and `@zai-bot`.
 
-| Command | Example | Description |
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/zai ask` | `/zai ask <question>` | Ask a question about the code changes in this PR |
+| `/zai review` | `/zai review [file]` | Review specific files or all changed files |
+| `/zai explain` | `/zai explain <lines>` | Explain selected lines (e.g., `/zai explain 10-25`) |
+| `/zai suggest` | `/zai suggest <prompt>` | Suggest improvements or refactoring ideas |
+| `/zai compare` | `/zai compare` | Compare old vs new behavior across the diff |
+| `/zai help` | `/zai help` | Show this help message |
+
+**Note:** Only collaborators (and PR authors on their own fork PRs) can use these commands.
 |---|---|---|
 | `/zai ask <question>` | `/zai ask what changed in auth flow?` | Ask about current PR changes |
 | `/zai review <path>` | `/zai review src/lib/auth.js` | Review one changed file |
