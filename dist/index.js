@@ -40512,7 +40512,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
   core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
 
   // Get commenter info for auth check
-  const commenter = comment?.user;
+  const commenter = comment?.user || context.payload.sender;
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
 
   // Check authorization using fork-aware auth check
@@ -40631,7 +40631,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
   core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
 
   // Get commenter info for auth check
-  const commenter = comment?.user;
+  const commenter = comment?.user || context.payload.sender;
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
 
   // Check authorization using fork-aware auth check

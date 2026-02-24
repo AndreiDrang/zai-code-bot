@@ -199,6 +199,44 @@ describe('Command Pipeline Integration', () => {
     assert.strictEqual(authResult.authorized, false);
   });
 
+  test('review comment auth falls back to sender when comment.user is missing', async () => {
+    const payload = {
+      action: 'created',
+      pull_request: {
+        number: 42,
+        user: { login: 'dependabot[bot]' },
+        head: { repo: { full_name: 'test-owner/test-repo' } },
+        base: { repo: { full_name: 'test-owner/test-repo' } },
+      },
+      comment: {
+        id: 777,
+        body: '/zai explain',
+        author_association: 'OWNER',
+      },
+      repository: {
+        owner: { login: 'test-owner' },
+        name: 'test-repo',
+      },
+      sender: {
+        login: 'test-owner',
+        type: 'User',
+      },
+    };
+
+    mockGithub.context.eventName = 'pull_request_review_comment';
+    mockGithub.context.payload = payload;
+
+    const commenter = payload.comment?.user || payload.sender;
+    const authResult = await auth.checkForkAuthorization(
+      mockOctokit,
+      mockGithub.context,
+      commenter
+    );
+
+    assert.strictEqual(commenter.login, 'test-owner');
+    assert.strictEqual(authResult.authorized, true);
+  });
+
   test('ask handler executes and formats response', () => {
     const handlerModule = handlers.ask;
     assert.ok(handlerModule);
