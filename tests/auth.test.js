@@ -10,7 +10,7 @@ const {
   AUTHORIZED_PERMISSIONS,
 } = require('../src/lib/auth');
 
-function createMockOctokit(permission, shouldThrow = false, errorStatus = null) {
+function createMockOctokit(permission, shouldThrow = false, errorStatus = null, pullRequestData = null) {
   return {
     rest: {
       repos: {
@@ -24,6 +24,14 @@ function createMockOctokit(permission, shouldThrow = false, errorStatus = null) 
             data: { permission },
           };
         },
+      },
+      pulls: {
+        get: async () => ({
+          data: pullRequestData || {
+            head: { repo: { fork: false } },
+            user: { login: 'pr-author' },
+          },
+        }),
       },
     },
   };
@@ -246,6 +254,20 @@ describe('checkForkAuthorization', () => {
     assert.strictEqual(result.authorized, true);
   });
 
+  test('allows fork PR creator even without collaborator permission', async () => {
+    const pullRequest = {
+      head: { repo: { fork: true } },
+      user: { login: 'pr-creator' },
+    };
+    const octokit = createMockOctokit('none');
+    const context = createMockContext(true, pullRequest);
+    const commenter = { login: 'pr-creator' };
+
+    const result = await checkForkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
+  });
+
   test('blocks non-collaborator on fork PR silently', async () => {
     const octokit = createMockOctokit('none');
     const context = createMockContext(true);
@@ -266,6 +288,28 @@ describe('checkForkAuthorization', () => {
 
     assert.strictEqual(result.authorized, false);
     assert.strictEqual(result.reason, null);
+  });
+
+  test('allows issue_comment fork PR creator when PR details are fetched', async () => {
+    const pullRequestData = {
+      head: { repo: { fork: true } },
+      user: { login: 'fork-author' },
+    };
+    const octokit = createMockOctokit('none', false, null, pullRequestData);
+    const context = {
+      repo: { owner: 'test-owner', repo: 'test-repo' },
+      payload: {
+        issue: {
+          number: 123,
+          pull_request: { url: 'https://api.github.test/pulls/123' },
+        },
+      },
+    };
+    const commenter = { login: 'fork-author' };
+
+    const result = await checkForkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
   });
 });
 

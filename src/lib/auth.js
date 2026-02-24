@@ -111,6 +111,27 @@ function isForkPullRequest(pullRequest) {
   return pullRequest.head.repo.fork === true;
 }
 
+async function getPullRequestForAuthorization(octokit, context) {
+  const directPullRequest = context?.payload?.pull_request;
+  if (directPullRequest) {
+    return directPullRequest;
+  }
+
+  const issuePullRequest = context?.payload?.issue?.pull_request;
+  const pullNumber = context?.payload?.issue?.number;
+  if (!issuePullRequest || !pullNumber) {
+    return null;
+  }
+
+  const { owner, repo } = context.repo;
+  const response = await octokit.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  });
+  return response?.data || null;
+}
+
 /**
  * Check authorization for fork PR scenarios
  * According to SECURITY.md:
@@ -123,7 +144,13 @@ function isForkPullRequest(pullRequest) {
  * @returns {Promise<{authorized: boolean, reason?: string}>}
  */
 async function checkForkAuthorization(octokit, context, commenter) {
-  const pullRequest = context.payload.pull_request;
+  let pullRequest = null;
+  try {
+    pullRequest = await getPullRequestForAuthorization(octokit, context);
+  } catch (_error) {
+    return checkAuthorization(octokit, context, commenter);
+  }
+
   const isFork = isForkPullRequest(pullRequest);
 
   // For non-fork PRs, use standard authorization
@@ -137,6 +164,14 @@ async function checkForkAuthorization(octokit, context, commenter) {
     return {
       authorized: false,
       reason: null, // Silent block for fork PRs
+    };
+  }
+
+  // Allow fork PR creator to use commands on their own PR.
+  const pullRequestAuthor = pullRequest?.user?.login;
+  if (pullRequestAuthor && commenter.login === pullRequestAuthor) {
+    return {
+      authorized: true,
     };
   }
 
@@ -176,6 +211,7 @@ module.exports = {
   isCollaborator,
   checkAuthorization,
   checkForkAuthorization,
+  getPullRequestForAuthorization,
   isForkPullRequest,
   getUnauthorizedMessage,
   getUnknownCommandMessage,
