@@ -175,24 +175,38 @@ async function checkForkAuthorization(octokit, context, commenter) {
     };
   }
 
-  // Allow repository owner to use commands on any PR (including Dependabot PRs)
+  // Allow repository owner, admin, or maintainer to use commands on any PR (including Dependabot PRs)
   const repoOwner = context?.repo?.owner;
+  
+  // First check: is this user the repo owner?
   if (repoOwner && commenter.login === repoOwner) {
     return {
       authorized: true,
+      reason: 'repo_owner',
     };
   }
 
+  // Check collaborator permission (admin, maintain, write, or read)
+  // This handles the case where repo owner wasn't detected but user has admin/maintainer perms
   const authResult = await checkAuthorization(octokit, context, commenter);
   
-  // If not authorized on fork PR, silent block
-  if (!authResult.authorized) {
+  // If authorized (any permission level including admin/maintainer), allow
+  if (authResult.authorized) {
     return {
-      authorized: false,
-      reason: null, // Silent block for fork PRs
+      authorized: true,
+      reason: authResult.reason || 'collaborator',
     };
   }
 
+  // For fork PRs from non-collaborators, silent block per SECURITY.md
+  if (isFork) {
+    return {
+      authorized: false,
+      reason: null, // Silent block
+    };
+  }
+
+  // For non-fork PRs, return the authorization result (will show error to user)
   return authResult;
 }
 

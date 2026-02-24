@@ -236,7 +236,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
       pullNumber,
       guidance,
       GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
+      { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
     );
     core.info(`Posted guidance comment for error: ${errorType}`);
 
@@ -277,7 +277,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
       pullNumber,
       getUnauthorizedMessage(),
       AUTH_MARKER,
-      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
+      { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
     );
 
     if (commentId) {
@@ -312,7 +312,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
     pullNumber,
     `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
     PROGRESS_MARKER,
-    { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
+    { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
   );
 
   core.info(`Authorized command from collaborator: ${commenter.login}`);
