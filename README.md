@@ -1,15 +1,19 @@
 # Zai Code Bot
 
-GitHub Action for automatic PR reviews and collaborator-gated `/zai` commands powered by Z.ai models.
+GitHub Action for automatic PR reviews and context-rich `/zai` commands powered by Z.ai models.
 
 ## Features
 
 - Automatic pull request review on `opened` and `synchronize`
 - Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai suggest`, `/zai compare`, `/zai help`
+- Context-aware command prompts with full-file, diff, and thread context
+- Inline review-comment support (`pull_request_review_comment`) with file/line anchors
+- `/zai explain` auto-detects selected line range from review comments
+- Large-file token protection using scoped windows/enclosing blocks instead of full-file dumps
 - Prefix normalization: use either `/zai ...` or `@zai-bot ...`
 - Threaded command replies with progress feedback and lifecycle reactions
 - Marker-based idempotent comments to avoid duplicate review spam
-- Fork-aware collaborator authorization checks before command execution
+- Fork-aware authorization with fork-PR creator command allowance
 
 ## Quickstart
 
@@ -20,8 +24,10 @@ name: Zai Code Bot
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
+    types: [created]
+  pull_request_review_comment:
     types: [created]
 
 permissions:
@@ -32,7 +38,7 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request) || github.event_name == 'pull_request_review_comment'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,7 +60,7 @@ jobs:
 
 ## Commands
 
-Commands are processed from PR comments only. Supported prefixes: `/zai` and `@zai-bot`.
+Commands are processed from PR issue comments and PR review comments. Supported prefixes: `/zai` and `@zai-bot`.
 
 | Command | Example | Description |
 |---|---|---|
@@ -70,7 +76,10 @@ Commands are processed from PR comments only. Supported prefixes: `/zai` and `@z
 - PR auto-review comments are idempotent and updated via hidden markers
 - Command replies are posted in-thread to the invoking comment
 - Reactions indicate status (`eyes`, `thinking`, `rocket`, `x`)
-- Command execution requires collaborator authorization
+- `/zai explain` can infer the target range from a selected line review comment when no explicit range is provided
+- `/zai suggest` uses anchor path/line context from review comments when available
+- `/zai compare` and `/zai review` use base/head or full-file context, not patch-only prompts
+- Command execution is authorization-gated; fork PR authors can run commands on their own PR
 
 ## Setup
 
