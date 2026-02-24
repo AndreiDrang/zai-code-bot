@@ -31587,6 +31587,7 @@ module.exports = {
 // Valid permission levels that authorize command execution
 // According to SECURITY.md: admin, maintain, write, or read (any is authorized)
 const AUTHORIZED_PERMISSIONS = new Set(['admin', 'maintain', 'write', 'read']);
+const AUTHORIZED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 
 // Timeout for GitHub API calls (in milliseconds)
 const API_TIMEOUT_MS = 10000;
@@ -31605,6 +31606,25 @@ function isRepoOwner(context, commenterLogin) {
   const ownerFromPayload = normalizeLogin(context?.payload?.repository?.owner?.login);
 
   return normalizedCommenter === ownerFromRepo || normalizedCommenter === ownerFromPayload;
+}
+
+function normalizeAssociation(value) {
+  return typeof value === 'string' ? value.trim().toUpperCase() : '';
+}
+
+function getCommentAuthorAssociation(context, commenter) {
+  const associationFromCommenter = normalizeAssociation(commenter?.author_association);
+  if (associationFromCommenter) {
+    return associationFromCommenter;
+  }
+
+  const associationFromPayload = normalizeAssociation(context?.payload?.comment?.author_association);
+  return associationFromPayload;
+}
+
+function isTrustedCommentAuthor(context, commenter) {
+  const association = getCommentAuthorAssociation(context, commenter);
+  return AUTHORIZED_ASSOCIATIONS.has(association);
 }
 
 /**
@@ -31671,6 +31691,13 @@ async function checkAuthorization(octokit, context, commenter) {
     return {
       authorized: true,
       reason: 'repo_owner',
+    };
+  }
+
+  if (isTrustedCommentAuthor(context, commenter)) {
+    return {
+      authorized: true,
+      reason: 'author_association',
     };
   }
 
@@ -31838,9 +31865,13 @@ module.exports = {
   getUnauthorizedMessage,
   getUnknownCommandMessage,
   AUTHORIZED_PERMISSIONS,
+  AUTHORIZED_ASSOCIATIONS,
   API_TIMEOUT_MS,
   isRepoOwner,
   normalizeLogin,
+  normalizeAssociation,
+  getCommentAuthorAssociation,
+  isTrustedCommentAuthor,
 };
 
 

@@ -7,9 +7,13 @@ const {
   isForkPullRequest,
   isRepoOwner,
   normalizeLogin,
+  normalizeAssociation,
+  getCommentAuthorAssociation,
+  isTrustedCommentAuthor,
   getUnauthorizedMessage,
   getUnknownCommandMessage,
   AUTHORIZED_PERMISSIONS,
+  AUTHORIZED_ASSOCIATIONS,
 } = require('../src/lib/auth');
 
 function createMockOctokit(permission, shouldThrow = false, errorStatus = null, pullRequestData = null) {
@@ -145,6 +149,18 @@ describe('checkAuthorization', () => {
 
     assert.strictEqual(result.authorized, true);
     assert.strictEqual(result.reason, 'repo_owner');
+  });
+
+  test('allows trusted author association without collaborator lookup', async () => {
+    const octokit = createMockOctokit(null, true, 403);
+    const context = createMockContext();
+    context.payload.comment = { author_association: 'MEMBER' };
+    const commenter = { login: 'org-member' };
+
+    const result = await checkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'author_association');
   });
 
   test('returns authorized for collaborator', async () => {
@@ -424,5 +440,58 @@ describe('isRepoOwner', () => {
   test('returns false for non-owner login', () => {
     const context = createMockContext();
     assert.strictEqual(isRepoOwner(context, 'another-user'), false);
+  });
+});
+
+describe('normalizeAssociation', () => {
+  test('normalizes casing and trims whitespace', () => {
+    assert.strictEqual(normalizeAssociation('  collaborator  '), 'COLLABORATOR');
+  });
+
+  test('returns empty string for invalid input', () => {
+    assert.strictEqual(normalizeAssociation(null), '');
+  });
+});
+
+describe('getCommentAuthorAssociation', () => {
+  test('prefers commenter association when present', () => {
+    const context = createMockContext();
+    context.payload.comment = { author_association: 'NONE' };
+    const commenter = { author_association: 'MEMBER' };
+    assert.strictEqual(getCommentAuthorAssociation(context, commenter), 'MEMBER');
+  });
+
+  test('falls back to payload comment association', () => {
+    const context = createMockContext();
+    context.payload.comment = { author_association: 'OWNER' };
+    assert.strictEqual(getCommentAuthorAssociation(context, { login: 'user' }), 'OWNER');
+  });
+});
+
+describe('isTrustedCommentAuthor', () => {
+  test('returns true for OWNER, MEMBER, and COLLABORATOR', () => {
+    const context = createMockContext();
+    context.payload.comment = { author_association: 'OWNER' };
+    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u1' }), true);
+
+    context.payload.comment = { author_association: 'MEMBER' };
+    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u2' }), true);
+
+    context.payload.comment = { author_association: 'COLLABORATOR' };
+    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u3' }), true);
+  });
+
+  test('returns false for untrusted association', () => {
+    const context = createMockContext();
+    context.payload.comment = { author_association: 'NONE' };
+    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u4' }), false);
+  });
+});
+
+describe('AUTHORIZED_ASSOCIATIONS', () => {
+  test('contains trusted author associations', () => {
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('OWNER'));
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('MEMBER'));
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('COLLABORATOR'));
   });
 });
