@@ -525,7 +525,7 @@ describe('Runtime-Path Command Matrix', () => {
     
     assert.strictEqual(result.success, false);
     assert.strictEqual(result.stage, 'auth');
-    assert.strictEqual(result.reason, 'You are not authorized to use this command.');
+    assert.strictEqual(result.reason, 'Authorization denied (author_association: UNKNOWN).');
   });
 
   test('fork user fails at auth stage', async () => {

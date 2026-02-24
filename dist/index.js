@@ -31587,7 +31587,7 @@ module.exports = {
 // Valid permission levels that authorize command execution
 // According to SECURITY.md: admin, maintain, write, or read (any is authorized)
 const AUTHORIZED_PERMISSIONS = new Set(['admin', 'maintain', 'write', 'read']);
-const AUTHORIZED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const AUTHORIZED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
 
 // Timeout for GitHub API calls (in milliseconds)
 const API_TIMEOUT_MS = 10000;
@@ -31706,7 +31706,9 @@ async function checkAuthorization(octokit, context, commenter) {
     };
   }
 
-  if (isTrustedCommentAuthor(context, commenter)) {
+  const authorAssociation = getCommentAuthorAssociation(context, commenter);
+
+  if (AUTHORIZED_ASSOCIATIONS.has(authorAssociation)) {
     return {
       authorized: true,
       reason: 'author_association',
@@ -31727,7 +31729,7 @@ async function checkAuthorization(octokit, context, commenter) {
     // User is not authorized
     return {
       authorized: false,
-      reason: 'You are not authorized to use this command.',
+      reason: `Authorization denied (author_association: ${authorAssociation || 'UNKNOWN'}).`,
     };
   } catch (_error) {
     // Handle API errors gracefully - deny access on error for security
@@ -31860,6 +31862,10 @@ function getUnauthorizedMessage(reason) {
 
   if (!normalizedReason || normalizedReason === 'You are not authorized to use this command.') {
     return 'You are not authorized to use this command.';
+  }
+
+  if (normalizedReason.startsWith('Authorization denied (author_association:')) {
+    return `${normalizedReason} Allowed associations: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR.`;
   }
 
   if (normalizedReason === 'Unable to identify commenter') {

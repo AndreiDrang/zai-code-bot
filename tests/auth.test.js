@@ -164,6 +164,18 @@ describe('checkAuthorization', () => {
     assert.strictEqual(result.reason, 'author_association');
   });
 
+  test('allows contributor association without collaborator lookup', async () => {
+    const octokit = createMockOctokit('none');
+    const context = createMockContext();
+    context.payload.comment = { author_association: 'CONTRIBUTOR' };
+    const commenter = { login: 'thread-author' };
+
+    const result = await checkAuthorization(octokit, context, commenter);
+
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'author_association');
+  });
+
   test('returns authorized for collaborator', async () => {
     const octokit = createMockOctokit('write');
     const context = createMockContext();
@@ -183,7 +195,7 @@ describe('checkAuthorization', () => {
     const result = await checkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.reason, 'You are not authorized to use this command.');
+    assert.strictEqual(result.reason, 'Authorization denied (author_association: UNKNOWN).');
   });
 
   test('returns unauthorized for null commenter', async () => {
@@ -293,7 +305,7 @@ describe('checkForkAuthorization', () => {
     const result = await checkForkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.reason, 'You are not authorized to use this command.');
+    assert.strictEqual(result.reason, 'Authorization denied (author_association: UNKNOWN).');
   });
 
   test('allows collaborator on fork PR', async () => {
@@ -394,6 +406,12 @@ describe('getUnauthorizedMessage', () => {
   test('returns specific guidance for temporary auth verification failures', () => {
     const message = getUnauthorizedMessage('Authorization check failed. Please try again later.');
     assert.ok(message.includes('Authorization could not be verified'));
+  });
+
+  test('returns association-specific denial details when available', () => {
+    const message = getUnauthorizedMessage('Authorization denied (author_association: NONE).');
+    assert.ok(message.includes('author_association: NONE'));
+    assert.ok(message.includes('Allowed associations: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR'));
   });
 
   test('does not expose internal details', () => {
@@ -510,7 +528,7 @@ describe('getCommenter', () => {
 });
 
 describe('isTrustedCommentAuthor', () => {
-  test('returns true for OWNER, MEMBER, and COLLABORATOR', () => {
+  test('returns true for OWNER, MEMBER, COLLABORATOR, and CONTRIBUTOR', () => {
     const context = createMockContext();
     context.payload.comment = { author_association: 'OWNER' };
     assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u1' }), true);
@@ -520,12 +538,15 @@ describe('isTrustedCommentAuthor', () => {
 
     context.payload.comment = { author_association: 'COLLABORATOR' };
     assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u3' }), true);
+
+    context.payload.comment = { author_association: 'CONTRIBUTOR' };
+    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u4' }), true);
   });
 
   test('returns false for untrusted association', () => {
     const context = createMockContext();
     context.payload.comment = { author_association: 'NONE' };
-    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u4' }), false);
+    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u5' }), false);
   });
 });
 
@@ -534,5 +555,6 @@ describe('AUTHORIZED_ASSOCIATIONS', () => {
     assert.ok(AUTHORIZED_ASSOCIATIONS.has('OWNER'));
     assert.ok(AUTHORIZED_ASSOCIATIONS.has('MEMBER'));
     assert.ok(AUTHORIZED_ASSOCIATIONS.has('COLLABORATOR'));
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('CONTRIBUTOR'));
   });
 });
