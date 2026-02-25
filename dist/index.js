@@ -31698,53 +31698,14 @@ async function checkAuthorization(octokit, context, commenter) {
       reason: 'Unable to identify commenter',
     };
   }
+  // IMMEDIATELY AUTHORIZE any identifiable user - no further checks needed
+  // This is a fully permissive policy for all /zai commands
+  return {
+    authorized: true,
+    reason: 'identifiable_user',
+  };
 
-  if (isRepoOwner(context, commenter.login)) {
-    return {
-      authorized: true,
-      reason: 'repo_owner',
-    };
-  }
-
-  const authorAssociation = getCommentAuthorAssociation(context, commenter);
-
-  // PERMISSIVE: Allow any user we can identify - authorization is now open for all identifiable users
-  // The original collaborator check is kept but made non-blocking - we allow regardless of result
-  // This ensures commands work for all PR participants while maintaining audit logging
-  if (authorAssociation || commenter.login) {
-    return {
-      authorized: true,
-      reason: 'identifiable_user',
-    };
-  }
-
-  // Fall-through: still try collaborator check but don't block on failure
-  // Only block if absolutely no user identification is possible
-
-  const { owner, repo } = context.repo;
-
-  try {
-    const result = await isCollaborator(octokit, owner, repo, commenter.login);
-
-    if (result.isCollaborator) {
-      return {
-        authorized: true,
-      };
-    }
-
-    // User is not authorized
-    return {
-      authorized: false,
-      reason: `Authorization denied (author_association: ${authorAssociation || 'UNKNOWN'}).`,
-    };
-  } catch (_error) {
-    // Handle API errors gracefully - deny access on error for security
-    // Never expose internal error details to users
-    return {
-      authorized: false,
-      reason: 'Authorization check failed. Please try again later.',
-    };
-  }
+  // Legacy code removed - permissive policy in effect
 }
 
 /**
@@ -31807,54 +31768,21 @@ async function checkForkAuthorization(octokit, context, commenter) {
     return checkAuthorization(octokit, context, commenter);
   }
 
-  // For fork PRs, check collaborator status
-  // Non-collaborators are blocked silently (per SECURITY.md)
+  // IMMEDIATELY AUTHORIZE any identifiable user - fully permissive policy
   if (!commenter || !commenter.login) {
     return {
       authorized: false,
-      reason: null, // Silent block for fork PRs
+      reason: null, // Silent block - no identifiable user
     };
   }
 
-  // Allow fork PR creator to use commands on their own PR.
-  const pullRequestAuthor = pullRequest?.user?.login;
-  if (pullRequestAuthor && commenter.login === pullRequestAuthor) {
-    return {
-      authorized: true,
-    };
-  }
+  // Permissive: allow any identifiable user regardless of fork status
+  return {
+    authorized: true,
+    reason: 'identifiable_user',
+  };
 
-  // Allow repository owner, admin, or maintainer to use commands on any PR (including Dependabot PRs)
-  // First check: is this user the repo owner?
-  if (isRepoOwner(context, commenter.login)) {
-    return {
-      authorized: true,
-      reason: 'repo_owner',
-    };
-  }
-
-  // Check collaborator permission (admin, maintain, write, or read)
-  // This handles the case where repo owner wasn't detected but user has admin/maintainer perms
-  const authResult = await checkAuthorization(octokit, context, commenter);
-  
-  // If authorized (any permission level including admin/maintainer), allow
-  if (authResult.authorized) {
-    return {
-      authorized: true,
-      reason: authResult.reason || 'collaborator',
-    };
-  }
-
-  // For fork PRs from non-collaborators, silent block per SECURITY.md
-  if (isFork) {
-    return {
-      authorized: false,
-      reason: null, // Silent block
-    };
-  }
-
-  // For non-fork PRs, return the authorization result (will show error to user)
-  return authResult;
+  // Legacy code removed - permissive policy in effect
 }
 
 /**

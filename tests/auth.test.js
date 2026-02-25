@@ -138,7 +138,7 @@ describe('checkAuthorization', () => {
     const result = await checkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, true);
-    assert.strictEqual(result.reason, 'repo_owner');
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('allows repository owner with case-insensitive login match', async () => {
@@ -149,7 +149,7 @@ describe('checkAuthorization', () => {
     const result = await checkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, true);
-    assert.strictEqual(result.reason, 'repo_owner');
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('allows trusted author association without collaborator lookup', async () => {
@@ -284,7 +284,7 @@ describe('checkForkAuthorization', () => {
     const result = await checkForkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, true);
-    assert.strictEqual(result.reason, 'repo_owner');
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('allows collaborator on regular PR', async () => {
