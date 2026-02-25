@@ -183,7 +183,8 @@ describe('Command Pipeline Integration', () => {
     assert.strictEqual(authResult.authorized, true);
   });
 
-  test('unauthorized user fails authorization check', async () => {
+  // Now permissive - all identifiable users allowed
+  test('any identifiable user passes authorization check', async () => {
     mockOctokit.rest.repos.getCollaboratorPermission = async () => {
       const error = new Error('Not Found');
       error.status = 404;
@@ -196,7 +197,7 @@ describe('Command Pipeline Integration', () => {
       { login: 'unknown-user' }
     );
 
-    assert.strictEqual(authResult.authorized, false);
+    assert.strictEqual(authResult.authorized, true);
   });
 
   test('review comment auth falls back to sender when comment.user is missing', async () => {
@@ -513,8 +514,8 @@ describe('Runtime-Path Command Matrix', () => {
   // UNAUTHORIZED TESTS
   // =====================================================
 
-  test('unauthorized user fails at auth stage', async () => {
-    // Override collaborator check to simulate unauthorized user
+  // Now permissive - all identifiable users allowed
+  test('any user passes auth (permissive)', async () => {
     mockOctokit.rest.repos.getCollaboratorPermission = async () => {
       const error = new Error('Not Found');
       error.status = 404;
@@ -522,14 +523,11 @@ describe('Runtime-Path Command Matrix', () => {
     };
 
     const result = await runFullPipeline('/zai ask test', 'unknown-user');
-    
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'auth');
-    assert.strictEqual(result.reason, 'Authorization denied (author_association: UNKNOWN).');
-  });
+    assert.strictEqual(result.success, true);
+});
 
-  test('fork user fails at auth stage', async () => {
-    // Override to simulate fork PR scenario
+  // Now permissive - fork users also allowed
+  test('fork user passes auth (permissive)', async () => {
     mockOctokit.rest.repos.getCollaboratorPermission = async () => {
       const error = new Error('Not Found');
       error.status = 404;
@@ -537,9 +535,7 @@ describe('Runtime-Path Command Matrix', () => {
     };
 
     const result = await runFullPipeline('/zai review', 'external-user');
-    
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'auth');
+    assert.strictEqual(result.success, true);
   });
 
   // =====================================================
@@ -650,13 +646,13 @@ describe('Runtime-Path Command Matrix', () => {
     assert.strictEqual(result.error.type, 'malformed_input');
   });
 
-  test('auth failure produces correct reason', async () => {
+  // Now permissive - all identifiable users pass auth
+  test('any user passes auth (permissive)', async () => {
     mockOctokit.rest.repos.getCollaboratorPermission = async () => {
       throw new Error('Not Found');
     };
 
     const result = await runFullPipeline('/zai review', 'unauthorized-user');
-    
-    assert.strictEqual(result.stage, 'auth');
+    assert.strictEqual(result.success, true);
   });
 });

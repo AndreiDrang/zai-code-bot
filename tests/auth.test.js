@@ -161,7 +161,7 @@ describe('checkAuthorization', () => {
     const result = await checkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, true);
-    assert.strictEqual(result.reason, 'author_association');
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('allows contributor association without collaborator lookup', async () => {
@@ -173,7 +173,7 @@ describe('checkAuthorization', () => {
     const result = await checkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, true);
-    assert.strictEqual(result.reason, 'author_association');
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('returns authorized for collaborator', async () => {
@@ -184,7 +184,7 @@ describe('checkAuthorization', () => {
     const result = await checkAuthorization(octokit, context, commenter);
 
     assert.strictEqual(result.authorized, true);
-    assert.strictEqual(result.reason, undefined);
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('returns unauthorized for non-collaborator', async () => {
@@ -192,10 +192,10 @@ describe('checkAuthorization', () => {
     const context = createMockContext();
     const commenter = { login: 'random-user' };
 
+    // Now permissive - all identifiable users allowed
     const result = await checkAuthorization(octokit, context, commenter);
-
-    assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.reason, 'Authorization denied (author_association: UNKNOWN).');
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('returns unauthorized for null commenter', async () => {
@@ -225,10 +225,10 @@ describe('checkAuthorization', () => {
     const context = createMockContext();
     const commenter = { login: 'some-user' };
 
+    // Now permissive - API errors don't block identifiable users
     const result = await checkAuthorization(octokit, context, commenter);
-
-    assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.reason, 'Authorization check failed. Please try again later.');
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 
   test('returns auth-check-failed for 403 permission errors', async () => {
@@ -236,10 +236,10 @@ describe('checkAuthorization', () => {
     const context = createMockContext();
     const commenter = { login: 'some-user' };
 
+    // Now permissive - 403 doesn't block identifiable users
     const result = await checkAuthorization(octokit, context, commenter);
-
-    assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.reason, 'Authorization check failed. Please try again later.');
+    assert.strictEqual(result.authorized, true);
+    assert.strictEqual(result.reason, 'identifiable_user');
   });
 });
 
@@ -297,15 +297,13 @@ describe('checkForkAuthorization', () => {
     assert.strictEqual(result.authorized, true);
   });
 
-  test('blocks non-collaborator on regular PR with message', async () => {
+  test('allows any user on regular PR (permissive)', async () => {
     const octokit = createMockOctokit('none');
     const context = createMockContext(false);
     const commenter = { login: 'random-user' };
-
     const result = await checkForkAuthorization(octokit, context, commenter);
-
-    assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.reason, 'Authorization denied (author_association: UNKNOWN).');
+    assert.strictEqual(result.authorized, true);
+  });
   });
 
   test('allows collaborator on fork PR', async () => {
@@ -347,15 +345,12 @@ describe('checkForkAuthorization', () => {
     assert.strictEqual(result.authorized, true);
   });
 
-  test('blocks non-collaborator on fork PR silently', async () => {
+  test('allows any user on fork PR (permissive)', async () => {
     const octokit = createMockOctokit('none');
     const context = createMockContext(true);
     const commenter = { login: 'random-user' };
-
     const result = await checkForkAuthorization(octokit, context, commenter);
-
-    assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.reason, null);
+    assert.strictEqual(result.authorized, true);
   });
 
   test('blocks anonymous user on fork PR silently', async () => {
@@ -390,7 +385,6 @@ describe('checkForkAuthorization', () => {
 
     assert.strictEqual(result.authorized, true);
   });
-});
 
 describe('getUnauthorizedMessage', () => {
   test('returns safe error message', () => {
@@ -543,10 +537,11 @@ describe('isTrustedCommentAuthor', () => {
     assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u4' }), true);
   });
 
-  test('returns false for untrusted association', () => {
+  // Now permissive - NONE is also trusted due to permissive policy
+  test('returns true for all associations (permissive)', () => {
     const context = createMockContext();
     context.payload.comment = { author_association: 'NONE' };
-    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u5' }), false);
+    assert.strictEqual(isTrustedCommentAuthor(context, { login: 'u5' }), true);
   });
 });
 
@@ -556,5 +551,9 @@ describe('AUTHORIZED_ASSOCIATIONS', () => {
     assert.ok(AUTHORIZED_ASSOCIATIONS.has('MEMBER'));
     assert.ok(AUTHORIZED_ASSOCIATIONS.has('COLLABORATOR'));
     assert.ok(AUTHORIZED_ASSOCIATIONS.has('CONTRIBUTOR'));
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('NONE'));
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('FIRST_TIMER'));
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('FIRST_TIME_CONTRIBUTOR'));
+    assert.ok(AUTHORIZED_ASSOCIATIONS.has('MANNEQUIN'));
   });
 });

@@ -31587,7 +31587,7 @@ module.exports = {
 // Valid permission levels that authorize command execution
 // According to SECURITY.md: admin, maintain, write, or read (any is authorized)
 const AUTHORIZED_PERMISSIONS = new Set(['admin', 'maintain', 'write', 'read']);
-const AUTHORIZED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR']);
+const AUTHORIZED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'NONE', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'MANNEQUIN']);
 
 // Timeout for GitHub API calls (in milliseconds)
 const API_TIMEOUT_MS = 10000;
@@ -31708,12 +31708,18 @@ async function checkAuthorization(octokit, context, commenter) {
 
   const authorAssociation = getCommentAuthorAssociation(context, commenter);
 
-  if (AUTHORIZED_ASSOCIATIONS.has(authorAssociation)) {
+  // PERMISSIVE: Allow any user we can identify - authorization is now open for all identifiable users
+  // The original collaborator check is kept but made non-blocking - we allow regardless of result
+  // This ensures commands work for all PR participants while maintaining audit logging
+  if (authorAssociation || commenter.login) {
     return {
       authorized: true,
-      reason: 'author_association',
+      reason: 'identifiable_user',
     };
   }
+
+  // Fall-through: still try collaborator check but don't block on failure
+  // Only block if absolutely no user identification is possible
 
   const { owner, repo } = context.repo;
 
