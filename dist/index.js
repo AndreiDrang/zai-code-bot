@@ -40586,9 +40586,9 @@ async function run() {
   if (eventType === 'pull_request') {
     await handlePullRequestEvent(context, apiKey, model, owner, repo);
   } else if (eventType === 'issue_comment_pr') {
-    await handleIssueCommentEvent(context, apiKey, model, owner, repo);
+    await handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
   } else if (eventType === 'pull_request_review_comment') {
-    await handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo);
+    await handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
   }
 }
 
@@ -40642,7 +40642,7 @@ async function handlePullRequestEvent(context, apiKey, model, owner, repo) {
   }
 }
 
-async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
+async function handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout) {
   const comment = context.payload.comment;
   const commentBody = comment?.body || '';
   const commentId = comment?.id;
@@ -40727,14 +40727,14 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo) {
   );
 
   core.info(`Authorized command from collaborator: ${commenter.login}`);
-  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, {
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, {
     commentId,
     continuityState,
     commenter,
   });
 }
 
-async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo) {
+async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo, zaiTimeout) {
   const comment = context.payload.comment;
   const commentBody = comment?.body || '';
   const commentId = comment?.id;
@@ -40831,7 +40831,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
   const headRef = context.payload.pull_request?.head?.ref || null;
 
   core.info(`Authorized command from collaborator: ${commenter.login}`);
-  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, {
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, {
     commentId,
     continuityState,
     commenter,
@@ -40843,7 +40843,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
   });
 }
 
-async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, options = {}) {
+async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, options = {}) {
   const { command, args } = parseResult;
   const pullNumber = context.payload.issue?.number || context.payload.pull_request?.number;
   const { 
