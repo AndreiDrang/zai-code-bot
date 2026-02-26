@@ -16,6 +16,10 @@ inputs:
     description: "GitHub token for API access"
     required: false
     default: ${{ github.token }}
+  ZAI_TIMEOUT:
+    description: "Z.ai API request timeout in milliseconds"
+    required: false
+    default: "30000"
 runs:
   using: "node20"
   main: "dist/index.js"

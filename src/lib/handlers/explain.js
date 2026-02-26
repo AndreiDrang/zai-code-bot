@@ -238,69 +238,63 @@ async function handleExplainCommand(context, args) {
   // Step 6: Build prompt with scope result
   const { prompt, truncated } = buildExplainPrompt(resolvedPath, scopeResult, startLine, endLine);
 
-  // Step 7: Call Z.ai API
   try {
-    logger.info({ path: resolvedPath, startLine, endLine }, 'Calling Z.ai API for explanation');
+    // Step 7: Call Z.ai API with fallback prompt generator
+    // The fallback generator creates a compact prompt (target only, 3000 chars max)
+    // after timeout errors on retry attempts
+    const createFallbackPrompt = () => {
+      const compactScope = {
+        target: scopeResult.target,
+        surrounding: scopeResult.target, // Reduce surrounding to just target
+      };
+      const compact = buildExplainPrompt(resolvedPath, compactScope, startLine, endLine, Math.min(DEFAULT_MAX_CHARS, 3000));
+      return {
+        prompt: compact.prompt,
+        apiKey,
+        model
+      };
+    };
 
     const result = await apiClient.call({
       apiKey,
       model,
-      prompt
+      prompt,
+      onFallback: (info) => {
+        logger.info({ 
+          attempt: info.attempt, 
+          originalError: info.originalError?.message 
+        }, 'Switching to compact prompt after timeout');
+      },
+      fallbackPrompt: createFallbackPrompt
     });
+
+    // Check if we used fallback and should show a note
+    if (result.usedFallback) {
+      logger.info('Used compact fallback prompt due to timeouts');
+    }
 
     if (!result.success) {
       const errorMsg = result.error?.message || 'Failed to get explanation';
-      logger.warn({ error: errorMsg, retry: true }, 'API call failed, retrying with compact explain prompt');
+      const attempts = result.error?.attempts || 1;
+      const duration = result.error?.totalDuration || 0;
+      logger.error({ error: errorMsg, attempts, totalDuration: duration }, 'Explain API call failed after all retries');
 
-      const compactScope = {
-        target: scopeResult.target,
-        surrounding: scopeResult.target,
-      };
-      const compact = buildExplainPrompt(resolvedPath, compactScope, startLine, endLine, Math.min(DEFAULT_MAX_CHARS, 3000));
-      const retryResult = await apiClient.call({
-        apiKey,
-        model,
-        prompt: compact.prompt,
-      });
-
-      if (!retryResult.success) {
-        const retryErrorMsg = retryResult.error?.message || errorMsg;
-        logger.error({ error: retryErrorMsg }, 'Explain retry API call failed');
-        await upsertComment(
-          octokit, owner, repo, issueNumber,
-          `**Error:** ${retryErrorMsg}`,
-          EXPLAIN_MARKER,
-          commentOptions
-        );
-        if (commentId) {
-          await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-        }
-        return { success: false, error: retryErrorMsg };
-      }
-
-      let retryResponse = retryResult.data;
-      if (compact.truncated) {
-        retryResponse += '\n\n_(Note: Compact context was used due to model limits)_';
-      }
-
-      const retryFormatted = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${retryResponse}`;
       await upsertComment(
         octokit, owner, repo, issueNumber,
-        retryFormatted,
+        `**Error:** ${errorMsg}${result.usedFallback ? ' (tried compact prompt)' : ''}`,
         EXPLAIN_MARKER,
         commentOptions
       );
-      // Add error reaction if commentId available
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
-      return { success: true };
+      return { success: false, error: errorMsg };
     }
 
     let response = result.data;
 
-    if (truncated) {
-      response += '\n\n_(Note: Context was truncated due to size limits)_';
+    if (truncated || result.usedFallback) {
+      response += '\n\n_(Note: Context was ' + (result.usedFallback ? 'reduced due to API latency' : 'truncated due to size limits') + ')_';
     }
 
     const formattedResponse = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${response}`;
@@ -319,7 +313,6 @@ async function handleExplainCommand(context, args) {
 
     logger.info({ path: resolvedPath, startLine, endLine }, 'Explanation posted successfully');
     return { success: true };
-
   } catch (error) {
     logger.error({ error: error.message }, 'Explain command failed');
 

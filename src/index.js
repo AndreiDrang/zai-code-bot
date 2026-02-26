@@ -175,7 +175,7 @@ async function enforceCommandAuthorization(context, octokit, owner, repo, option
 async function run() {
   const apiKey = core.getInput('ZAI_API_KEY', { required: true });
   const model = core.getInput('ZAI_MODEL') || 'glm-4.7';
-  
+  const zaiTimeout = parseInt(core.getInput('ZAI_TIMEOUT') || '30000', 10);
 
   const { context } = github;
   const { owner, repo } = context.repo;
@@ -497,7 +497,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     issueNumber: pullNumber,
     commentId,
     changedFiles,
-    apiClient: createApiClient(),
+    apiClient: createApiClient({ timeout: zaiTimeout }),
     apiKey,
     model,
     logger,

@@ -45,7 +45,9 @@ describe('callWithRetry', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
-    assert.strictEqual(result, 'success');
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.data, 'success');
+    assert.strictEqual(result.usedFallback, false);
     assert.strictEqual(attempts, 1);
   });
 
@@ -60,7 +62,9 @@ describe('callWithRetry', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
-    assert.strictEqual(result, 'success');
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.data, 'success');
+    assert.strictEqual(result.usedFallback, false);
     assert.strictEqual(attempts, 3);
   });
 

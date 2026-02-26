@@ -31251,6 +31251,11 @@ module.exports = {
 /**
  * Hardened API client with timeout, retry, and error handling.
  * Provides reliability improvements for the Z.ai API calls.
+ * 
+ * Features:
+ * - Progressive timeout reduction on retries
+ * - Fallback prompt mechanism for early recovery
+ * - Detailed timing logs for diagnostics
  */
 
 const https = __nccwpck_require__(5692);
@@ -31260,6 +31265,9 @@ const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 2000; // 2 seconds
 
+// Progressive timeout multipliers (each retry gets shorter timeout)
+// 1st attempt: 100%, 2nd: 67%, 3rd: 50%, 4th: 33%
+const PROGRESSIVE_TIMEOUT_MULTIPLIERS = [1.0, 0.67, 0.5, 0.33];
 // API endpoint (matching existing implementation)
 const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
 
@@ -31280,21 +31288,60 @@ function createApiClient(config = {}) {
   const timeout = config.timeout ?? DEFAULT_TIMEOUT_MS;
   const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
   const baseDelay = config.baseDelay ?? DEFAULT_BASE_DELAY_MS;
+  const fallbackPrompt = config.fallbackPrompt ?? null; // Optional fallback prompt generator
 
   return {
     /**
-     * Makes an API call with timeout and retry support.
+     * Makes an API call with timeout, retry support, and optional fallback.
      * @param {Object} params - API call parameters
      * @param {string} params.apiKey - API authentication key
      * @param {string} params.model - Model identifier
      * @param {string} params.prompt - Prompt content
-     * @returns {Promise<{success: boolean, data?: string, error?: Object}>}
+     * @param {Function} [params.onFallback] - Optional callback when fallback is triggered
+     * @returns {Promise<{success: boolean, data?: string, error?: Object, usedFallback?: boolean}>}
      */
-    async call({ apiKey, model, prompt }) {
-      const makeRequest = () => makeApiRequest({ apiKey, model, prompt, timeout });
-      const options = { maxRetries, baseDelay };
+    async call({ apiKey, model, prompt, onFallback, fallbackPrompt: callFallbackPrompt }) {
+      const options = { 
+        maxRetries, 
+        baseDelay, 
+        baseTimeout: timeout,
+        fallbackPrompt: callFallbackPrompt || fallbackPrompt, // Per-call fallback takes precedence
+        onFallback,
+        apiKey,
+        model
+      };
 
-      return callWithRetry(makeRequest, options);
+      return callWithRetry(
+        (attempt, currentTimeout, fallbackData) => {
+          // If fallbackData is provided, use it instead of original prompt
+          const actualPrompt = fallbackData?.prompt || prompt;
+          const actualApiKey = fallbackData?.apiKey || apiKey;
+          const actualModel = fallbackData?.model || model;
+          
+          return makeApiRequest({ 
+            apiKey: actualApiKey, 
+            model: actualModel, 
+            prompt: actualPrompt, 
+            timeout: currentTimeout 
+          });
+        },
+        options
+      );
+    },
+
+    /**
+     * Creates a new client with a fallback prompt generator.
+     * The fallback is used after timeout on retry attempts.
+     * @param {Function} fallbackFn - Function that returns a compact prompt
+     * @returns {Object} New API client with fallback configured
+     */
+    withFallback(fallbackFn) {
+      return createApiClient({
+        timeout,
+        maxRetries,
+        baseDelay,
+        fallbackPrompt: fallbackFn
+      });
     },
 
     // Expose config for testing/debugging
@@ -31303,53 +31350,136 @@ function createApiClient(config = {}) {
 }
 
 /**
- * Generic retry wrapper with exponential backoff.
- * @param {Function} fn - Async function to execute
+ * Generic retry wrapper with exponential backoff and progressive timeout.
+ * Supports fallback prompt mechanism for early recovery from timeouts.
+ * 
+ * @param {Function} fn - Async function to execute, receives (attempt, currentTimeout)
  * @param {Object} options - Retry options
  * @param {number} [options.maxRetries=3] - Maximum retry attempts
  * @param {number} [options.baseDelay=2000] - Base delay in milliseconds
- * @returns {Promise<*>} Result of the function call
+ * @param {number} [options.baseTimeout=30000] - Base timeout for first attempt
+ * @param {Function} [options.fallbackPrompt] - Generator for fallback prompt
+ * @param {Function} [options.onFallback] - Callback when fallback is triggered
+ * @returns {Promise<{success: boolean, data?: string, error?: Object, usedFallback?: boolean}>}
  */
 async function callWithRetry(fn, options = {}) {
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
   const baseDelay = options.baseDelay ?? DEFAULT_BASE_DELAY_MS;
+  const baseTimeout = options.baseTimeout ?? DEFAULT_TIMEOUT_MS;
+  const fallbackPrompt = options.fallbackPrompt;
+  const onFallback = options.onFallback;
 
   let lastError;
+  let usedFallback = false;
+  let currentPrompt = null; // Will be set when fallback is used
+
+  const startTime = Date.now();
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Calculate progressive timeout for this attempt
+    const timeoutMultiplier = PROGRESSIVE_TIMEOUT_MULTIPLIERS[Math.min(attempt, PROGRESSIVE_TIMEOUT_MULTIPLIERS.length - 1)];
+    const currentTimeout = Math.max(10000, Math.floor(baseTimeout * timeoutMultiplier)); // Minimum 10s
+
+    const attemptStart = Date.now();
+
     try {
-      return await fn();
+      const result = await fn(attempt, currentTimeout, null); // null = no fallback data
+      const attemptDuration = Date.now() - attemptStart;
+      const totalDuration = Date.now() - startTime;
+      
+      // Log successful attempt with timing
+      if (typeof process !== 'undefined' && process.env?.ZAI_DEBUG) {
+        console.error(`[api.js] Attempt ${attempt + 1} succeeded in ${attemptDuration}ms (total: ${totalDuration}ms, timeout: ${currentTimeout}ms)`);
+      }
+      
+      return {
+        success: true,
+        data: result,
+        usedFallback
+      };
     } catch (error) {
       lastError = error;
+      const attemptDuration = Date.now() - attemptStart;
+      const totalDuration = Date.now() - startTime;
       const categorized = categorizeError(error);
+
+      // Log failed attempt with timing
+      if (typeof process !== 'undefined' && process.env?.ZAI_DEBUG) {
+        console.error(`[api.js] Attempt ${attempt + 1} failed after ${attemptDuration}ms (total: ${totalDuration}ms, timeout: ${currentTimeout}ms): ${error.message}`);
+      }
+
+      // On timeout errors after 2nd attempt, try fallback prompt if available
+      if (categorized.category === 'timeout' && attempt >= 1 && fallbackPrompt && !usedFallback) {
+        const fallbackResult = fallbackPrompt();
+        if (fallbackResult && fallbackResult.prompt) {
+          usedFallback = true;
+          currentPrompt = fallbackResult.prompt;
+          const fallbackData = {
+            prompt: fallbackResult.prompt,
+            apiKey: fallbackResult.apiKey || options.apiKey,
+            model: fallbackResult.model || options.model
+          };
+          
+          // Notify caller that fallback is being used
+          if (onFallback) {
+            onFallback({ attempt, originalError: error, fallbackInfo: fallbackResult });
+          }
+          
+          // Update fn to pass fallbackData on subsequent calls
+          const originalFn = fn;
+          fn = (att, timeout, data) => {
+            // Always use fallbackData if we've switched to fallback
+            return originalFn(att, timeout, fallbackData);
+          };
+          
+          if (typeof process !== 'undefined' && process.env?.ZAI_DEBUG) {
+            console.error(`[api.js] Switching to fallback prompt (length: ${currentPrompt.length} chars)`);
+          }
+        }
+      }
 
       // Don't retry if error is not retryable
       if (!categorized.retryable || attempt >= maxRetries) {
+        const finalTotalDuration = Date.now() - startTime;
         return {
           success: false,
+          data: null,
           error: {
             category: categorized.category,
             message: sanitizeErrorMessage(error),
-            retryable: categorized.retryable
-          }
+            retryable: categorized.retryable,
+            attempts: attempt + 1,
+            totalDuration: finalTotalDuration
+          },
+          usedFallback
         };
       }
 
       // Calculate delay with exponential backoff and jitter
       // delay = baseDelay * 2^attempt + random(0, 1000)
       const delay = baseDelay * Math.pow(2, attempt) + Math.floor(Math.random() * 1000);
+      
+      if (typeof process !== 'undefined' && process.env?.ZAI_DEBUG) {
+        console.error(`[api.js] Waiting ${delay}ms before retry ${attempt + 2}`);
+      }
+      
       await sleep(delay);
-    }
-  }
+    } // end catch block
+  } // end for loop
 
   // Should not reach here, but handle defensively
+  const totalDuration = Date.now() - startTime;
   return {
     success: false,
+    data: null,
     error: {
       category: 'internal',
       message: sanitizeErrorMessage(lastError),
-      retryable: false
-    }
+      retryable: false,
+      attempts: maxRetries + 1,
+      totalDuration
+    },
+    usedFallback
   };
 }
 
@@ -34220,69 +34350,63 @@ async function handleExplainCommand(context, args) {
   // Step 6: Build prompt with scope result
   const { prompt, truncated } = buildExplainPrompt(resolvedPath, scopeResult, startLine, endLine);
 
-  // Step 7: Call Z.ai API
   try {
-    logger.info({ path: resolvedPath, startLine, endLine }, 'Calling Z.ai API for explanation');
+    // Step 7: Call Z.ai API with fallback prompt generator
+    // The fallback generator creates a compact prompt (target only, 3000 chars max)
+    // after timeout errors on retry attempts
+    const createFallbackPrompt = () => {
+      const compactScope = {
+        target: scopeResult.target,
+        surrounding: scopeResult.target, // Reduce surrounding to just target
+      };
+      const compact = buildExplainPrompt(resolvedPath, compactScope, startLine, endLine, Math.min(DEFAULT_MAX_CHARS, 3000));
+      return {
+        prompt: compact.prompt,
+        apiKey,
+        model
+      };
+    };
 
     const result = await apiClient.call({
       apiKey,
       model,
-      prompt
+      prompt,
+      onFallback: (info) => {
+        logger.info({ 
+          attempt: info.attempt, 
+          originalError: info.originalError?.message 
+        }, 'Switching to compact prompt after timeout');
+      },
+      fallbackPrompt: createFallbackPrompt
     });
+
+    // Check if we used fallback and should show a note
+    if (result.usedFallback) {
+      logger.info('Used compact fallback prompt due to timeouts');
+    }
 
     if (!result.success) {
       const errorMsg = result.error?.message || 'Failed to get explanation';
-      logger.warn({ error: errorMsg, retry: true }, 'API call failed, retrying with compact explain prompt');
+      const attempts = result.error?.attempts || 1;
+      const duration = result.error?.totalDuration || 0;
+      logger.error({ error: errorMsg, attempts, totalDuration: duration }, 'Explain API call failed after all retries');
 
-      const compactScope = {
-        target: scopeResult.target,
-        surrounding: scopeResult.target,
-      };
-      const compact = buildExplainPrompt(resolvedPath, compactScope, startLine, endLine, Math.min(DEFAULT_MAX_CHARS, 3000));
-      const retryResult = await apiClient.call({
-        apiKey,
-        model,
-        prompt: compact.prompt,
-      });
-
-      if (!retryResult.success) {
-        const retryErrorMsg = retryResult.error?.message || errorMsg;
-        logger.error({ error: retryErrorMsg }, 'Explain retry API call failed');
-        await upsertComment(
-          octokit, owner, repo, issueNumber,
-          `**Error:** ${retryErrorMsg}`,
-          EXPLAIN_MARKER,
-          commentOptions
-        );
-        if (commentId) {
-          await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-        }
-        return { success: false, error: retryErrorMsg };
-      }
-
-      let retryResponse = retryResult.data;
-      if (compact.truncated) {
-        retryResponse += '\n\n_(Note: Compact context was used due to model limits)_';
-      }
-
-      const retryFormatted = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${retryResponse}`;
       await upsertComment(
         octokit, owner, repo, issueNumber,
-        retryFormatted,
+        `**Error:** ${errorMsg}${result.usedFallback ? ' (tried compact prompt)' : ''}`,
         EXPLAIN_MARKER,
         commentOptions
       );
-      // Add error reaction if commentId available
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
-      return { success: true };
+      return { success: false, error: errorMsg };
     }
 
     let response = result.data;
 
-    if (truncated) {
-      response += '\n\n_(Note: Context was truncated due to size limits)_';
+    if (truncated || result.usedFallback) {
+      response += '\n\n_(Note: Context was ' + (result.usedFallback ? 'reduced due to API latency' : 'truncated due to size limits') + ')_';
     }
 
     const formattedResponse = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${response}`;
@@ -34301,7 +34425,6 @@ async function handleExplainCommand(context, args) {
 
     logger.info({ path: resolvedPath, startLine, endLine }, 'Explanation posted successfully');
     return { success: true };
-
   } catch (error) {
     logger.error({ error: error.message }, 'Explain command failed');
 
@@ -40444,7 +40567,7 @@ async function enforceCommandAuthorization(context, octokit, owner, repo, option
 async function run() {
   const apiKey = core.getInput('ZAI_API_KEY', { required: true });
   const model = core.getInput('ZAI_MODEL') || 'glm-4.7';
-  
+  const zaiTimeout = parseInt(core.getInput('ZAI_TIMEOUT') || '30000', 10);
 
   const { context } = github;
   const { owner, repo } = context.repo;
@@ -40766,7 +40889,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     issueNumber: pullNumber,
     commentId,
     changedFiles,
-    apiClient: createApiClient(),
+    apiClient: createApiClient({ timeout: zaiTimeout }),
     apiKey,
     model,
     logger,
