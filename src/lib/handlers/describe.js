@@ -28,16 +28,15 @@ async function handleDescribeCommand(context, args) {
       return { success: true };
     }
     
-    // 3. Build LLM prompt
-    const prompt = [
-      { role: 'system', content: `You are an expert technical writer and developer. Your task is to write a clear, structured Pull Request description based on the provided commit messages.
+    // 3. Build LLM prompt (as string, not array)
+    const prompt = `You are an expert technical writer and developer. Your task is to write a clear, structured Pull Request description based on the provided commit messages.
 
 Group the changes logically (e.g., Features, Fixes, Refactoring). Use Markdown formatting (bullet points, bold text). Do not write introductory conversational phrases, output only the PR description itself.
 
 <commit_messages>
 ${commitMessages}
-</commit_messages>` }
-    ];
+</commit_messages>`;
+
     
     // 4. Call LLM
     const llmResult = await apiClient.call({ apiKey, model, prompt });
