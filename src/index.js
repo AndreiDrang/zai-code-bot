@@ -34,6 +34,8 @@ Unknown command. Available commands:
 - \`/zai explain <lines>\` - Explain specific lines
 - \`/zai suggest\` - Get improvement suggestions
 - \`/zai compare\` - Compare changes
+- \`/zai describe\` - Generate PR description from commits
+- \`/zai help\` - Show this help message
 - \`/zai help\` - Show this help message
 
 You can also use @zai-bot instead of /zai.
@@ -517,7 +519,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
 
   switch (command) {
     case 'help':
-      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai suggest\` - Get improvement suggestions\n- \`/zai compare\` - Compare changes\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
+      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai suggest\` - Get improvement suggestions\n- \`/zai compare\` - Compare changes\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
       break;
 
     case 'review':
