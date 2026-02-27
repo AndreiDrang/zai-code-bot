@@ -8,7 +8,13 @@ async function handleDescribeCommand(context, args) {
   const { octokit, owner, repo, issueNumber, commentId, apiClient, apiKey, model, logger } = context;
 
   try {
-    // 1. Fetch commits (max 100)
+    // 1. Fetch commits (max 30 to prevent API timeouts)
+    const commitsResponse = await octokit.rest.pulls.listCommits({
+      owner,
+      repo,
+      pull_number: issueNumber,
+      per_page: 30
+    });
     const commitsResponse = await octokit.rest.pulls.listCommits({
       owner,
       repo,
