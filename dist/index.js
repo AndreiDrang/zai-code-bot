@@ -32351,7 +32351,7 @@ module.exports = {
  */
 
 // Allowlisted commands
-const ALLOWED_COMMANDS = ['ask', 'review', 'explain', 'suggest', 'compare', 'help'];
+const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'review', 'suggest'];
 
 // Error types
 const ERROR_TYPES = {
@@ -34103,6 +34103,118 @@ module.exports = {
   MAX_COMPARE_FILES,
   MAX_FILE_CHARS,
 };
+
+
+/***/ }),
+
+/***/ 4334:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { upsertComment, setReaction, REACTIONS } = __nccwpck_require__(6819);
+
+const DESCRIBE_MARKER = '<!-- ZAI_DESCRIBE_COMMAND -->';
+const AI_DESCRIPTION_START = '\n\n---\n<!-- ZAI_DESCRIPTION_START -->\n🤖 **Z.ai Auto-generated Description:**\n\n';
+const AI_DESCRIPTION_END = '\n<!-- ZAI_DESCRIPTION_END -->';
+
+async function handleDescribeCommand(context, args) {
+  const { octokit, owner, repo, issueNumber, commentId, apiClient, apiKey, model, logger } = context;
+
+  try {
+    // 1. Fetch commits (max 100)
+    const commitsResponse = await octokit.rest.pulls.listCommits({
+      owner,
+      repo,
+      pull_number: issueNumber,
+      per_page: 100
+    });
+    
+    // 2. Extract commit messages
+    const commitMessages = commitsResponse.data
+      .map(c => c.commit.message)
+      .join('\n\n');
+    
+    if (!commitMessages) {
+      await upsertComment(octokit, owner, repo, issueNumber,
+        `## Z.ai Describe\n\nNo commits found in this PR.\n\n${DESCRIBE_MARKER}`,
+        DESCRIBE_MARKER, { replyToId: commentId });
+      return { success: true };
+    }
+    
+    // 3. Build LLM prompt
+    const prompt = [
+      { role: 'system', content: `You are an expert technical writer and developer. Your task is to write a clear, structured Pull Request description based on the provided commit messages.
+
+Group the changes logically (e.g., Features, Fixes, Refactoring). Use Markdown formatting (bullet points, bold text). Do not write introductory conversational phrases, output only the PR description itself.
+
+<commit_messages>
+${commitMessages}
+</commit_messages>` }
+    ];
+    
+    // 4. Call LLM
+    const llmResult = await apiClient.call({ apiKey, model, prompt });
+    
+    if (!llmResult.success) {
+      logger.error({ error: llmResult.error }, 'LLM call failed for describe command');
+      await upsertComment(octokit, owner, repo, issueNumber,
+        `## Z.ai Describe\n\n❌ Failed to generate description. Please try again later.\n\n${DESCRIBE_MARKER}`,
+        DESCRIBE_MARKER, { replyToId: commentId });
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      return { success: false, error: llmResult.error };
+    }
+    
+    const generatedDescription = llmResult.data;
+    
+    // 5. Fetch current PR body
+    const prResponse = await octokit.rest.pulls.get({ owner, repo, pull_number: issueNumber });
+    let currentBody = prResponse.data.body || '';
+    
+    // 6. Remove existing AI section (between markers or from AI_DESCRIPTION_START to end)
+    const startMarker = '<!-- ZAI_DESCRIPTION_START -->';
+    const endMarker = '<!-- ZAI_DESCRIPTION_END -->';
+    const startIndex = currentBody.indexOf(startMarker);
+    
+    if (startIndex !== -1) {
+      // Remove from start marker to end marker (or to end if no end marker)
+      const endIndex = currentBody.indexOf(endMarker, startIndex);
+      if (endIndex !== -1) {
+        currentBody = currentBody.substring(0, startIndex) + currentBody.substring(endIndex + endMarker.length);
+      } else {
+        currentBody = currentBody.substring(0, startIndex);
+      }
+    }
+    
+    // 7. Build new body
+    const newBody = currentBody.trimEnd() + AI_DESCRIPTION_START + generatedDescription + AI_DESCRIPTION_END;
+    
+    // 8. Update PR
+    await octokit.rest.pulls.update({
+      owner,
+      repo,
+      pull_number: issueNumber,
+      body: newBody
+    });
+    
+    // 9. Post success reply
+    await upsertComment(octokit, owner, repo, issueNumber,
+      `✅ I have successfully updated the PR description based on your commits!\n\n${DESCRIBE_MARKER}`,
+      DESCRIBE_MARKER, { replyToId: commentId });
+    
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    
+    return { success: true };
+    
+  } catch (error) {
+    logger.error({ error: error.message }, 'Describe command failed');
+    await upsertComment(octokit, owner, repo, issueNumber,
+      `## Z.ai Describe\n\n❌ An error occurred: ${error.message}\n\n${DESCRIBE_MARKER}`,
+      DESCRIBE_MARKER, { replyToId: commentId });
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = { handleDescribeCommand, DESCRIBE_MARKER, AI_DESCRIPTION_START };
 
 
 /***/ }),
@@ -40400,6 +40512,7 @@ const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = __nccwp
 const { handleAskCommand } = __nccwpck_require__(6630);
 const { handleSuggestCommand } = __nccwpck_require__(4361);
 const { handleCompareCommand } = __nccwpck_require__(3016);
+const { handleDescribeCommand } = __nccwpck_require__(4334);
 const reviewHandler = __nccwpck_require__(903);
 const explainHandler = __nccwpck_require__(1248);
 
@@ -41006,6 +41119,25 @@ ${COMMENT_MARKER}`;
 **Error:** Failed to complete explanation. Please try again later.
 
 ${COMMENT_MARKER}`;
+      }
+      break;
+    }
+    case 'describe': {
+      logger.info({ args }, 'Dispatching to describe handler');
+      
+      try {
+        const result = await handleDescribeCommand(handlerContext, args);
+        if (result.success) {
+          logger.info({ success: true }, 'Describe command completed');
+          return;  // Handler posts its own comment and reaction
+        } else {
+          logger.warn({ error: result.error }, 'Describe command failed');
+          return;
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Describe handler threw error');
+        terminalReaction = REACTIONS.X;
+        responseMessage = `## Z.ai Describe\n\n**Error:** Failed to generate description. Please try again later.\n\n${COMMENT_MARKER}`;
       }
       break;
     }

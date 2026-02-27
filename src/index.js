@@ -8,6 +8,7 @@ const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = require
 const { handleAskCommand } = require('./lib/handlers/ask.js');
 const { handleSuggestCommand } = require('./lib/handlers/suggest.js');
 const { handleCompareCommand } = require('./lib/handlers/compare.js');
+const { handleDescribeCommand } = require('./lib/handlers/describe');
 const reviewHandler = require('./lib/handlers/review.js');
 const explainHandler = require('./lib/handlers/explain.js');
 
@@ -614,6 +615,25 @@ ${COMMENT_MARKER}`;
 **Error:** Failed to complete explanation. Please try again later.
 
 ${COMMENT_MARKER}`;
+      }
+      break;
+    }
+    case 'describe': {
+      logger.info({ args }, 'Dispatching to describe handler');
+      
+      try {
+        const result = await handleDescribeCommand(handlerContext, args);
+        if (result.success) {
+          logger.info({ success: true }, 'Describe command completed');
+          return;  // Handler posts its own comment and reaction
+        } else {
+          logger.warn({ error: result.error }, 'Describe command failed');
+          return;
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Describe handler threw error');
+        terminalReaction = REACTIONS.X;
+        responseMessage = `## Z.ai Describe\n\n**Error:** Failed to generate description. Please try again later.\n\n${COMMENT_MARKER}`;
       }
       break;
     }
