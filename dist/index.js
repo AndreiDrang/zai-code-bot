@@ -34111,6 +34111,7 @@ module.exports = {
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const { upsertComment, setReaction, REACTIONS } = __nccwpck_require__(6819);
+const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
 
 const DESCRIBE_MARKER = '<!-- ZAI_DESCRIBE_COMMAND -->';
 const AI_DESCRIPTION_START = '\n\n---\n<!-- ZAI_DESCRIPTION_START -->\n🤖 **Z.ai Auto-generated Description:**\n\n';
@@ -34120,18 +34121,20 @@ async function handleDescribeCommand(context, args) {
   const { octokit, owner, repo, issueNumber, commentId, apiClient, apiKey, model, logger } = context;
 
   try {
-    // 1. Fetch commits (max 100)
+    // 1. Fetch commits (max 30 to prevent API timeouts)
     const commitsResponse = await octokit.rest.pulls.listCommits({
       owner,
       repo,
       pull_number: issueNumber,
-      per_page: 100
+      per_page: 30
     });
     
-    // 2. Extract commit messages
-    const commitMessages = commitsResponse.data
+    // 2. Extract and truncate commit messages
+    const allMessages = commitsResponse.data
       .map(c => c.commit.message)
       .join('\n\n');
+    
+    const commitMessages = truncateContext(allMessages, 8000).content;
     
     if (!commitMessages) {
       await upsertComment(octokit, owner, repo, issueNumber,
