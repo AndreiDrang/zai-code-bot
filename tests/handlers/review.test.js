@@ -4,7 +4,7 @@ const {
   parseFilePath, 
   validateFileInPr, 
   buildReviewPrompt 
-} = require('./review');
+} = require('../../src/lib/handlers/review');
 
 describe('review.js - parseFilePath', () => {
   test('returns error when no args provided', () => {
