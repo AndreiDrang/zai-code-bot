@@ -2,14 +2,13 @@ const { upsertComment, setReaction, REACTIONS } = require('../comments');
 const { truncateContext, DEFAULT_MAX_CHARS } = require('../context');
 
 const DESCRIBE_MARKER = '<!-- ZAI_DESCRIBE_COMMAND -->';
-
-const DESCRIBE_MARKER = '<!-- ZAI_DESCRIBE_COMMAND -->';
 const AI_DESCRIPTION_START = '\n\n---\n<!-- ZAI_DESCRIPTION_START -->\n🤖 **Z.ai Auto-generated Description:**\n\n';
 const AI_DESCRIPTION_END = '\n<!-- ZAI_DESCRIPTION_END -->';
 
 async function handleDescribeCommand(context, args) {
   const { octokit, owner, repo, issueNumber, commentId, apiClient, apiKey, model, logger } = context;
 
+  try {
     // 1. Fetch commits (max 30 to prevent API timeouts)
     const commitsResponse = await octokit.rest.pulls.listCommits({
       owner,
@@ -24,24 +23,6 @@ async function handleDescribeCommand(context, args) {
       .join('\n\n');
     
     const commitMessages = truncateContext(allMessages, 8000).content;
-    // 1. Fetch commits (max 30 to prevent API timeouts)
-    const commitsResponse = await octokit.rest.pulls.listCommits({
-      owner,
-      repo,
-      pull_number: issueNumber,
-      per_page: 30
-    });
-    const commitsResponse = await octokit.rest.pulls.listCommits({
-      owner,
-      repo,
-      pull_number: issueNumber,
-      per_page: 100
-    });
-    
-    // 2. Extract commit messages
-    const commitMessages = commitsResponse.data
-      .map(c => c.commit.message)
-      .join('\n\n');
     
     if (!commitMessages) {
       await upsertComment(octokit, owner, repo, issueNumber,
