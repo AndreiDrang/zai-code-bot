@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const { 
   parseLineRange, 
   buildExplainPrompt 
-} = require('./explain');
+} = require('../../src/lib/handlers/explain');
 
 describe('explain.js - parseLineRange', () => {
   test('returns error when no arg provided', () => {
