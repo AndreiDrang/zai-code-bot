@@ -1,7 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-08T01:07:43Z
-**Commit:** d9f46c3
+**Generated:** 2026-03-09T00:00:00Z
+**Commit:** b6742d8
+**Branch:** main
 
 ## OVERVIEW
 JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/zai` PR comment commands. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
