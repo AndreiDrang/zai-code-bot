@@ -623,13 +623,15 @@ describe('Runtime-Path Command Matrix', () => {
   test('handler returns correct command list', () => {
     const allCommands = handlers.getAllCommands();
     
-    assert.strictEqual(allCommands.length, 6);
+    assert.strictEqual(allCommands.length, 8);
     assert.ok(allCommands.includes('ask'));
     assert.ok(allCommands.includes('help'));
     assert.ok(allCommands.includes('review'));
     assert.ok(allCommands.includes('explain'));
     assert.ok(allCommands.includes('suggest'));
     assert.ok(allCommands.includes('compare'));
+    assert.ok(allCommands.includes('describe'));
+    assert.ok(allCommands.includes('impact'));
   });
 
   // =====================================================

@@ -32353,6 +32353,42 @@ module.exports = {
 // Allowlisted commands
 const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'impact', 'review', 'suggest'];
 
+// Command metadata for help text
+const COMMAND_DESCRIPTIONS = {
+  ask: {
+    usage: '/zai ask <question>',
+    description: 'Ask a question about the code changes in this PR',
+  },
+  compare: {
+    usage: '/zai compare',
+    description: 'Compare old vs new behavior across the diff',
+  },
+  describe: {
+    usage: '/zai describe',
+    description: 'Generate a PR description from commit messages',
+  },
+  explain: {
+    usage: '/zai explain <lines>',
+    description: 'Explain selected lines (e.g., /zai explain 10-25)',
+  },
+  help: {
+    usage: '/zai help',
+    description: 'Show this help message',
+  },
+  impact: {
+    usage: '/zai impact',
+    description: 'Analyze the potential impact of changes',
+  },
+  review: {
+    usage: '/zai review [file]',
+    description: 'Review specific files or all changed files',
+  },
+  suggest: {
+    usage: '/zai suggest <prompt>',
+    description: 'Suggest improvements or refactoring ideas',
+  },
+};
+
 // Error types
 const ERROR_TYPES = {
   UNKNOWN_COMMAND: 'unknown_command',
@@ -32471,6 +32507,7 @@ function isValid(result) {
 
 module.exports = {
   ALLOWED_COMMANDS,
+  COMMAND_DESCRIPTIONS,
   ERROR_TYPES,
   parseCommand,
   normalizeInput,
