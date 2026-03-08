@@ -445,6 +445,7 @@ module.exports = {
   callWithRetry,
   categorizeError,
   sanitizeErrorMessage,
+  makeApiRequest,
   ZAI_API_URL,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_MAX_RETRIES,

@@ -30,10 +30,6 @@ function clampLine(line, maxLines) {
  * @returns {Object} Result with target, surrounding, bounds, and metadata
  */
 function extractWindow(content, startLine, endLine, windowSize = DEFAULT_WINDOW_SIZE) {
-  const lines = content.split('\n');
-  const maxLines = lines.length;
-
-  // Handle invalid input gracefully
   if (!content || typeof content !== 'string') {
     return {
       target: [],
@@ -44,10 +40,11 @@ function extractWindow(content, startLine, endLine, windowSize = DEFAULT_WINDOW_
     };
   }
 
-  // Validate and clamp target range
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
   const validTarget = validateRange(startLine, endLine, maxLines);
   if (!validTarget.valid) {
-    // Return full file as fallback
     return {
       target: lines,
       surrounding: null,
@@ -90,10 +87,6 @@ function extractWindow(content, startLine, endLine, windowSize = DEFAULT_WINDOW_
  * @returns {Object} Result with target, bounds, and metadata
  */
 function extractTargetBlock(content, startLine, endLine) {
-  const lines = content.split('\n');
-  const maxLines = lines.length;
-
-  // Handle invalid input gracefully
   if (!content || typeof content !== 'string') {
     return {
       target: [],
@@ -103,7 +96,9 @@ function extractTargetBlock(content, startLine, endLine) {
     };
   }
 
-  // Validate range
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
   const validation = validateRange(startLine, endLine, maxLines);
   if (!validation.valid) {
     return {
@@ -144,11 +139,6 @@ function extractTargetBlock(content, startLine, endLine) {
  * @returns {Object} Result with target, bounds, and metadata
  */
 function extractEnclosingBlock(content, anchorLine, options = {}) {
-  const { maxSearchLines = 100, windowSize = DEFAULT_WINDOW_SIZE } = options;
-  const lines = content.split('\n');
-  const maxLines = lines.length;
-
-  // Handle invalid input gracefully
   if (!content || typeof content !== 'string') {
     return {
       target: [],
@@ -157,8 +147,11 @@ function extractEnclosingBlock(content, anchorLine, options = {}) {
       note: 'Invalid content provided'
     };
   }
+  
+  const { maxSearchLines = 100, windowSize = DEFAULT_WINDOW_SIZE } = options;
+  const lines = content.split('\n');
+  const maxLines = lines.length;
 
-  // Validate anchor line
   if (anchorLine < 1 || anchorLine > maxLines) {
     return extractWindow(content, Math.max(1, anchorLine - windowSize), Math.min(maxLines, anchorLine + windowSize), windowSize);
   }

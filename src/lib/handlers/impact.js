@@ -131,14 +131,15 @@ function extractSuggestedLabels(response) {
   // Extract all backticked labels
   const backtickRegex = /`([^`]+)`/g;
   const labels = [];
-  let match;
+  let match = backtickRegex.exec(labelsSection);
   
-  while ((match = backtickRegex.exec(labelsSection)) !== null) {
+  while (match !== null) {
     const label = match[1].trim();
     // Filter out empty, too long, or punctuation-only labels
     if (label && label.length > 0 && label.length <= 50 && !/^[,.\s]+$/.test(label)) {
       labels.push(label);
     }
+    match = backtickRegex.exec(labelsSection);
   }
 
   // Fallback: try comma-separated if no backticks found
@@ -165,13 +166,17 @@ function extractSuggestedLabels(response) {
  * @param {Object} logger - Logger instance
  * @returns {Promise<boolean>} Success status
  */
-async function applySuggestedLabels(octokit, owner, repo, issueNumber, labels, logger) {
+async function applySuggestedLabels(octokit, owner, repo, issueNumber, labels, logger, deps = {}) {
+  const {
+    addLabels: _addLabels = (params) => octokit.rest.issues.addLabels(params),
+  } = deps;
+  
   if (!labels || labels.length === 0) {
     return true;
   }
 
   try {
-    await octokit.rest.issues.addLabels({
+    await _addLabels({
       owner,
       repo,
       issue_number: issueNumber,
@@ -198,7 +203,13 @@ async function applySuggestedLabels(octokit, owner, repo, issueNumber, labels, l
  * @param {Array} args - Command arguments (unused for impact)
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function handleImpactCommand(context, args) {
+async function handleImpactCommand(context, args, deps = {}) {
+  const {
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    applySuggestedLabels: _applySuggestedLabels = applySuggestedLabels,
+  } = deps;
+  
   const { 
     octokit, 
     owner, 
@@ -215,7 +226,7 @@ async function handleImpactCommand(context, args) {
 
   try {
     // 1. Set thinking reaction to show command is processing
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
 
     // 2. Fetch PR metadata (title, description)
     let prData;
@@ -231,13 +242,13 @@ async function handleImpactCommand(context, args) {
       };
     } catch (error) {
       logger.error({ error: error.message }, 'Failed to fetch PR metadata');
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `## Z.ai Impact Analysis\n\n❌ Failed to fetch PR metadata: ${error.message}\n\n${IMPACT_MARKER}`,
         IMPACT_MARKER,
         { replyToId: commentId }
       );
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       return { success: false, error: 'Failed to fetch PR metadata' };
     }
 
@@ -259,13 +270,13 @@ async function handleImpactCommand(context, args) {
 
     if (!llmResult.success) {
       logger.error({ error: llmResult.error }, 'LLM call failed for impact command');
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `## Z.ai Impact Analysis\n\n❌ Failed to analyze PR. Please try again later.\n\n${IMPACT_MARKER}`,
         IMPACT_MARKER,
         { replyToId: commentId }
       );
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       return { success: false, error: llmResult.error };
     }
 
@@ -274,7 +285,7 @@ async function handleImpactCommand(context, args) {
     // 5. Post analysis as comment
     const commentBody = `## Z.ai Impact & Risk Analysis\n\n${analysis}\n\n${IMPACT_MARKER}`;
     
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       commentBody,
       IMPACT_MARKER,
@@ -286,13 +297,13 @@ async function handleImpactCommand(context, args) {
     
     if (suggestedLabels.length > 0) {
       logger.info({ suggestedLabels, issueNumber }, 'Extracted suggested labels');
-      await applySuggestedLabels(octokit, owner, repo, issueNumber, suggestedLabels, logger);
+      await _applySuggestedLabels(octokit, owner, repo, issueNumber, suggestedLabels, logger);
     } else {
       logger.info({ issueNumber }, 'No suggested labels found in analysis');
     }
 
     // 7. Set success reaction
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
 
     return { success: true };
 
@@ -300,13 +311,13 @@ async function handleImpactCommand(context, args) {
     logger.error({ error: error.message, stack: error.stack }, 'Impact command failed unexpectedly');
     
     try {
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `## Z.ai Impact Analysis\n\n❌ An unexpected error occurred: ${error.message}\n\n${IMPACT_MARKER}`,
         IMPACT_MARKER,
         { replyToId: commentId }
       );
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     } catch (commentError) {
       logger.error({ error: commentError.message }, 'Failed to post error comment');
     }

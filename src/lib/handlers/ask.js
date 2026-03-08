@@ -77,7 +77,17 @@ function validateArgs(args) {
  * @param {Object} params.logger - Logger instance
  * @returns {Promise<{ success: boolean, message?: string, error?: string }>}
  */
-async function handleAskCommand({ octokit, context: githubContext, commenter, args, continuityState = null, config, logger }) {
+async function handleAskCommand({ octokit, context: githubContext, commenter, args, continuityState = null, config, logger }, deps = {}) {
+  const {
+    checkForkAuthorization: _checkForkAuthorization = auth.checkForkAuthorization,
+    setReaction: _setReaction = setReaction,
+    upsertComment: _upsertComment = comments.upsertComment,
+    createApiClient: _createApiClient = api.createApiClient,
+    getUserMessage: _getUserMessage = logging.getUserMessage,
+    buildContext: _buildContext = buildContext,
+    mergeState: _mergeState = continuity.mergeState,
+    createCommentWithState: _createCommentWithState = continuity.createCommentWithState,
+  } = deps;
   // Validate arguments
   const validation = validateArgs(args);
   if (!validation.valid) {
@@ -85,7 +95,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   }
 
   // Check authorization
-  const authResult = await auth.checkForkAuthorization(octokit, githubContext, commenter);
+  const authResult = await _checkForkAuthorization(octokit, githubContext, commenter);
   if (!authResult.authorized) {
     // Silent block for fork PRs, otherwise return error message
     if (authResult.reason) {
@@ -116,7 +126,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   // Get the comment ID for threading
   const commentId = githubContext.payload.comment?.id;
 
-  const contextualData = await buildContext({
+  const contextualData = await _buildContext({
     octokit,
     githubContext,
     logger,
@@ -128,11 +138,11 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
 
   // Add reaction to show we're processing (acknowledgment)
   if (commentId) {
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
   }
 
   // Call the API
-  const apiClient = api.createApiClient({ timeout: config.timeout, maxRetries: config.maxRetries });
+  const apiClient = _createApiClient({ timeout: config.timeout, maxRetries: config.maxRetries });
   const result = await apiClient.call({
     apiKey: config.apiKey,
     model: config.model,
@@ -144,11 +154,11 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
       { command: 'ask', errorCategory: result.error.category },
       `API call failed: ${result.error.message}`
     );
-    const userMessage = logging.getUserMessage(result.error.category, new Error(result.error.message));
+    const userMessage = _getUserMessage(result.error.category, new Error(result.error.message));
     
     // Add error reaction
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     
     return { success: false, error: userMessage };
@@ -156,17 +166,17 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
 
   // Post the response as a threaded reply
   const responseBody = formatResponse(result.data, question);
-  const nextState = continuity.mergeState(continuityState, {
+  const nextState = _mergeState(continuityState, {
     lastCommand: 'ask',
     lastArgs: question,
     lastUser: commenter?.login || 'unknown',
     turnCount: (continuityState?.turnCount || 0) + 1,
     updatedAt: new Date().toISOString(),
   });
-  const responseWithState = continuity.createCommentWithState(responseBody, nextState);
+  const responseWithState = _createCommentWithState(responseBody, nextState);
   
   const marker = '<!-- ZAI-ASK-RESPONSE -->';
-  const commentResult = await comments.upsertComment(
+  const commentResult = await _upsertComment(
     octokit,
     owner,
     repo,
@@ -179,7 +189,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   if (commentResult.action === 'created' || commentResult.action === 'updated') {
     // Add success reaction
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
     
     logger.info({ command: 'ask', question: question.substring(0, 50) }, 'Ask command completed successfully');
@@ -188,7 +198,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
 
   // Add error reaction for failed comment post
   if (commentId) {
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
   }
   
   return { success: false, error: 'Failed to post response' };

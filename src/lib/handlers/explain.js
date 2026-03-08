@@ -105,9 +105,19 @@ function buildExplainPrompt(filename, scopeResult, startLine, endLine, maxChars 
  * @param {string[]} args - Command arguments (line range)
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function handleExplainCommand(context, args) {
+async function handleExplainCommand(context, args, deps = {}) {
+  const {
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    fetchFileAtPrHead: _fetchFileAtPrHead = fetchFileAtPrHead,
+    extractWindow: _extractWindow = extractWindow,
+    createLogger: _createLogger = createLogger,
+    generateCorrelationId: _generateCorrelationId = generateCorrelationId,
+    validateRange: _validateRange = validateRange,
+  } = deps;
+  
   const { octokit, owner, repo, issueNumber, commentPath, filename, changedFiles, apiClient, apiKey, model, commentId } = context;
-  const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
+  const logger = context.logger || _createLogger(_generateCorrelationId(), { command: 'explain' });
   const commentOptions = {
     replyToId: commentId,
     updateExisting: false,
@@ -116,7 +126,7 @@ async function handleExplainCommand(context, args) {
   };
 
   if (!args || args.length === 0) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No line range provided. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
@@ -124,7 +134,7 @@ async function handleExplainCommand(context, args) {
     );
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: 'No line range provided' };
   }
@@ -132,7 +142,7 @@ async function handleExplainCommand(context, args) {
   // Step 1: Parse line range
   const parsed = parseLineRange(args[0]);
   if (parsed.error) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       EXPLAIN_MARKER,
@@ -140,7 +150,7 @@ async function handleExplainCommand(context, args) {
     );
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: parsed.error };
   }
@@ -158,14 +168,14 @@ async function handleExplainCommand(context, args) {
   }
 
   if (!resolvedPath) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No target file specified. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: 'No target file specified' };
   }
@@ -173,7 +183,7 @@ async function handleExplainCommand(context, args) {
   logger.info({ startLine, endLine, path: resolvedPath }, 'Parsed line range, fetching file at PR head');
 
   // Step 3: Fetch file content at PR head
-  const fileResult = await fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber, {
+  const fileResult = await _fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber, {
     maxFileLines: 10000,
     changedRanges: [{ start: startLine, end: endLine }],
     windowSize: 20,
@@ -182,14 +192,14 @@ async function handleExplainCommand(context, args) {
   
   if (!fileResult.success) {
     const errorMsg = fileResult.fallback || `Failed to fetch ${resolvedPath}`;
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${errorMsg}`,
       EXPLAIN_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: errorMsg };
   }
@@ -200,9 +210,9 @@ async function handleExplainCommand(context, args) {
     : fileContent.split('\n').length;
 
   // Step 4: Validate line range against actual file line count
-  const validation = validateRange(startLine, endLine, maxLines);
+  const validation = _validateRange(startLine, endLine, maxLines);
   if (!validation.valid) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}. File has ${maxLines} lines.`,
       EXPLAIN_MARKER,
@@ -210,7 +220,7 @@ async function handleExplainCommand(context, args) {
     );
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: validation.error };
   }
@@ -224,7 +234,7 @@ async function handleExplainCommand(context, args) {
     scopedEnd = endLine - fileResult.scopeStartLine + 1;
   }
 
-  const scopeResult = extractWindow(fileContent, scopedStart, scopedEnd);
+  const scopeResult = _extractWindow(fileContent, scopedStart, scopedEnd);
   
   if (scopeResult.fallback) {
     logger.warn({ note: scopeResult.note }, 'Using fallback for scope extraction');
@@ -279,14 +289,14 @@ async function handleExplainCommand(context, args) {
       const duration = result.error?.totalDuration || 0;
       logger.error({ error: errorMsg, attempts, totalDuration: duration }, 'Explain API call failed after all retries');
 
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}${result.usedFallback ? ' (tried compact prompt)' : ''}`,
         EXPLAIN_MARKER,
         commentOptions
       );
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
       return { success: false, error: errorMsg };
     }
@@ -299,7 +309,7 @@ async function handleExplainCommand(context, args) {
 
     const formattedResponse = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${response}`;
 
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
       EXPLAIN_MARKER,
@@ -308,7 +318,7 @@ async function handleExplainCommand(context, args) {
 
     // Add success reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
 
     logger.info({ path: resolvedPath, startLine, endLine }, 'Explanation posted successfully');
@@ -316,7 +326,7 @@ async function handleExplainCommand(context, args) {
   } catch (error) {
     logger.error({ error: error.message }, 'Explain command failed');
 
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete explanation. Please try again later.`,
       EXPLAIN_MARKER,
@@ -325,7 +335,7 @@ async function handleExplainCommand(context, args) {
 
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
 
     return { success: false, error: error.message };
@@ -337,4 +347,9 @@ module.exports = {
   parseLineRange,
   buildExplainPrompt,
   EXPLAIN_MARKER,
+  upsertComment,
+  setReaction,
+  fetchFileAtPrHead,
+  validateRange,
+  extractWindow,
 };

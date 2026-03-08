@@ -72,9 +72,17 @@ function buildReviewPrompt(filePath, fullContent, patch, maxChars = DEFAULT_MAX_
   return { prompt: truncated.content, truncated: truncated.truncated };
 }
 
-async function handleReviewCommand(context, args) {
+async function handleReviewCommand(context, args, deps = {}) {
+  const {
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    fetchFileAtPrHead: _fetchFileAtPrHead = fetchFileAtPrHead,
+    createLogger: _createLogger = createLogger,
+    generateCorrelationId: _generateCorrelationId = generateCorrelationId,
+  } = deps;
+  
   const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model, commentId } = context;
-  const logger = context.logger || createLogger(generateCorrelationId(), { command: 'review' });
+  const logger = context.logger || _createLogger(_generateCorrelationId(), { command: 'review' });
   const commentOptions = {
     replyToId: commentId,
     updateExisting: false,
@@ -84,14 +92,14 @@ async function handleReviewCommand(context, args) {
   
   const parsed = parseFilePath(args);
   if (parsed.error) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       REVIEW_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: parsed.error };
   }
@@ -101,14 +109,14 @@ async function handleReviewCommand(context, args) {
   
   const validation = validateFileInPr(filePath, changedFiles);
   if (!validation.valid) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}`,
       REVIEW_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: validation.error };
   }
@@ -118,7 +126,7 @@ async function handleReviewCommand(context, args) {
   logger.info({ filePath, status: targetFile.status }, 'File validated, fetching full content at PR head');
 
   const pullNumber = context.pullNumber || context.issueNumber;
-  const fullContentResult = await fetchFileAtPrHead(
+  const fullContentResult = await _fetchFileAtPrHead(
     context.octokit,
     context.owner,
     context.repo,
@@ -149,14 +157,14 @@ async function handleReviewCommand(context, args) {
     if (!result.success) {
       const errorMsg = result.error?.message || 'Failed to get review';
       logger.error({ error: errorMsg }, 'API call failed');
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
         REVIEW_MARKER,
         commentOptions
       );
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
       return { success: false, error: errorMsg };
     }
@@ -169,7 +177,7 @@ async function handleReviewCommand(context, args) {
     
     const formattedResponse = `## 📝 Code Review: ${targetFile.filename}\n\n${response}`;
     
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
       REVIEW_MARKER,
@@ -177,7 +185,7 @@ async function handleReviewCommand(context, args) {
     );
     
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
     
     logger.info({ filePath }, 'Review posted successfully');
@@ -186,7 +194,7 @@ async function handleReviewCommand(context, args) {
   } catch (error) {
     logger.error({ error: error.message }, 'Review command failed');
     
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete review. Please try again later.`,
       REVIEW_MARKER,
@@ -194,7 +202,7 @@ async function handleReviewCommand(context, args) {
     );
     
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     
     return { success: false, error: error.message };

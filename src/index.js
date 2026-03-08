@@ -157,30 +157,38 @@ You MUST format your response strictly using the Markdown structure below. If a 
   });
 }
 
-async function enforceCommandAuthorization(context, octokit, owner, repo, options = {}) {
+async function enforceCommandAuthorization(context, octokit, owner, repo, options = {}, deps = {}) {
   const {
     issueNumber,
     pullNumber,
     replyToId,
     isReviewComment = false,
   } = options;
+  const {
+    core: _core = core,
+    getCommenter: _getCommenter = getCommenter,
+    checkForkAuthorization: _checkForkAuthorization = checkForkAuthorization,
+    getUnauthorizedMessage: _getUnauthorizedMessage = getUnauthorizedMessage,
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+  } = deps;
 
-  const commenter = getCommenter(context);
-  const authResult = await checkForkAuthorization(octokit, context, commenter);
+  const commenter = _getCommenter(context);
+  const authResult = await _checkForkAuthorization(octokit, context, commenter);
 
   if (authResult.authorized) {
     return { authorized: true, commenter };
   }
 
   if (authResult.reason === null) {
-    core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
+    _core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
     return { authorized: false, commenter, silent: true };
   }
 
-  const authMessage = getUnauthorizedMessage(authResult.reason);
-  core.info(`Command authorization failed for ${commenter?.login || 'unknown'}: ${authResult.reason}`);
+  const authMessage = _getUnauthorizedMessage(authResult.reason);
+  _core.info(`Command authorization failed for ${commenter?.login || 'unknown'}: ${authResult.reason}`);
 
-  await upsertComment(
+  await _upsertComment(
     octokit,
     owner,
     repo,
@@ -192,9 +200,9 @@ async function enforceCommandAuthorization(context, octokit, owner, repo, option
 
   if (replyToId) {
     try {
-      await setReaction(octokit, owner, repo, replyToId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, replyToId, REACTIONS.X);
     } catch (error) {
-      core.warning(`Failed to set auth-failure reaction: ${error.message}`);
+      _core.warning(`Failed to set auth-failure reaction: ${error.message}`);
     }
   }
 
@@ -229,36 +237,46 @@ async function run() {
   }
 }
 
-async function handlePullRequestEvent(context, apiKey, model, owner, repo) {
+async function handlePullRequestEvent(context, apiKey, model, owner, repo, deps = {}) {
+  const {
+    core: _core = core,
+    github: _github = github,
+    getChangedFiles: _getChangedFiles = getChangedFiles,
+    buildPrompt: _buildPrompt = buildPrompt,
+    callZaiApi: _callZaiApi = callZaiApi,
+    COMMENT_MARKER: _MARKER = COMMENT_MARKER,
+  } = deps;
+
   const pullNumber = context.payload.pull_request?.number;
 
   if (!pullNumber) {
-    core.setFailed('No pull request number found.');
-    return;
+    _core.setFailed('No pull request number found.');
+    return { success: false, error: 'No pull request number found.' };
   }
 
-  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+  const token = process.env.GITHUB_TOKEN || _core.getInput('GITHUB_TOKEN');
+  const octokit = _github.getOctokit(token);
 
-  core.info(`Fetching changed files for PR #${pullNumber}...`);
-  const files = await getChangedFiles(octokit, owner, repo, pullNumber);
+  _core.info(`Fetching changed files for PR #${pullNumber}...`);
+  const files = await _getChangedFiles(octokit, owner, repo, pullNumber);
 
   if (!files.some(f => f.patch)) {
-    core.info('No patchable changes found. Skipping review.');
-    return;
+    _core.info('No patchable changes found. Skipping review.');
+    return { success: true, skipped: true, reason: 'No patchable changes' };
   }
 
-  const prompt = buildPrompt(files);
+  const prompt = _buildPrompt(files);
 
-  core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
-  const review = await callZaiApi(apiKey, model, prompt);
-  const body = `## Z.ai Code Review\n\n${review}\n\n${COMMENT_MARKER}`;
+  _core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
+  const review = await _callZaiApi(apiKey, model, prompt);
+  const body = `## Z.ai Code Review\n\n${review}\n\n${_MARKER}`;
 
   const { data: comments } = await octokit.rest.issues.listComments({
     owner,
     repo,
     issue_number: pullNumber,
   });
-  const existing = comments.find(c => c.body.includes(COMMENT_MARKER));
+  const existing = comments.find(c => c.body.includes(_MARKER));
 
   if (existing) {
     await octokit.rest.issues.updateComment({
@@ -267,15 +285,17 @@ async function handlePullRequestEvent(context, apiKey, model, owner, repo) {
       comment_id: existing.id,
       body,
     });
-    core.info('Review comment updated.');
+    _core.info('Review comment updated.');
+    return { success: true, action: 'updated', commentId: existing.id };
   } else {
-    await octokit.rest.issues.createComment({
+    const result = await octokit.rest.issues.createComment({
       owner,
       repo,
       issue_number: pullNumber,
       body,
     });
-    core.info('Review comment posted.');
+    _core.info('Review comment posted.');
+    return { success: true, action: 'created', commentId: result.data.id };
   }
 }
 
@@ -480,7 +500,27 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
   });
 }
 
-async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, options = {}) {
+async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, options = {}, deps = {}) {
+  const {
+    core: _core = core,
+    github: _github = github,
+    generateCorrelationId: _generateCorrelationId = generateCorrelationId,
+    createLogger: _createLogger = createLogger,
+    fetchChangedFiles: _fetchChangedFiles = fetchChangedFiles,
+    createApiClient: _createApiClient = createApiClient,
+    reviewHandler: _reviewHandler = reviewHandler,
+    explainHandler: _explainHandler = explainHandler,
+    handleDescribeCommand: _handleDescribeCommand = handleDescribeCommand,
+    handleAskCommand: _handleAskCommand = handleAskCommand,
+    handleImpactCommand: _handleImpactCommand = handleImpactCommand,
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    mergeState: _mergeState = mergeState,
+    createCommentWithState: _createCommentWithState = createCommentWithState,
+    COMMENT_MARKER: _COMMENT_MARKER = COMMENT_MARKER,
+    REACTIONS: _REACTIONS = REACTIONS,
+  } = deps;
+
   const { command, args } = parseResult;
   const pullNumber = context.payload.issue?.number || context.payload.pull_request?.number;
   const { 
@@ -497,28 +537,25 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     eventName = context.eventName || 'issue_comment',
   } = options;
 
-  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+  const octokit = _github.getOctokit(process.env.GITHUB_TOKEN || _core.getInput('GITHUB_TOKEN'));
 
   let responseMessage = '';
-  let terminalReaction = REACTIONS.ROCKET;
+  let terminalReaction = _REACTIONS.ROCKET;
 
-  // Build handler context with required fields
-  const correlationId = generateCorrelationId();
-  const logger = createLogger(correlationId, { 
+  const correlationId = _generateCorrelationId();
+  const logger = _createLogger(correlationId, { 
     eventName,
     prNumber: pullNumber,
     command 
   });
 
-  // Fetch changed files for handlers that need them
   let changedFiles = [];
   try {
-    changedFiles = await fetchChangedFiles(octokit, owner, repo, pullNumber);
+    changedFiles = await _fetchChangedFiles(octokit, owner, repo, pullNumber);
   } catch (error) {
     logger.warn({ error: error.message }, 'Failed to fetch changed files');
   }
 
-  // Build base handler context with normalized context inputs
   const handlerContext = {
     octokit,
     owner,
@@ -526,13 +563,12 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     issueNumber: pullNumber,
     commentId,
     changedFiles,
-    apiClient: createApiClient({ timeout: zaiTimeout }),
+    apiClient: _createApiClient({ timeout: zaiTimeout }),
     apiKey,
     model,
     logger,
     maxChars: DEFAULT_MAX_CHARS,
     continuityState,
-    // Normalized context inputs for explain handler
     baseRef,
     headRef,
     commentPath,
@@ -545,37 +581,33 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
 
   switch (command) {
     case 'help':
-      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai impact\` - Analyze the potential impact of changes\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
+      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai impact\` - Analyze the potential impact of changes\n- \`/zai help\` - Show this help message\n\n${_COMMENT_MARKER}`;
       break;
 
     case 'review':
-      // Route to review handler with file path from args
       logger.info({ args }, 'Dispatching to review handler');
       
       try {
-        const result = await reviewHandler.handleReviewCommand(handlerContext, args);
+        const result = await _reviewHandler.handleReviewCommand(handlerContext, args);
         if (result.success) {
-          // Handler already posted the comment, no need to post again
           logger.info({ success: true }, 'Review command completed');
-          return;
+          return { success: true };
         } else {
-          // Handler already posted error, log and return
           logger.warn({ error: result.error }, 'Review command failed');
-          return;
+          return { success: false, error: result.error };
         }
       } catch (error) {
         logger.error({ error: error.message }, 'Review handler threw error');
-        terminalReaction = REACTIONS.X;
+        terminalReaction = _REACTIONS.X;
         responseMessage = `## Z.ai Code Review
 
 **Error:** Failed to complete review. Please try again later.
 
-${COMMENT_MARKER}`;
+${_COMMENT_MARKER}`;
       }
       break;
 
     case 'explain': {
-      // Route to explain handler with line range from args
       logger.info({ args }, 'Dispatching to explain handler');
       
       let explainArgs = args;
@@ -588,38 +620,32 @@ ${COMMENT_MARKER}`;
       }
 
       if (explainArgs.length === 0) {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${COMMENT_MARKER}`;
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${_COMMENT_MARKER}`;
         break;
       }
 
-      // For explain, use anchor metadata if available (from review comment)
-      // Otherwise, try to get it from changed files
       let filename = null;
       let fileContent = null;
 
       if (handlerContext.commentPath) {
-        // Use anchor metadata from review comment
         filename = handlerContext.commentPath;
-        // Don't use first-changed-file patch - let handler fetch content based on path
         fileContent = handlerContext.commentDiffHunk || null;
       } else {
-        // Fall back to first changed file for issue_comment
         const firstChangedFile = changedFiles.find(f => f.patch);
         if (!firstChangedFile) {
-          terminalReaction = REACTIONS.X;
+          terminalReaction = _REACTIONS.X;
           responseMessage = `## Z.ai Explanation
 
 No files with changes found in this PR to explain.
 
-${COMMENT_MARKER}`;
+${_COMMENT_MARKER}`;
           break;
         }
         filename = firstChangedFile.filename;
         fileContent = firstChangedFile.patch || '';
       }
 
-      // Add file-specific context for explain handler
       const explainContext = {
         ...handlerContext,
         filename,
@@ -627,22 +653,22 @@ ${COMMENT_MARKER}`;
       };
 
       try {
-        const result = await explainHandler.handleExplainCommand(explainContext, explainArgs);
+        const result = await _explainHandler.handleExplainCommand(explainContext, explainArgs);
         if (result.success) {
           logger.info({ success: true }, 'Explain command completed');
-          return;
+          return { success: true };
         } else {
           logger.warn({ error: result.error }, 'Explain command failed');
-          return;
+          return { success: false, error: result.error };
         }
       } catch (error) {
         logger.error({ error: error.message }, 'Explain handler threw error');
-        terminalReaction = REACTIONS.X;
+        terminalReaction = _REACTIONS.X;
         responseMessage = `## Z.ai Explanation
 
 **Error:** Failed to complete explanation. Please try again later.
 
-${COMMENT_MARKER}`;
+${_COMMENT_MARKER}`;
       }
       break;
     }
@@ -650,26 +676,26 @@ ${COMMENT_MARKER}`;
       logger.info({ args }, 'Dispatching to describe handler');
       
       try {
-        const result = await handleDescribeCommand(handlerContext, args);
+        const result = await _handleDescribeCommand(handlerContext, args);
         if (result.success) {
           logger.info({ success: true }, 'Describe command completed');
-          return;  // Handler posts its own comment and reaction
+          return { success: true };
         } else {
           logger.warn({ error: result.error }, 'Describe command failed');
-          return;
+          return { success: false, error: result.error };
         }
       } catch (error) {
         logger.error({ error: error.message }, 'Describe handler threw error');
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Describe\n\n**Error:** Failed to generate description. Please try again later.\n\n${COMMENT_MARKER}`;
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Describe\n\n**Error:** Failed to generate description. Please try again later.\n\n${_COMMENT_MARKER}`;
       }
       break;
     }
 
     case 'ask': {
       if (args.length === 0) {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Ask\n\nPlease provide a question. Usage: \`/zai ask <question>\`\n\n${COMMENT_MARKER}`;
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\nPlease provide a question. Usage: \`/zai ask <question>\`\n\n${_COMMENT_MARKER}`;
         break;
       }
 
@@ -701,23 +727,23 @@ ${COMMENT_MARKER}`;
           logger,
         };
 
-        const result = await handleAskCommand(askContext);
+        const result = await _handleAskCommand(askContext);
         if (result.success) {
           logger.info({ success: true }, 'Ask command completed');
-          return;
+          return { success: true };
         }
 
         if (!result.error) {
           logger.info('Ask command silently blocked by fork policy');
-          return;
+          return { success: true, silent: true };
         }
 
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Ask\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\n**Error:** ${result.error}\n\n${_COMMENT_MARKER}`;
       } catch (error) {
         logger.error({ error: error.message }, 'Ask handler threw error');
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Ask\n\n**Error:** Failed to complete request. Please try again later.\n\n${COMMENT_MARKER}`;
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\n**Error:** Failed to complete request. Please try again later.\n\n${_COMMENT_MARKER}`;
       }
       break;
     }
@@ -820,4 +846,16 @@ ${review}
 ${COMMENT_MARKER}`;
 }
 
-run().catch(err => core.setFailed(err.message));
+// Export dispatchCommand for testing
+module.exports = {
+  buildPrompt,
+  getChangedFiles,
+  enforceCommandAuthorization,
+  handlePullRequestEvent,
+  dispatchCommand,
+  GUIDANCE_MESSAGES,
+  COMMENT_MARKER,
+  GUIDANCE_MARKER,
+  PROGRESS_MARKER,
+  AUTH_MARKER
+};
