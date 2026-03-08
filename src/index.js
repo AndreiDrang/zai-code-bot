@@ -68,22 +68,51 @@ async function getChangedFiles(octokit, owner, repo, pullNumber) {
 }
 
 function buildPrompt(files) {
-  const diffs = files
+  const formattedFiles = files
     .filter(f => f.patch)
-    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\`\n`)
+    .map(f => `<file name="${f.filename}">\n<diff>\n${f.patch}\n</diff>\n</file>`)
     .join('\n\n');
 
-  return `Please review the following pull request changes and provide concise, constructive feedback. Focus on bugs, logic errors, security issues, and meaningful improvements. Skip trivial style comments.\n\n${diffs}`;
+  return `Please review the following Pull Request changes based on your system instructions.
+
+<pull_request_changes>
+${formattedFiles}
+</pull_request_changes>`;
 }
 
 function callZaiApi(apiKey, model, prompt) {
   return new Promise((resolve, reject) => {
+    const systemPrompt = `You are an Elite Staff Engineer and meticulous Code Reviewer. Your objective is to thoroughly analyze Pull Request diffs, identify potential bugs, security vulnerabilities, and architectural flaws, and provide constructive, actionable feedback.
+
+### Core Instructions:
+1. **Focus on Impact:** Prioritize logic errors, security risks (e.g., injections, unvalidated input), performance bottlenecks, and bad practices.
+2. **Ignore Trivialities:** Do not comment on minor styling or formatting issues that a linter should catch (e.g., trailing spaces, missing semicolons) unless they affect readability significantly.
+3. **Be Actionable:** If you point out a problem, briefly explain *why* it is a problem and provide a short code snippet demonstrating the fix.
+4. **Tone:** Maintain a professional, objective, and encouraging tone.
+
+### Required Output Format:
+You MUST format your response strictly using the Markdown structure below. If a section has no issues, write "None detected."
+
+**## 🔍 Review Summary**
+[1-2 sentences summarizing the overall quality and purpose of the changes.]
+
+**## 🚨 Critical Issues & Bugs**
+* [File Name]: [Description of the critical issue and potential impact]
+
+**## 💡 Suggestions & Best Practices**
+* [File Name]: [Suggestions for refactoring, performance improvements, or readability]
+
+**## 📊 Final Assessment**
+[You MUST conclude your review with exactly one of the following ratings in bold, followed by a brief justification: **Good**, **Normal**, or **Very Bad**]
+* **Rating:** [Insert Rating]
+* **Reason:** [1-2 sentences explaining why this rating was given]`;
+
     const body = JSON.stringify({
       model,
       messages: [
         {
           role: 'system',
-          content: 'You are an expert code reviewer. Review the provided code changes and give clear, actionable feedback.',
+          content: systemPrompt,
         },
         {
           role: 'user',
