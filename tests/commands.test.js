@@ -26,18 +26,18 @@ describe('parseCommand', () => {
     assert.strictEqual(result.error, null);
   });
 
-  test('parses valid /zai suggest command', () => {
+  test('returns unknown_command error for /zai suggest (removed command)', () => {
     const result = parseCommand('/zai suggest better naming');
-    assert.strictEqual(result.command, 'suggest');
-    assert.deepStrictEqual(result.args, ['better', 'naming']);
-    assert.strictEqual(result.error, null);
+    assert.strictEqual(result.error.type, ERROR_TYPES.UNKNOWN_COMMAND);
+    assert.strictEqual(result.error.message, 'Unknown command: suggest');
+    assert.strictEqual(isValid(result), false);
   });
 
-  test('parses valid /zai compare command', () => {
+  test('returns unknown_command error for /zai compare (removed command)', () => {
     const result = parseCommand('/zai compare');
-    assert.strictEqual(result.command, 'compare');
-    assert.deepStrictEqual(result.args, []);
-    assert.strictEqual(result.error, null);
+    assert.strictEqual(result.error.type, ERROR_TYPES.UNKNOWN_COMMAND);
+    assert.strictEqual(result.error.message, 'Unknown command: compare');
+    assert.strictEqual(isValid(result), false);
   });
 
   test('parses valid /zai help command', () => {
@@ -156,8 +156,8 @@ describe('mention normalization in parseCommand', () => {
   });
 
   test('parses @ZAI-BOT uppercase mention', () => {
-    const result = parseCommand('@ZAI-BOT suggest improvement');
-    assert.strictEqual(result.command, 'suggest');
+    const result = parseCommand('@ZAI-BOT describe');
+    assert.strictEqual(result.command, 'describe');
     assert.strictEqual(result.error, null);
   });
 });
@@ -167,9 +167,14 @@ describe('ALLOWED_COMMANDS', () => {
     assert(ALLOWED_COMMANDS.includes('ask'));
     assert(ALLOWED_COMMANDS.includes('review'));
     assert(ALLOWED_COMMANDS.includes('explain'));
-    assert(ALLOWED_COMMANDS.includes('suggest'));
-    assert(ALLOWED_COMMANDS.includes('compare'));
     assert(ALLOWED_COMMANDS.includes('help'));
+    assert(ALLOWED_COMMANDS.includes('describe'));
+    assert(ALLOWED_COMMANDS.includes('impact'));
+  });
+
+  test('does not contain removed commands', () => {
+    assert(!ALLOWED_COMMANDS.includes('suggest'));
+    assert(!ALLOWED_COMMANDS.includes('compare'));
   });
 });
 

@@ -185,9 +185,14 @@ describe('help handler', () => {
     assert.ok(helpHandler.HELP_TEXT.includes('/zai ask'));
     assert.ok(helpHandler.HELP_TEXT.includes('/zai review'));
     assert.ok(helpHandler.HELP_TEXT.includes('/zai explain'));
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai suggest'));
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai compare'));
     assert.ok(helpHandler.HELP_TEXT.includes('/zai help'));
+    assert.ok(helpHandler.HELP_TEXT.includes('/zai describe'));
+    assert.ok(helpHandler.HELP_TEXT.includes('/zai impact'));
+  });
+
+  test('HELP_TEXT does not contain removed commands', () => {
+    assert.ok(!helpHandler.HELP_TEXT.includes('/zai suggest'));
+    assert.ok(!helpHandler.HELP_TEXT.includes('/zai compare'));
   });
 
   test('HELP_MARKER is defined', () => {
@@ -212,18 +217,43 @@ describe('handler registry', () => {
     assert.strictEqual(handler, null);
   });
 
+  test('getHandler returns null for removed commands', () => {
+    assert.strictEqual(handlers.getHandler('suggest'), null);
+    assert.strictEqual(handlers.getHandler('compare'), null);
+  });
+
   test('hasHandler returns true for known commands', () => {
     assert.strictEqual(handlers.hasHandler('ask'), true);
     assert.strictEqual(handlers.hasHandler('help'), true);
+    assert.strictEqual(handlers.hasHandler('review'), true);
+    assert.strictEqual(handlers.hasHandler('explain'), true);
+    assert.strictEqual(handlers.hasHandler('describe'), true);
+    assert.strictEqual(handlers.hasHandler('impact'), true);
   });
 
   test('hasHandler returns false for unknown commands', () => {
     assert.strictEqual(handlers.hasHandler('unknown'), false);
   });
 
+  test('hasHandler returns false for removed commands', () => {
+    assert.strictEqual(handlers.hasHandler('suggest'), false);
+    assert.strictEqual(handlers.hasHandler('compare'), false);
+  });
+
   test('getAllCommands returns all commands', () => {
     const commands = handlers.getAllCommands();
     assert.ok(commands.includes('ask'));
     assert.ok(commands.includes('help'));
+    assert.ok(commands.includes('review'));
+    assert.ok(commands.includes('explain'));
+    assert.ok(commands.includes('describe'));
+    assert.ok(commands.includes('impact'));
+    assert.strictEqual(commands.length, 6);
+  });
+
+  test('getAllCommands does not include removed commands', () => {
+    const commands = handlers.getAllCommands();
+    assert.ok(!commands.includes('suggest'));
+    assert.ok(!commands.includes('compare'));
   });
 });

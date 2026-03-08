@@ -5,7 +5,7 @@ GitHub Action for automatic PR reviews and context-rich `/zai` commands powered 
 ## Features
 
 - Automatic pull request review on `opened` and `synchronize`
-- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai suggest`, `/zai compare`, `/zai describe`, `/zai impact`, `/zai help`
+- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai describe`, `/zai impact`, `/zai help`
 - Context-aware command prompts with full-file, diff, and thread context
 - Inline review-comment support (`pull_request_review_comment`) with file/line anchors
 - `/zai explain` auto-detects selected line range from review comments
@@ -68,8 +68,6 @@ Commands are processed from PR issue comments and PR review comments. Supported 
 | `/zai ask` | `/zai ask <question>` | Ask a question about the code changes in this PR |
 | `/zai review` | `/zai review [file]` | Review specific files or all changed files |
 | `/zai explain` | `/zai explain <lines>` | Explain selected lines (e.g., `/zai explain 10-25`) |
-| `/zai suggest` | `/zai suggest <prompt>` | Suggest improvements or refactoring ideas |
-| `/zai compare` | `/zai compare` | Compare old vs new behavior across the diff |
 | `/zai describe` | `/zai describe` | Generate a PR description from commit messages |
 | `/zai impact` | `/zai impact` | Analyze potential impact of changes |
 | `/zai help` | `/zai help` | Show command help |
@@ -82,8 +80,7 @@ Commands are processed from PR issue comments and PR review comments. Supported 
 - Command replies are posted in-thread to the invoking comment
 - Reactions indicate status (`eyes`, `thinking`, `rocket`, `x`)
 - `/zai explain` can infer the target range from a selected line review comment when no explicit range is provided
-- `/zai suggest` uses anchor path/line context from review comments when available
-- `/zai compare` and `/zai review` use base/head or full-file context, not patch-only prompts
+- `/zai review` uses base/head or full-file context, not patch-only prompts
 - Command execution is authorization-gated; fork PR authors can run commands on their own PR
 
 ## Setup

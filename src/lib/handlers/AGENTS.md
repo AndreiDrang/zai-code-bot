@@ -9,8 +9,6 @@ Command handlers implement `/zai` behavior only after parsing + authorization; e
 | `/zai ask` | `src/lib/handlers/ask.js` | Uses continuity state and broad PR context (511 lines) |
 | `/zai review <path>` | `src/lib/handlers/review.js` | Targeted diff review, file-in-PR validation |
 | `/zai explain <path>#Lx-Ly` | `src/lib/handlers/explain.js` | Range parsing + snippet extraction |
-| `/zai suggest` | `src/lib/handlers/suggest.js` | Improvement suggestions over changed files |
-| `/zai compare` | `src/lib/handlers/compare.js` | Tradeoff-oriented comparison output |
 | `/zai describe` | `src/lib/handlers/describe.js` | File/directory description |
 | `/zai impact` | `src/lib/handlers/impact.js` | Change impact analysis |
 | `/zai help` | `src/lib/handlers/help.js` | Static help output with auth gate |

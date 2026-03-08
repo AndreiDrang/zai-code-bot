@@ -32351,17 +32351,13 @@ module.exports = {
  */
 
 // Allowlisted commands
-const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'impact', 'review', 'suggest'];
+const ALLOWED_COMMANDS = ['ask', 'describe', 'explain', 'help', 'impact', 'review'];
 
 // Command metadata for help text
 const COMMAND_DESCRIPTIONS = {
   ask: {
     usage: '/zai ask <question>',
     description: 'Ask a question about the code changes in this PR',
-  },
-  compare: {
-    usage: '/zai compare',
-    description: 'Compare old vs new behavior across the diff',
   },
   describe: {
     usage: '/zai describe',
@@ -32382,10 +32378,6 @@ const COMMAND_DESCRIPTIONS = {
   review: {
     usage: '/zai review [file]',
     description: 'Review specific files or all changed files',
-  },
-  suggest: {
-    usage: '/zai suggest <prompt>',
-    description: 'Suggest improvements or refactoring ideas',
   },
 };
 
@@ -33879,271 +33871,6 @@ module.exports = {
 
 /***/ }),
 
-/***/ 3016:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
-const { createApiClient } = __nccwpck_require__(9729);
-const { createLogger, generateCorrelationId, getUserMessage } = __nccwpck_require__(2120);
-const { REACTIONS, setReaction } = __nccwpck_require__(6819);
-const { fetchFileAtRef, resolvePrRefs, fetchPrFiles } = __nccwpck_require__(1669);
-
-// Constants for file comparison limits
-const MAX_COMPARE_FILES = 5;
-const MAX_FILE_CHARS = 15000;
-
-/**
- * Builds a comparison prompt with old and new versions of changed files.
- * @param {Array} filesData - Array of file objects with {filename, status, oldVersion, newVersion}
- * @param {number} maxChars - Maximum characters for the prompt
- * @returns {string} Formatted prompt for comparison
- */
-function buildComparePrompt(filesData, maxChars = MAX_FILE_CHARS, totalChangedFiles = null) {
-  const fileSections = filesData.map(file => {
-    const { filename, status, oldVersion, newVersion } = file;
-    
-    let oldContent = oldVersion || '[File did not exist in base branch]';
-    let newContent = newVersion || '[File was deleted in this PR]';
-    
-    // Truncate individual file contents if needed
-    if (oldVersion && oldVersion.length > MAX_FILE_CHARS) {
-      oldContent = `${oldVersion.substring(0, MAX_FILE_CHARS)}\n...[truncated, ${oldVersion.length - MAX_FILE_CHARS} chars omitted]`;
-    }
-    if (newVersion && newVersion.length > MAX_FILE_CHARS) {
-      newContent = `${newVersion.substring(0, MAX_FILE_CHARS)}\n...[truncated, ${newVersion.length - MAX_FILE_CHARS} chars omitted]`;
-    }
-    
-    return `### ${filename} (${status})
-
-Compare the old logic with the new logic in this PR.
-<old_version>
-${oldContent}
-</old_version>
-<new_version>
-${newContent}
-</new_version>
-
-Task: Summarize the functional changes. Did the behavior change? Are there any breaking changes for API consumers? Focus on 'what' changed in behavior, not just 'how' the syntax changed.
-`;
-  });
-  
-  let prompt = `You are an expert code reviewer. Compare the OLD version with the NEW version in the following pull request changes.
-
-Analyze the differences and provide:
-1. What changed between old and new versions
-2. Key differences in approach or implementation
-3. Potential implications of these changes
-4. Any concerns or things to watch out for
-
-## Changed Files:\n\n`;
-  
-  prompt += fileSections.join('\n\n');
-  
-  // Add note if there are more files than we can compare
-  if (totalChangedFiles && totalChangedFiles > MAX_COMPARE_FILES) {
-    prompt += `\n\n[Comparison limited to first ${MAX_COMPARE_FILES} of ${totalChangedFiles} changed files]`;
-  }
-  
-  // Truncate the entire prompt if needed
-  const truncated = truncateContext(prompt, maxChars);
-  return truncated.content;
-}
-
-function formatCompareResponse(comparison) {
-  if (!comparison.includes('```')) {
-    return `## Old vs New Comparison\n\n${comparison}`;
-  }
-  return `## Old vs New Comparison\n\n${comparison}`;
-}
-
-async function handleCompareCommand(context) {
-  const { octokit, context: githubContext, payload, apiKey, model, commentId } = context;
-  const { owner, repo } = githubContext.repo;
-
-  const correlationId = generateCorrelationId();
-  const logger = createLogger(correlationId, {
-    eventName: githubContext.eventName,
-    prNumber: payload.pull_request?.number,
-    command: 'compare',
-  });
-
-  logger.info({}, 'Processing compare command');
-
-  try {
-    const pullNumber = payload.pull_request?.number || payload.issue?.number;
-
-    if (!pullNumber) {
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      }
-      return {
-        success: false,
-        error: 'No pull request number found.',
-      };
-    }
-
-    logger.info({ pullNumber }, 'Resolving PR refs');
-
-    // Step 1: Resolve PR base and head refs
-    const refsResult = await resolvePrRefs(octokit, owner, repo, pullNumber);
-    if (!refsResult.success) {
-      logger.warn({ error: refsResult.error }, 'Failed to resolve PR refs, falling back to base/head from payload');
-    }
-
-    const baseRef = refsResult.success ? refsResult.data.base.sha : (payload.pull_request?.base?.sha || 'HEAD');
-    const headRef = refsResult.success ? refsResult.data.head.sha : (payload.pull_request?.head?.sha || 'HEAD');
-    const baseBranch = refsResult.success ? refsResult.data.base.ref : (payload.pull_request?.base?.ref || 'base');
-    const headBranch = refsResult.success ? refsResult.data.head.ref : (payload.pull_request?.head?.ref || 'head');
-
-    logger.info({ baseRef, headRef, baseBranch, headBranch }, 'Resolved PR refs');
-
-    // Step 2: Fetch changed files list
-    logger.info({ pullNumber }, 'Fetching changed files');
-
-    const filesResult = await fetchPrFiles(octokit, owner, repo, pullNumber);
-    if (!filesResult.success || !filesResult.data || filesResult.data.length === 0) {
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      }
-      return {
-        success: false,
-        error: filesResult.fallback || 'No changed files found in this pull request.',
-      };
-    }
-
-    const files = filesResult.data;
-    const changedFiles = files.filter(f => f.status !== 'unchanged');
-    
-    if (changedFiles.length === 0) {
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      }
-      return {
-        success: false,
-        error: 'No changed files found in this pull request.',
-      };
-    }
-
-    logger.info({ totalFiles: changedFiles.length }, 'Fetching base and head versions for changed files');
-
-    // Step 3: Fetch base and head versions for each file (up to MAX_COMPARE_FILES)
-    const filesToCompare = changedFiles.slice(0, MAX_COMPARE_FILES);
-    const filesData = await Promise.all(filesToCompare.map(async (file) => {
-      const { filename, status } = file;
-
-      const [baseResult, headResult] = await Promise.all([
-        status === 'added'
-          ? Promise.resolve(null)
-          : fetchFileAtRef(octokit, owner, repo, filename, baseRef, {
-              maxFileSize: MAX_FILE_CHARS,
-              maxFileLines: 10000,
-              patch: file.patch,
-              patchSide: 'old',
-            }),
-        status === 'removed'
-          ? Promise.resolve(null)
-          : fetchFileAtRef(octokit, owner, repo, filename, headRef, {
-              maxFileSize: MAX_FILE_CHARS,
-              maxFileLines: 10000,
-              patch: file.patch,
-              patchSide: 'new',
-            }),
-      ]);
-
-      let oldVersion = null;
-      if (baseResult && baseResult.success) {
-        oldVersion = baseResult.data;
-      } else if (baseResult && baseResult.error?.status !== 404) {
-        logger.warn({ filename, error: baseResult.error }, 'Failed to fetch base version');
-      }
-
-      let newVersion = null;
-      if (headResult && headResult.success) {
-        newVersion = headResult.data;
-      } else if (headResult && headResult.error?.status !== 404) {
-        logger.warn({ filename, error: headResult.error }, 'Failed to fetch head version');
-      }
-
-      return {
-        filename,
-        status,
-        oldVersion,
-        newVersion,
-      };
-    }));
-
-    // Step 4: Build the comparison prompt
-    const prompt = buildComparePrompt(filesData, DEFAULT_MAX_CHARS, changedFiles.length);
-
-    logger.info({ promptLength: prompt.length, filesCompared: filesData.length }, 'Calling Z.ai API');
-
-    const apiClient = createApiClient({ timeout: 30000, maxRetries: 3 });
-    const result = await apiClient.call({
-      apiKey,
-      model,
-      prompt: prompt,
-    });
-
-    if (!result.success) {
-      const category = result.error.category || 'provider';
-      const userMessage = getUserMessage(category, new Error(result.error.message));
-      
-      logger.error({ error: result.error }, 'API call failed');
-      
-      // Add error reaction if commentId available
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      }
-      
-      return {
-        success: false,
-        error: userMessage,
-      };
-    }
-
-    const response = formatCompareResponse(result.data);
-
-    logger.info({ responseLength: response.length }, 'Compare command completed successfully');
-
-    // Add success reaction if commentId available
-    if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
-    }
-
-    return {
-      success: true,
-      response,
-    };
-
-  } catch (error) {
-    logger.error({ error: error.message }, 'Unexpected error in compare command');
-    
-    const category = 'internal';
-    const userMessage = getUserMessage(category, error);
-    
-    // Add error reaction if commentId available
-    if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-    }
-    
-    return {
-      success: false,
-      error: userMessage,
-    };
-  }
-}
-
-module.exports = {
-  handleCompareCommand,
-  buildComparePrompt,
-  formatCompareResponse,
-  MAX_COMPARE_FILES,
-  MAX_FILE_CHARS,
-};
-
-
-/***/ }),
-
 /***/ 4334:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -34181,10 +33908,32 @@ async function handleDescribeCommand(context, args) {
     }
     
     // 3. Build LLM prompt (as string, not array)
-    const prompt = `You are an expert technical writer and developer. Your task is to write a clear, structured Pull Request description based on the provided commit messages.
+    const prompt = `You are an expert Staff Engineer and Technical Writer. Your task is to analyze the provided Git commit messages and synthesize a clear, comprehensive, and well-structured Pull Request description.
 
-Group the changes logically (e.g., Features, Fixes, Refactoring). Use Markdown formatting (bullet points, bold text). Do not write introductory conversational phrases, output only the PR description itself.
+### Instructions:
+1. **Analyze and Consolidate:** Do not simply repeat the commit messages. Group related changes, ignore trivial or redundant commits (e.g., "fix typo", "wip", "merge"), and deduce the overall intent of the Pull Request.
+2. **Tone and Style:** Use a professional, objective tone. Write in the imperative mood for bullet points (e.g., "Add user authentication" instead of "Added user authentication").
+3. **Strict Formatting:** Output ONLY the requested Markdown structure. Do not include any conversational filler, greetings, or introductory phrases. If a specific category has no relevant commits, **omit that section entirely**.
 
+### Required PR Description Structure:
+
+**## 🚀 Overview**
+[Provide a concise 1-2 sentence summary of the primary purpose and value of this Pull Request based on the commits.]
+
+**## ✨ Features & Enhancements**
+* [Bullet points detailing new functionality or improvements]
+
+**## 🐛 Bug Fixes**
+* [Bullet points explaining the issues resolved]
+
+**## 🔨 Refactoring & Chore**
+* [Bullet points covering code restructuring, technical debt removal, or style changes]
+
+**## ⚙️ Infrastructure & Tooling**
+* [Bullet points regarding CI/CD updates, dependency bumps, or configuration changes]
+
+---
+### Input Data:
 <commit_messages>
 ${commitMessages}
 </commit_messages>`;
@@ -34605,6 +34354,338 @@ module.exports = {
 
 /***/ }),
 
+/***/ 7265:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Impact & Risk Analysis Command Handler
+ * 
+ * Performs impact and risk analysis on a Pull Request when user comments `/zai impact`.
+ * 
+ * Flow:
+ * 1. Fetch PR context (title, description, changed files, diffs)
+ * 2. Send to LLM with specialized system prompt
+ * 3. Post LLM response as threaded comment
+ * 4. Extract suggested labels from response
+ * 5. Apply labels to the PR (best-effort, non-blocking)
+ */
+
+const { upsertComment, setReaction, REACTIONS } = __nccwpck_require__(6819);
+const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
+
+// Marker for idempotent comment upsert
+const IMPACT_MARKER = '<!-- ZAI_IMPACT_COMMAND -->';
+
+// System prompt for impact analysis
+const IMPACT_SYSTEM_PROMPT = `You are an expert Technical Lead and Security Auditor reviewing a Pull Request. Your task is to perform an Impact and Risk Analysis based on the provided code diff, file names, and PR description.
+
+Evaluate the "blast radius" of these changes and warn human reviewers if specific parts of the code require rigorous manual inspection.
+
+Categorize the overall risk of the PR into one of four levels:
+- 🟢 Low Risk: Cosmetic changes, documentation, simple pure HTML markup updates, or isolated CSS/Tailwind utility class adjustments.
+- 🟡 Medium Risk: Standard feature additions, isolated bug fixes, or non-critical UI/frontend logic changes.
+- 🟠 High Risk: Changes to server-side routing, database schema/migrations (e.g., PostgreSQL), edge computing scripts (e.g., Cloudflare Workers), or core backend logic.
+- 🔴 Critical Risk: Modifications to authentication/authorization (e.g., JWT middleware, session management), security policies, payment processing, or heavy structural architecture shifts.
+
+Respond STRICTLY in the following Markdown format. Keep your analysis concise, objective, and directly related to the provided diff.
+
+**Risk Level:** [Insert 🟢 Low / 🟡 Medium / 🟠 High / 🔴 Critical]
+
+**Impact Summary:**
+[1-2 sentences summarizing what areas of the application are affected by this PR. Be specific about the domains, e.g., "This PR modifies the user session middleware and updates the styling of the login page."]
+
+**Critical Areas Touched:**
+[Bullet list of the most sensitive files or logic blocks modified. If none, write "None detected." Example:]
+* \`auth/middleware.py\`: Modified token validation logic (Requires careful review).
+* \`db/migrations/004_add_users.sql\`: Modifies existing schema.
+
+**Suggested Labels:**
+[Provide a comma-separated list of 2-4 short labels that the bot could automatically apply to the PR, each wrapped in backticks, e.g., \`risk: high\`, \`area: auth\`, \`area: styles\`]`;
+
+/**
+ * Format changed files list for the prompt
+ * @param {Array} changedFiles - Array of {filename, status, patch} objects
+ * @returns {string} Formatted file list
+ */
+function formatChangedFiles(changedFiles) {
+  if (!changedFiles || changedFiles.length === 0) {
+    return 'No files changed';
+  }
+
+  return changedFiles.map(file => {
+    const statusEmoji = {
+      added: '➕',
+      modified: '📝',
+      removed: '➖',
+      renamed: '📦'
+    }[file.status] || '📄';
+    
+    let output = `${statusEmoji} \`${file.filename}\` (${file.status})`;
+    
+    // Include patch if available (truncated if too long)
+    if (file.patch) {
+      const patchLines = file.patch.split('\n');
+      const maxPatchLines = 50;
+      if (patchLines.length > maxPatchLines) {
+        output += `\n\`\`\`diff\n${patchLines.slice(0, maxPatchLines).join('\n')}\n... [truncated, ${patchLines.length - maxPatchLines} more lines]\n\`\`\``;
+      } else {
+        output += `\n\`\`\`diff\n${file.patch}\n\`\`\``;
+      }
+    }
+    
+    return output;
+  }).join('\n\n');
+}
+
+/**
+ * Build the user prompt for impact analysis
+ * @param {Object} pr - PR metadata {title, body}
+ * @param {Array} changedFiles - Array of changed files
+ * @param {number} maxChars - Maximum characters for context
+ * @returns {Object} {prompt, truncated}
+ */
+function buildImpactPrompt(pr, changedFiles, maxChars = DEFAULT_MAX_CHARS) {
+  const fileList = formatChangedFiles(changedFiles);
+  
+  const rawPrompt = `Please analyze this Pull Request for impact and risk assessment.
+
+## PR Title
+${pr.title || 'No title provided'}
+
+## PR Description
+${pr.body || 'No description provided'}
+
+## Changed Files
+${fileList}`;
+
+  const { content, truncated } = truncateContext(rawPrompt, maxChars);
+  
+  return {
+    prompt: content,
+    truncated
+  };
+}
+
+/**
+ * Extract suggested labels from LLM response
+ * Parses the "Suggested Labels:" section and extracts backticked labels
+ * 
+ * @param {string} response - LLM response text
+ * @returns {Array<string>} Array of extracted label strings
+ */
+function extractSuggestedLabels(response) {
+  if (!response || typeof response !== 'string') {
+    return [];
+  }
+
+  // Find the "Suggested Labels:" section
+  const labelsSectionMatch = response.match(/\*\*Suggested Labels:\*\*\s*([\s\S]*?)(?=\n\n|\n\*\*|$)/i);
+  
+  if (!labelsSectionMatch) {
+    return [];
+  }
+
+  const labelsSection = labelsSectionMatch[1];
+  
+  // Extract all backticked labels
+  const backtickRegex = /`([^`]+)`/g;
+  const labels = [];
+  let match;
+  
+  while ((match = backtickRegex.exec(labelsSection)) !== null) {
+    const label = match[1].trim();
+    // Filter out empty, too long, or punctuation-only labels
+    if (label && label.length > 0 && label.length <= 50 && !/^[,.\s]+$/.test(label)) {
+      labels.push(label);
+    }
+  }
+
+  // Fallback: try comma-separated if no backticks found
+  if (labels.length === 0) {
+    const commaSeparated = labelsSection
+      .split(',')
+      .map(s => s.trim().replace(/^`|`$/g, '')) // Remove surrounding backticks
+      .filter(s => s.length > 0 && s.length <= 50 && !/^[,.\s]+$/.test(s));
+    labels.push(...commaSeparated.slice(0, 5));
+  }
+
+  // Dedupe and limit
+  return [...new Set(labels)].slice(0, 5);
+}
+
+/**
+ * Apply labels to the PR (best-effort, non-blocking)
+ * 
+ * @param {Object} octokit - GitHub API client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} issueNumber - PR number
+ * @param {Array<string>} labels - Labels to apply
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<boolean>} Success status
+ */
+async function applySuggestedLabels(octokit, owner, repo, issueNumber, labels, logger) {
+  if (!labels || labels.length === 0) {
+    return true;
+  }
+
+  try {
+    await octokit.rest.issues.addLabels({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      labels
+    });
+    
+    logger.info({ labels, issueNumber }, 'Applied suggested labels to PR');
+    return true;
+  } catch (error) {
+    // Log warning but don't fail the command
+    logger.warn({ 
+      error: error.message, 
+      labels, 
+      issueNumber 
+    }, 'Failed to apply labels to PR (non-blocking)');
+    return false;
+  }
+}
+
+/**
+ * Main handler for /zai impact command
+ * 
+ * @param {Object} context - Handler context from dispatchCommand
+ * @param {Array} args - Command arguments (unused for impact)
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+async function handleImpactCommand(context, args) {
+  const { 
+    octokit, 
+    owner, 
+    repo, 
+    issueNumber, 
+    commentId, 
+    apiClient, 
+    apiKey, 
+    model, 
+    logger,
+    changedFiles,
+    maxChars = DEFAULT_MAX_CHARS 
+  } = context;
+
+  try {
+    // 1. Set thinking reaction to show command is processing
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
+
+    // 2. Fetch PR metadata (title, description)
+    let prData;
+    try {
+      const prResponse = await octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: issueNumber
+      });
+      prData = {
+        title: prResponse.data.title,
+        body: prResponse.data.body
+      };
+    } catch (error) {
+      logger.error({ error: error.message }, 'Failed to fetch PR metadata');
+      await upsertComment(
+        octokit, owner, repo, issueNumber,
+        `## Z.ai Impact Analysis\n\n❌ Failed to fetch PR metadata: ${error.message}\n\n${IMPACT_MARKER}`,
+        IMPACT_MARKER,
+        { replyToId: commentId }
+      );
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      return { success: false, error: 'Failed to fetch PR metadata' };
+    }
+
+    // 3. Build prompt for LLM
+    const { prompt, truncated } = buildImpactPrompt(prData, changedFiles, maxChars);
+
+    logger.info({ 
+      issueNumber, 
+      truncated,
+      filesCount: changedFiles?.length || 0 
+    }, 'Built impact analysis prompt');
+
+    // 4. Call LLM API
+    const llmResult = await apiClient.call({ 
+      apiKey, 
+      model, 
+      prompt: `System instructions:\n${IMPACT_SYSTEM_PROMPT}\n\n---\n\n${prompt}`
+    });
+
+    if (!llmResult.success) {
+      logger.error({ error: llmResult.error }, 'LLM call failed for impact command');
+      await upsertComment(
+        octokit, owner, repo, issueNumber,
+        `## Z.ai Impact Analysis\n\n❌ Failed to analyze PR. Please try again later.\n\n${IMPACT_MARKER}`,
+        IMPACT_MARKER,
+        { replyToId: commentId }
+      );
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      return { success: false, error: llmResult.error };
+    }
+
+    const analysis = llmResult.data;
+
+    // 5. Post analysis as comment
+    const commentBody = `## Z.ai Impact & Risk Analysis\n\n${analysis}\n\n${IMPACT_MARKER}`;
+    
+    await upsertComment(
+      octokit, owner, repo, issueNumber,
+      commentBody,
+      IMPACT_MARKER,
+      { replyToId: commentId }
+    );
+
+    // 6. Extract and apply suggested labels (best-effort, non-blocking)
+    const suggestedLabels = extractSuggestedLabels(analysis);
+    
+    if (suggestedLabels.length > 0) {
+      logger.info({ suggestedLabels, issueNumber }, 'Extracted suggested labels');
+      await applySuggestedLabels(octokit, owner, repo, issueNumber, suggestedLabels, logger);
+    } else {
+      logger.info({ issueNumber }, 'No suggested labels found in analysis');
+    }
+
+    // 7. Set success reaction
+    await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+
+    return { success: true };
+
+  } catch (error) {
+    logger.error({ error: error.message, stack: error.stack }, 'Impact command failed unexpectedly');
+    
+    try {
+      await upsertComment(
+        octokit, owner, repo, issueNumber,
+        `## Z.ai Impact Analysis\n\n❌ An unexpected error occurred: ${error.message}\n\n${IMPACT_MARKER}`,
+        IMPACT_MARKER,
+        { replyToId: commentId }
+      );
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    } catch (commentError) {
+      logger.error({ error: commentError.message }, 'Failed to post error comment');
+    }
+    
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = {
+  handleImpactCommand,
+  IMPACT_MARKER,
+  buildImpactPrompt,
+  extractSuggestedLabels,
+  applySuggestedLabels,
+  formatChangedFiles
+};
+
+
+/***/ }),
+
 /***/ 903:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -34817,341 +34898,6 @@ module.exports = {
   validateFileInPr,
   buildReviewPrompt,
   REVIEW_MARKER,
-};
-
-
-/***/ }),
-
-/***/ 4361:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-/**
- * Suggest Command Handler
- * 
- * Handles `/zai suggest <prompt>` command for prompt-guided improvements.
- * Uses user's suggestion prompt to guide analysis of specific code blocks.
- * Supports anchor resolution from comment metadata (review-comment) or instruction text.
- */
-
-const { truncateContext, DEFAULT_MAX_CHARS } = __nccwpck_require__(9990);
-const { createApiClient } = __nccwpck_require__(9729);
-const { createLogger, generateCorrelationId, getUserMessage } = __nccwpck_require__(2120);
-const { REACTIONS, setReaction } = __nccwpck_require__(6819);
-const { fetchFileAtPrHead } = __nccwpck_require__(1669);
-const { extractEnclosingBlock } = __nccwpck_require__(7437);
-
-/**
- * Parse file:line pattern from instruction text
- * Supports formats: "path/to/file.js:42", "src/lib/auth.js:100"
- * @param {string} instruction - User instruction text
- * @returns {{path: string|null, line: number|null}}
- */
-function parseFileLineAnchor(instruction) {
-  if (!instruction || typeof instruction !== 'string') {
-    return { path: null, line: null };
-  }
-
-  // Match file:line patterns - filename followed by colon and number
-  const match = instruction.match(/([\w\-./\\]+):(\d+)/);
-  
-  if (!match) {
-    return { path: null, line: null };
-  }
-
-  const path = match[1];
-  const line = parseInt(match[2], 10);
-
-  // Validate line number
-  if (line < 1 || Number.isNaN(line)) {
-    return { path: null, line: null };
-  }
-
-  return { path, line };
-}
-
-/**
- * Resolves anchor from context or instruction text
- * @param {Object} context - Handler context
- * @param {string} userInstruction - User's instruction text
- * @returns {{path: string|null, line: number|null, source: string}}
- */
-function resolveAnchor(context, userInstruction) {
-  // First: check commentPath/commentLine from context (review-comment event)
-  const commentPath = context.commentPath || null;
-  const commentLine = context.commentLine || null;
-
-  if (commentPath && commentLine) {
-    return {
-      path: commentPath,
-      line: commentLine,
-      source: 'comment_metadata'
-    };
-  }
-
-  // Second: try parsing file:line from instruction text
-  const parsed = parseFileLineAnchor(userInstruction);
-  if (parsed.path && parsed.line) {
-    return {
-      path: parsed.path,
-      line: parsed.line,
-      source: 'instruction_parse'
-    };
-  }
-
-  // Third: no reliable anchor found
-  return {
-    path: null,
-    line: null,
-    source: 'none'
-  };
-}
-
-/**
- * Builds a suggestion prompt combining code block with user's guidance
- * @param {string} path - File path being suggested on
- * @param {Object} blockResult - Result from extractEnclosingBlock
- * @param {string} userInstruction - User's suggestion prompt
- * @param {number} maxChars - Maximum characters for prompt
- * @returns {{prompt: string, truncated: boolean}}
- */
-function buildSuggestPrompt(path, blockResult, userInstruction, maxChars = DEFAULT_MAX_CHARS) {
-  const codeContent = blockResult.target.join('\n');
-  const blockNote = blockResult.fallback 
-    ? `\n\n_(Note: ${blockResult.note || 'Could not determine precise function/class block, using context window'})_`
-    : '';
-
-  let prompt = `You are an expert programmer. The user wants to improve or change a specific part of the code.\n`;
-  prompt += `Current code context:\n`;
-  prompt += `<file>${path}</file>\n`;
-  prompt += `<code>\n${codeContent}\n</code>\n\n`;
-  prompt += `User Instruction: ${userInstruction}${blockNote}\n\n`;
-  prompt += `Task: Provide a code suggestion that fulfills the instruction. Output ONLY the code diff or the new code block in a format that can be easily applied.`;
-
-  const truncated = truncateContext(prompt, maxChars);
-  return { prompt: truncated.content, truncated: truncated.truncated };
-}
-
-/**
- * Formats suggestions response with markdown code blocks
- * @param {string} suggestions - Raw suggestions from API
- * @returns {string} Formatted response with code blocks
- */
-function formatSuggestionsResponse(suggestions) {
-  // Ensure suggestions are wrapped in code blocks for proper formatting
-  if (!suggestions.includes('```')) {
-    return `## Suggested Improvements\n\n${suggestions}`;
-  }
-  return `## Suggested Improvements\n\n${suggestions}`;
-}
-
-/**
- * Handles the /zai suggest command
- * @param {Object} context - Handler context object
- * @param {Object} context.octokit - GitHub Octokit instance
- * @param {Object} context.context - GitHub context object
- * @param {Object} context.payload - Event payload with pull request
- * @param {string} context.apiKey - Z.ai API key
- * @param {string} context.model - Z.ai model to use
- * @param {string} context.userPrompt - User's suggestion prompt (remaining args after 'suggest')
- * @param {string} [context.commentPath] - File path from comment metadata (review-comment)
- * @param {number} [context.commentLine] - Line number from comment metadata
- * @returns {Promise<{success: boolean, response?: string, error?: string}>}
- */
-async function handleSuggestCommand(context) {
-  const { octokit, context: githubContext, payload, apiKey, model, userPrompt, commentId, commentPath, commentLine } = context;
-  const { owner, repo } = githubContext.repo;
-
-  // Generate correlation ID for tracking
-  const correlationId = generateCorrelationId();
-  const logger = createLogger(correlationId, {
-    eventName: githubContext.eventName,
-    prNumber: payload.pull_request?.number,
-    command: 'suggest',
-  });
-
-  logger.info({ userPrompt, commentPath, commentLine }, 'Processing suggest command');
-
-  // Validate user prompt
-  if (!userPrompt || userPrompt.trim().length === 0) {
-    // Add error reaction if commentId available
-    if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-    }
-    return {
-      success: false,
-      error: 'Please provide a suggestion prompt. Usage: /zai suggest <your suggestion>',
-    };
-  }
-
-  try {
-    // Fetch changed files from the PR
-    const pullNumber = payload.pull_request.number;
-
-    logger.info({ pullNumber }, 'Fetching changed files');
-
-    const { data: files } = await octokit.rest.pulls.listFiles({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      per_page: 100,
-    });
-
-    if (!files || files.length === 0) {
-      // Add error reaction if commentId available
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      }
-      return {
-        success: false,
-        error: 'No changed files found in this pull request.',
-      };
-    }
-
-    // Resolve anchor: comment metadata -> instruction parse -> fallback
-    const anchor = resolveAnchor({ commentPath, commentLine }, userPrompt);
-    logger.info({ anchor }, 'Resolved anchor');
-
-    let prompt = null;
-    let truncated = false;
-
-    if (anchor.path && anchor.line) {
-      // Fetch file content at PR head for the anchor file
-      const fileResult = await fetchFileAtPrHead(octokit, owner, repo, anchor.path, pullNumber, {
-        maxFileSize: 200000,
-        maxFileLines: 10000,
-        anchorLine: anchor.line,
-        preferEnclosingBlock: true,
-      });
-      
-      if (fileResult.success && fileResult.data) {
-        const fileContent = fileResult.data;
-        
-        // Extract surrounding function/class block around anchor line
-        const blockResult = extractEnclosingBlock(fileContent, anchor.line);
-        logger.info({ 
-          blockLines: blockResult.target.length, 
-          fallback: blockResult.fallback 
-        }, 'Extracted enclosing block');
-
-        // Build prompt with extracted block
-        const promptResult = buildSuggestPrompt(anchor.path, blockResult, userPrompt);
-        prompt = promptResult.prompt;
-        truncated = promptResult.truncated;
-      } else {
-        // Failed to fetch anchor file, fall back to changed files
-        logger.warn({ anchorPath: anchor.path, error: fileResult.error }, 'Failed to fetch anchor file, using fallback');
-        anchor.source = 'fallback';
-      }
-    }
-
-    // Fallback: use changed files when no anchor or fetch failed
-    if (!prompt) {
-      const filesWithPatches = files.filter(f => f.patch);
-      
-      if (filesWithPatches.length === 0) {
-        // Add error reaction if commentId available
-        if (commentId) {
-          await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-        }
-        return {
-          success: false,
-          error: 'No patchable changes found in this pull request.',
-        };
-      }
-
-      // Build fallback prompt using diffs
-      const diffs = filesWithPatches
-        .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\``)
-        .join('\n\n');
-
-      const fallbackNote = anchor.source === 'none' 
-        ? '\n\n_(Note: No specific anchor detected. Providing suggestions based on all changed files.)_'
-        : '';
-
-      prompt = `You are an expert code reviewer. Based on the following code changes, ${userPrompt}${fallbackNote}\n\nProvide specific, actionable suggestions with code examples where appropriate.\n\n## Changed Files:\n\n${diffs}`;
-
-      const truncatedResult = truncateContext(prompt, DEFAULT_MAX_CHARS);
-      prompt = truncatedResult.content;
-      truncated = truncatedResult.truncated;
-    }
-
-    // Apply context budget truncation (if not already truncated)
-    if (!truncated) {
-      const truncatedResult = truncateContext(prompt, DEFAULT_MAX_CHARS);
-      prompt = truncatedResult.content;
-      truncated = truncatedResult.truncated;
-    }
-
-    if (truncated) {
-      logger.info({ promptLength: prompt.length }, 'Context truncated due to size');
-    }
-
-    // Call the Z.ai API
-    logger.info({ promptLength: prompt.length }, 'Calling Z.ai API');
-
-    const apiClient = createApiClient({ timeout: 30000, maxRetries: 3 });
-    const result = await apiClient.call({
-      apiKey,
-      model,
-      prompt: prompt,
-    });
-
-    if (!result.success) {
-      const category = result.error.category || 'provider';
-      const userMessage = getUserMessage(category, new Error(result.error.message));
-      
-      logger.error({ error: result.error }, 'API call failed');
-      
-      // Add error reaction if commentId available
-      if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      }
-      
-      return {
-        success: false,
-        error: userMessage,
-      };
-    }
-
-    // Format the response with markdown code blocks
-    const response = formatSuggestionsResponse(result.data);
-
-    logger.info({ responseLength: response.length }, 'Suggest command completed successfully');
-
-    // Add success reaction if commentId available
-    if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
-    }
-
-    return {
-      success: true,
-      response,
-    };
-
-  } catch (error) {
-    logger.error({ error: error.message }, 'Unexpected error in suggest command');
-    
-    const category = 'internal';
-    const userMessage = getUserMessage(category, error);
-    
-    // Add error reaction if commentId available
-    if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-    }
-    
-    return {
-      success: false,
-      error: userMessage,
-    };
-  }
-}
-
-module.exports = {
-  handleSuggestCommand,
-  buildSuggestPrompt,
-  formatSuggestionsResponse,
-  resolveAnchor,
-  parseFileLineAnchor,
 };
 
 
@@ -40549,9 +40295,8 @@ const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = __nccwp
 const { parseCommand, isValid } = __nccwpck_require__(5055);
 const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = __nccwpck_require__(6495);
 const { handleAskCommand } = __nccwpck_require__(6630);
-const { handleSuggestCommand } = __nccwpck_require__(4361);
-const { handleCompareCommand } = __nccwpck_require__(3016);
 const { handleDescribeCommand } = __nccwpck_require__(4334);
+const { handleImpactCommand } = __nccwpck_require__(7265);
 const reviewHandler = __nccwpck_require__(903);
 const explainHandler = __nccwpck_require__(1248);
 
@@ -40575,10 +40320,8 @@ Unknown command. Available commands:
 - \`/zai ask <question>\` - Ask a question about the code
 - \`/zai review\` - Request a full code review
 - \`/zai explain <lines>\` - Explain specific lines
-- \`/zai suggest\` - Get improvement suggestions
-- \`/zai compare\` - Compare changes
 - \`/zai describe\` - Generate PR description from commits
-- \`/zai help\` - Show this help message
+- \`/zai impact\` - Analyze the potential impact of changes
 - \`/zai help\` - Show this help message
 
 You can also use @zai-bot instead of /zai.
@@ -41049,7 +40792,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     logger,
     maxChars: DEFAULT_MAX_CHARS,
     continuityState,
-    // Normalized context inputs for explain/suggest/compare handlers
+    // Normalized context inputs for explain handler
     baseRef,
     headRef,
     commentPath,
@@ -41062,7 +40805,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
 
   switch (command) {
     case 'help':
-      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai suggest\` - Get improvement suggestions\n- \`/zai compare\` - Compare changes\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
+      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai impact\` - Analyze the potential impact of changes\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
       break;
 
     case 'review':
@@ -41235,56 +40978,6 @@ ${COMMENT_MARKER}`;
         logger.error({ error: error.message }, 'Ask handler threw error');
         terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Ask\n\n**Error:** Failed to complete request. Please try again later.\n\n${COMMENT_MARKER}`;
-      }
-      break;
-    }
-
-    case 'suggest': {
-      // Extract user prompt from args (everything after 'suggest')
-      const userPrompt = args.join(' ').trim();
-      
-      const handlerContextSuggest = {
-        octokit,
-        context,
-        payload: context.payload,
-        apiKey,
-        model,
-        userPrompt,
-        commentId,
-      };
-      
-      core.info(`Processing suggest command with prompt: ${userPrompt.substring(0, 50)}...`);
-      
-      const result = await handleSuggestCommand(handlerContextSuggest);
-      
-      if (result.success) {
-        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
-      } else {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Suggest\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
-      }
-      break;
-    }
-
-    case 'compare': {
-      const handlerContextCompare = {
-        octokit,
-        context,
-        payload: context.payload,
-        apiKey,
-        model,
-        commentId,
-      };
-      
-      core.info('Processing compare command');
-      
-      const result = await handleCompareCommand(handlerContextCompare);
-      
-      if (result.success) {
-        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
-      } else {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Compare\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
       }
       break;
     }

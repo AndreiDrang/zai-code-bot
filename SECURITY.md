@@ -16,8 +16,8 @@ All `/zai` commands are **restricted to repository collaborators** with write ac
 | `/zai ask` | Collaborator only |
 | `/zai review` | Collaborator only |
 | `/zai explain` | Collaborator only |
-| `/zai suggest` | Collaborator only |
-| `/zai compare` | Collaborator only |
+| `/zai describe` | Collaborator only |
+| `/zai impact` | Collaborator only |
 
 **Rationale:** Preventing unauthorized users from invoking AI-powered commands mitigates:
 - Abuse of API quotas
@@ -65,8 +65,8 @@ The bot supports a **finite, safe command set** only:
 /zai ask       - Answer questions about code
 /zai review    - Review specific files
 /zai explain   - Explain code sections
-/zai suggest   - Suggest improvements
-/zai compare   - Compare old vs new versions
+/zai describe  - Generate PR description
+/zai impact    - Analyze change impact
 ```
 
 ### Explicitly Prohibited Operations

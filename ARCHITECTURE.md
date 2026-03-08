@@ -13,7 +13,7 @@
 **Evidence Anchors**:
 - `action.yml` — GitHub Action metadata, declares Node 20 runtime and `dist/index.js` entrypoint
 - `src/index.js` — Main orchestrator with event routing and command dispatch
-- `src/lib/handlers/` — Command-specific implementations (8 handlers)
+- `src/lib/handlers/` — Command-specific implementations (6 handlers)
 - `package.json` — Declares `@actions/core` and `@actions/github` dependencies
 - `.github/workflows/ci.yml` — CI pipeline with test/build/drift-check gates
 
@@ -38,8 +38,7 @@ The system has four logical layers:
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                 Command Handlers (lib/handlers/)             │
-│  ask | compare | describe | explain | help | impact |       │
-│  review | suggest                                           │
+│  ask | describe | explain | help | impact | review          │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -81,13 +80,11 @@ zai-code-bot/
 │       └── handlers/
 │           ├── index.js      # Handler registry (HANDLERS map)
 │           ├── ask.js        # /zai ask — Q&A with continuity state
-│           ├── compare.js    # /zai compare — old vs new behavior
 │           ├── describe.js   # /zai describe — PR description from commits
 │           ├── explain.js    # /zai explain — line range explanation
 │           ├── help.js       # /zai help — static help output
 │           ├── impact.js     # /zai impact — risk analysis + auto-labeling
-│           ├── review.js     # /zai review — targeted file review
-│           └── suggest.js    # /zai suggest — improvement suggestions
+│           └── review.js     # /zai review — targeted file review
 │
 ├── tests/
 │   ├── *.test.js             # Module-level unit tests

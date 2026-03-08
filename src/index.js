@@ -6,9 +6,8 @@ const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = require
 const { parseCommand, isValid } = require('./lib/commands.js');
 const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = require('./lib/auth.js');
 const { handleAskCommand } = require('./lib/handlers/ask.js');
-const { handleSuggestCommand } = require('./lib/handlers/suggest.js');
-const { handleCompareCommand } = require('./lib/handlers/compare.js');
 const { handleDescribeCommand } = require('./lib/handlers/describe');
+const { handleImpactCommand } = require('./lib/handlers/impact');
 const reviewHandler = require('./lib/handlers/review.js');
 const explainHandler = require('./lib/handlers/explain.js');
 
@@ -32,10 +31,8 @@ Unknown command. Available commands:
 - \`/zai ask <question>\` - Ask a question about the code
 - \`/zai review\` - Request a full code review
 - \`/zai explain <lines>\` - Explain specific lines
-- \`/zai suggest\` - Get improvement suggestions
-- \`/zai compare\` - Compare changes
 - \`/zai describe\` - Generate PR description from commits
-- \`/zai help\` - Show this help message
+- \`/zai impact\` - Analyze the potential impact of changes
 - \`/zai help\` - Show this help message
 
 You can also use @zai-bot instead of /zai.
@@ -506,7 +503,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     logger,
     maxChars: DEFAULT_MAX_CHARS,
     continuityState,
-    // Normalized context inputs for explain/suggest/compare handlers
+    // Normalized context inputs for explain handler
     baseRef,
     headRef,
     commentPath,
@@ -519,7 +516,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
 
   switch (command) {
     case 'help':
-      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai suggest\` - Get improvement suggestions\n- \`/zai compare\` - Compare changes\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
+      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai impact\` - Analyze the potential impact of changes\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
       break;
 
     case 'review':
@@ -692,56 +689,6 @@ ${COMMENT_MARKER}`;
         logger.error({ error: error.message }, 'Ask handler threw error');
         terminalReaction = REACTIONS.X;
         responseMessage = `## Z.ai Ask\n\n**Error:** Failed to complete request. Please try again later.\n\n${COMMENT_MARKER}`;
-      }
-      break;
-    }
-
-    case 'suggest': {
-      // Extract user prompt from args (everything after 'suggest')
-      const userPrompt = args.join(' ').trim();
-      
-      const handlerContextSuggest = {
-        octokit,
-        context,
-        payload: context.payload,
-        apiKey,
-        model,
-        userPrompt,
-        commentId,
-      };
-      
-      core.info(`Processing suggest command with prompt: ${userPrompt.substring(0, 50)}...`);
-      
-      const result = await handleSuggestCommand(handlerContextSuggest);
-      
-      if (result.success) {
-        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
-      } else {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Suggest\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
-      }
-      break;
-    }
-
-    case 'compare': {
-      const handlerContextCompare = {
-        octokit,
-        context,
-        payload: context.payload,
-        apiKey,
-        model,
-        commentId,
-      };
-      
-      core.info('Processing compare command');
-      
-      const result = await handleCompareCommand(handlerContextCompare);
-      
-      if (result.success) {
-        responseMessage = `${result.response}\n\n${COMMENT_MARKER}`;
-      } else {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Compare\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
       }
       break;
     }

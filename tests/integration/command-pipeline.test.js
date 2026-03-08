@@ -476,20 +476,20 @@ describe('Runtime-Path Command Matrix', () => {
     assert.strictEqual(result.args.join(' '), '10-20');
   });
 
-  test('/zai suggest passes full pipeline', async () => {
+  test('/zai suggest fails at parsing (removed command)', async () => {
     const result = await runFullPipeline('/zai suggest');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.stage, 'complete');
-    assert.strictEqual(result.command, 'suggest');
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.stage, 'parsing');
+    assert.strictEqual(result.error.type, 'unknown_command');
   });
 
-  test('/zai compare passes full pipeline', async () => {
+  test('/zai compare fails at parsing (removed command)', async () => {
     const result = await runFullPipeline('/zai compare');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.stage, 'complete');
-    assert.strictEqual(result.command, 'compare');
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.stage, 'parsing');
+    assert.strictEqual(result.error.type, 'unknown_command');
   });
 
   // =====================================================
@@ -612,7 +612,7 @@ describe('Runtime-Path Command Matrix', () => {
   // =====================================================
 
   test('all six commands have handlers', () => {
-    const commands = ['ask', 'help', 'review', 'explain', 'suggest', 'compare'];
+    const commands = ['ask', 'help', 'review', 'explain', 'describe', 'impact'];
     
     for (const cmd of commands) {
       const handler = handlers.getHandler(cmd);
@@ -620,18 +620,23 @@ describe('Runtime-Path Command Matrix', () => {
     }
   });
 
+  test('removed commands have no handlers', () => {
+    assert.strictEqual(handlers.getHandler('suggest'), null);
+    assert.strictEqual(handlers.getHandler('compare'), null);
+  });
+
   test('handler returns correct command list', () => {
     const allCommands = handlers.getAllCommands();
     
-    assert.strictEqual(allCommands.length, 8);
+    assert.strictEqual(allCommands.length, 6);
     assert.ok(allCommands.includes('ask'));
     assert.ok(allCommands.includes('help'));
     assert.ok(allCommands.includes('review'));
     assert.ok(allCommands.includes('explain'));
-    assert.ok(allCommands.includes('suggest'));
-    assert.ok(allCommands.includes('compare'));
     assert.ok(allCommands.includes('describe'));
     assert.ok(allCommands.includes('impact'));
+    assert.ok(!allCommands.includes('suggest'));
+    assert.ok(!allCommands.includes('compare'));
   });
 
   // =====================================================

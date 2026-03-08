@@ -6,17 +6,13 @@
  */
 
 // Allowlisted commands
-const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'impact', 'review', 'suggest'];
+const ALLOWED_COMMANDS = ['ask', 'describe', 'explain', 'help', 'impact', 'review'];
 
 // Command metadata for help text
 const COMMAND_DESCRIPTIONS = {
   ask: {
     usage: '/zai ask <question>',
     description: 'Ask a question about the code changes in this PR',
-  },
-  compare: {
-    usage: '/zai compare',
-    description: 'Compare old vs new behavior across the diff',
   },
   describe: {
     usage: '/zai describe',
@@ -37,10 +33,6 @@ const COMMAND_DESCRIPTIONS = {
   review: {
     usage: '/zai review [file]',
     description: 'Review specific files or all changed files',
-  },
-  suggest: {
-    usage: '/zai suggest <prompt>',
-    description: 'Suggest improvements or refactoring ideas',
   },
 };
 

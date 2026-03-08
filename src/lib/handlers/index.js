@@ -2,8 +2,6 @@ const askHandler = require('./ask');
 const helpHandler = require('./help');
 const reviewHandler = require('./review');
 const explainHandler = require('./explain');
-const suggestHandler = require('./suggest');
-const compareHandler = require('./compare');
 const impactHandler = require('./impact');
 const describeHandler = require('./describe');
 
@@ -12,8 +10,6 @@ const HANDLERS = {
   help: helpHandler.handleHelpCommand,
   review: reviewHandler.handleReviewCommand,
   explain: explainHandler.handleExplainCommand,
-  suggest: suggestHandler.handleSuggestCommand,
-  compare: compareHandler.handleCompareCommand,
   impact: impactHandler.handleImpactCommand,
   describe: describeHandler.handleDescribeCommand,
 };
@@ -39,8 +35,6 @@ module.exports = {
   help: helpHandler,
   review: reviewHandler,
   explain: explainHandler,
-  suggest: suggestHandler,
-  compare: compareHandler,
   impact: impactHandler,
   describe: describeHandler,
 };
