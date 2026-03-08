@@ -1,8 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-02-23T02:12:23Z
-**Commit:** d2bc3bb
-**Branch:** main
+**Generated:** 2026-03-08T01:07:43Z
+**Commit:** d9f46c3
 
 ## OVERVIEW
 JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/zai` PR comment commands. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
@@ -12,7 +11,7 @@ JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/z
 zai-code-bot/
 ├── src/index.js                      # Runtime orchestration and event dispatch
 ├── src/lib/                          # Commands/auth/context/comments/api/services
-├── src/lib/handlers/                 # Command handlers (ask/review/explain/suggest/compare/help)
+├── src/lib/handlers/                 # Command handlers (ask/review/explain/suggest/compare/describe/impact/help)
 ├── tests/                            # Unit and integration coverage
 ├── dist/index.js                     # Generated ncc bundle executed by GitHub
 ├── dist/licenses.txt                 # Generated third-party licenses
@@ -76,5 +75,5 @@ npm run build
 
 ## NOTES
 - CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit.
-- Repo size is moderate (~58 files) with complexity concentrated in `src/lib/handlers` and integration tests.
-- `CONTRIBUTING.md` still references older single-file structure; prefer current module layout in code.
+- No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
+- 8 command handlers: ask, review, explain, suggest, compare, describe, impact, help.
