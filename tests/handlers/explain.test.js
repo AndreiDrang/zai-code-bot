@@ -1,9 +1,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
-const { 
-  parseLineRange, 
-  buildExplainPrompt 
-} = require('../../src/lib/handlers/explain');
+const explainModule = require('../../src/lib/handlers/explain');
+const { parseLineRange, buildExplainPrompt } = explainModule;
 
 describe('explain.js - parseLineRange', () => {
   test('returns error when no arg provided', () => {
@@ -126,5 +124,396 @@ describe('explain.js - buildExplainPrompt', () => {
     
     assert.ok(result.prompt.includes('function test()'));
     assert.strictEqual(result.truncated, false);
+  });
+});
+
+describe('explain.js - handleExplainCommand', () => {
+  test('returns error when no args provided', async () => {
+    let commentPosted = false;
+    let reactionPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => { reactionPosted = true; },
+      fetchFileAtPrHead: async () => ({ success: true, data: 'content', lineCount: 10 }),
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { call: async () => ({}) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: [{ filename: 'test.js' }]
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, [], mockDeps);
+
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.error, 'No line range provided');
+    assert.ok(commentPosted);
+    assert.ok(reactionPosted);
+  });
+
+  test('returns error when parseLineRange fails', async () => {
+    let commentPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({ success: true, data: 'content', lineCount: 10 }),
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { call: async () => ({}) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: [{ filename: 'test.js' }]
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, ['invalid'], mockDeps);
+
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.includes('Invalid line range format'));
+    assert.ok(commentPosted);
+  });
+
+  test('returns error when no target file specified', async () => {
+    let commentPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({ success: true, data: 'content', lineCount: 10 }),
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { call: async () => ({}) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: null,
+      changedFiles: []
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, ['10-15'], mockDeps);
+
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.error, 'No target file specified');
+    assert.ok(commentPosted);
+  });
+
+  test('returns error when file fetch fails', async () => {
+    let commentPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({ success: false, fallback: 'File not found' }),
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { call: async () => ({}) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: []
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, ['10-15'], mockDeps);
+
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.error, 'File not found');
+    assert.ok(commentPosted);
+  });
+
+  test('returns error when line range validation fails', async () => {
+    let commentPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({
+        success: true,
+        data: 'line1\nline2\nline3\nline4\nline5',
+        lineCount: 5
+      }),
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: false, error: 'Line 10 exceeds file length' }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { call: async () => ({}) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: []
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, ['10-15'], mockDeps);
+
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.includes('exceeds'));
+    assert.ok(commentPosted);
+  });
+
+  test('calls API and posts explanation on success', async () => {
+    let commentPosted = false;
+    let reactionPosted = false;
+    let apiCalled = false;
+
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => { reactionPosted = true; },
+      fetchFileAtPrHead: async () => ({
+        success: true,
+        data: 'function test() {\n  return true;\n}',
+        lineCount: 3,
+        scoped: false
+      }),
+      extractWindow: () => ({ 
+        target: ['function test() {', '  return true;'], 
+        surrounding: ['function test() {', '  return true;', '}'], 
+        fallback: false 
+      }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { 
+        call: async () => { 
+          apiCalled = true;
+          return { success: true, data: 'This function returns true.' }; 
+        } 
+      },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: []
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
+
+    assert.strictEqual(result.success, true);
+    assert.ok(apiCalled);
+    assert.ok(commentPosted);
+    assert.ok(reactionPosted);
+  });
+
+  test('handles API failure gracefully', async () => {
+    let commentPosted = false;
+    let reactionPosted = false;
+
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => { reactionPosted = true; },
+      fetchFileAtPrHead: async () => ({
+        success: true,
+        data: 'function test() {\n  return true;\n}',
+        lineCount: 3,
+        scoped: false
+      }),
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { 
+        call: async () => ({ 
+          success: false, 
+          error: { message: 'API rate limit exceeded', attempts: 3, totalDuration: 5000 }
+        }) 
+      },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: []
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
+
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.includes('API rate limit exceeded'));
+    assert.ok(commentPosted);
+    assert.ok(reactionPosted);
+  });
+
+  test('handles exception in try/catch block', async () => {
+    let commentPosted = false;
+
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({
+        success: true,
+        data: 'function test() {\n  return true;\n}',
+        lineCount: 3,
+        scoped: false
+      }),
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      apiClient: { 
+        call: async () => { throw new Error('Unexpected network error'); }
+      },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: []
+    };
+
+    const result = await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
+
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.includes('Unexpected network error'));
+    assert.ok(commentPosted);
+  });
+
+  test('uses commentPath from context when available', async () => {
+    let fetchCalledWith = null;
+
+    const mockDeps = {
+      upsertComment: async () => ({ data: { id: 123 } }),
+      setReaction: async () => {},
+      fetchFileAtPrHead: async (octokit, owner, repo, path) => {
+        fetchCalledWith = path;
+        return {
+          success: true,
+          data: 'function test() {\n  return true;\n}',
+          lineCount: 3,
+          scoped: false
+        };
+      },
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      commentPath: 'src/specific/file.js',
+      apiClient: { call: async () => ({ success: true, data: 'Explanation' }) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: 'test.js',
+      changedFiles: []
+    };
+
+    await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
+
+    assert.strictEqual(fetchCalledWith, 'src/specific/file.js');
+  });
+
+  test('falls back to first changed file when no path specified', async () => {
+    let fetchCalledWith = null;
+
+    const mockDeps = {
+      upsertComment: async () => ({ data: { id: 123 } }),
+      setReaction: async () => {},
+      fetchFileAtPrHead: async (octokit, owner, repo, path) => {
+        fetchCalledWith = path;
+        return {
+          success: true,
+          data: 'function test() {\n  return true;\n}',
+          lineCount: 3,
+          scoped: false
+        };
+      },
+      extractWindow: () => ({ target: ['line'], surrounding: ['line'], fallback: false }),
+      createLogger: () => ({ info: () => {}, error: () => {}, warn: () => {} }),
+      generateCorrelationId: () => 'test-id',
+      validateRange: () => ({ valid: true }),
+    };
+
+    const mockContext = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      commentId: 100,
+      commentPath: null,
+      apiClient: { call: async () => ({ success: true, data: 'Explanation' }) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      filename: null,
+      changedFiles: [
+        { filename: 'first/changed/file.js' },
+        { filename: 'second/changed/file.js' }
+      ]
+    };
+
+    await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
+
+    assert.strictEqual(fetchCalledWith, 'first/changed/file.js');
   });
 });

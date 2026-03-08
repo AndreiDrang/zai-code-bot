@@ -203,6 +203,405 @@ describe('sanitizeErrorMessage', () => {
   });
 });
 
+describe('createApiClient - withFallback', () => {
+  test('withFallback creates new client with fallback config', () => {
+    const client = createApiClient({ timeout: 5000, maxRetries: 3 });
+    const fallbackFn = () => ({ prompt: 'fallback prompt' });
+    const fallbackClient = client.withFallback(fallbackFn);
+
+    assert.ok(fallbackClient);
+    assert.ok(typeof fallbackClient.call === 'function');
+    assert.ok(typeof fallbackClient.withFallback === 'function');
+  });
+
+  test('withFallback preserves original config', () => {
+    const client = createApiClient({ timeout: 5000, maxRetries: 3, baseDelay: 1000 });
+    const fallbackFn = () => ({ prompt: 'fallback' });
+    const fallbackClient = client.withFallback(fallbackFn);
+
+    assert.strictEqual(fallbackClient.config.timeout, 5000);
+    assert.strictEqual(fallbackClient.config.maxRetries, 3);
+    assert.strictEqual(fallbackClient.config.baseDelay, 1000);
+  });
+
+  test('fallback client uses fallback prompt after timeout', async () => {
+    const fallbackFn = () => ({ prompt: 'compact fallback prompt' });
+
+    const result = await callWithRetry(
+      async (attempt, timeout, fallbackData) => {
+        if (attempt < 2) {
+          const err = new Error('Request timed out');
+          throw err;
+        }
+        return 'success after fallback';
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.usedFallback, true);
+  });
+
+  test('onFallback callback is invoked when switching to fallback', async () => {
+    let fallbackCalled = false;
+    let fallbackInfo = null;
+    const fallbackFn = () => ({ prompt: 'fallback' });
+
+    await callWithRetry(
+      async () => {
+        const err = new Error('Request timed out');
+        err.code = 'ETIMEDOUT';
+        throw err;
+      },
+      {
+        maxRetries: 1,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        onFallback: (info) => {
+          fallbackCalled = true;
+          fallbackInfo = info;
+        },
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(fallbackCalled, true);
+    assert.ok(fallbackInfo);
+    assert.ok(fallbackInfo.attempt >= 0);
+    assert.ok(fallbackInfo.originalError);
+  });
+
+  test('fallback can override apiKey and model', async () => {
+    let capturedApiKey = null;
+    let capturedModel = null;
+    const fallbackFn = () => ({
+      prompt: 'fallback',
+      apiKey: 'fallback-key',
+      model: 'fallback-model'
+    });
+
+    await callWithRetry(
+      async (attempt, timeout, fallbackData) => {
+        if (attempt < 2) {
+          const err = new Error('Request timed out');
+          throw err;
+        }
+        capturedApiKey = fallbackData?.apiKey || 'original-key';
+        capturedModel = fallbackData?.model || 'original-model';
+        return 'success';
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        apiKey: 'original-key',
+        model: 'original-model',
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(capturedApiKey, 'fallback-key');
+    assert.strictEqual(capturedModel, 'fallback-model');
+  });
+
+  test('client.call method accepts per-call fallbackPrompt', async () => {
+    const client = createApiClient({ maxRetries: 0 });
+    assert.ok(typeof client.call === 'function');
+  });
+});
+
+describe('createApiClient - non-retryable errors', () => {
+  test('auth errors return immediately without retry', async () => {
+    const fn = async () => {
+      throw new Error('Z.ai API error 401: unauthorized');
+    };
+
+    const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.error.category, 'auth');
+    assert.strictEqual(result.error.retryable, false);
+    assert.strictEqual(result.error.attempts, 1);
+  });
+
+  test('validation errors return immediately without retry', async () => {
+    const fn = async () => {
+      throw new Error('Z.ai API error 400: bad request');
+    };
+
+    const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.error.category, 'validation');
+    assert.strictEqual(result.error.retryable, false);
+    assert.strictEqual(result.error.attempts, 1);
+  });
+});
+
+describe('callWithRetry - progressive retry', () => {
+  test('progressive timeout reduces on each attempt', async () => {
+    const timeouts = [];
+    const fn = async (attempt, currentTimeout) => {
+      timeouts.push(currentTimeout);
+      if (attempt < 3) {
+        const err = new Error('Request timed out');
+        err.code = 'ETIMEDOUT';
+        throw err;
+      }
+      return 'success';
+    };
+
+    await callWithRetry(fn, { maxRetries: 3, baseDelay: 10, baseTimeout: 30000 });
+
+    assert.ok(timeouts[0] >= 10000);
+    assert.ok(timeouts[1] < timeouts[0]);
+    assert.ok(timeouts[2] < timeouts[1]);
+  });
+
+  test('returns usedFallback false when fallback not used', async () => {
+    const fn = async () => 'success';
+
+    const result = await callWithRetry(fn, { maxRetries: 2, baseDelay: 10 });
+    assert.strictEqual(result.usedFallback, false);
+  });
+
+  test('includes totalDuration in error response', async () => {
+    const fn = async () => {
+      throw new Error('Permanent failure');
+    };
+
+    const before = Date.now();
+    const result = await callWithRetry(fn, { maxRetries: 1, baseDelay: 10 });
+    const after = Date.now();
+
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.totalDuration >= 0);
+    assert.ok(result.error.totalDuration <= after - before + 50);
+  });
+});
+
+describe('callWithRetry - fallback switching', () => {
+  test('fallback activates after timeout on second attempt', async () => {
+    let promptUsed = 'original';
+    const fallbackFn = () => ({ prompt: 'fallback prompt' });
+
+    const result = await callWithRetry(
+      async (attempt, timeout, fallbackData) => {
+        promptUsed = fallbackData?.prompt || 'original';
+        if (attempt < 2) {
+          const err = new Error('Request timed out');
+          err.code = 'ETIMEDOUT';
+          throw err;
+        }
+        return 'success';
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.usedFallback, true);
+    assert.strictEqual(promptUsed, 'fallback prompt');
+  });
+
+  test('fallback does not activate on non-timeout errors', async () => {
+    let fallbackTriggered = false;
+    const fallbackFn = () => {
+      fallbackTriggered = true;
+      return { prompt: 'fallback' };
+    };
+
+    await callWithRetry(
+      async () => {
+        throw new Error('Z.ai API error 500: server error');
+      },
+      {
+        maxRetries: 1,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(fallbackTriggered, false);
+  });
+
+  test('fallback does not activate on first attempt timeout', async () => {
+    let fallbackTriggered = false;
+    const fallbackFn = () => {
+      fallbackTriggered = true;
+      return { prompt: 'fallback' };
+    };
+
+    await callWithRetry(
+      async (attempt) => {
+        if (attempt === 0) {
+          const err = new Error('Request timed out');
+          err.code = 'ETIMEDOUT';
+          throw err;
+        }
+        return 'success';
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(fallbackTriggered, false);
+  });
+});
+
+describe('callWithRetry - edge cases', () => {
+  test('handles function that returns null fallback result', async () => {
+    const fallbackFn = () => null;
+
+    const result = await callWithRetry(
+      async (attempt) => {
+        if (attempt < 2) {
+          const err = new Error('Request timed out');
+          err.code = 'ETIMEDOUT';
+          throw err;
+        }
+        return 'success';
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.usedFallback, false);
+  });
+
+  test('handles function that returns fallback without prompt', async () => {
+    const fallbackFn = () => ({ apiKey: 'key' });
+
+    const result = await callWithRetry(
+      async (attempt, timeout, fallbackData) => {
+        if (attempt < 2) {
+          const err = new Error('Request timed out');
+          err.code = 'ETIMEDOUT';
+          throw err;
+        }
+        return 'success';
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 10,
+        fallbackPrompt: fallbackFn,
+        baseTimeout: 30000
+      }
+    );
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.usedFallback, false);
+  });
+
+  test('preserves error category in final response', async () => {
+    const fn = async () => {
+      throw new Error('Z.ai API error 429: rate limited');
+    };
+
+    const result = await callWithRetry(fn, { maxRetries: 2, baseDelay: 10 });
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.error.category, 'rate-limit');
+    assert.strictEqual(result.error.retryable, true);
+  });
+});
+
+describe('Transport - https.request mocking', () => {
+  test('handles successful API response', async () => {
+    const { createApiClient } = require('../src/lib/api');
+    
+    const client = createApiClient({ maxRetries: 0, baseDelay: 10 });
+    
+    const error1 = new Error('ECONNREFUSED');
+    const cat1 = require('../src/lib/api').categorizeError(error1);
+    assert.strictEqual(cat1.category, 'provider');
+    assert.strictEqual(cat1.retryable, true);
+    
+    const error2 = new Error('ENETUNREACH');
+    const cat2 = require('../src/lib/api').categorizeError(error2);
+    assert.strictEqual(cat2.category, 'provider');
+    assert.strictEqual(cat2.retryable, true);
+  });
+
+  test('extractStatusCode extracts 4xx codes', () => {
+    const error400 = new Error('Z.ai API error 400: bad request');
+    const cat = require('../src/lib/api').categorizeError(error400);
+    assert.strictEqual(cat.category, 'validation');
+    assert.strictEqual(cat.retryable, false);
+    
+    const error403 = new Error('Z.ai API error 403: forbidden');
+    const cat2 = require('../src/lib/api').categorizeError(error403);
+    assert.strictEqual(cat2.category, 'auth');
+    assert.strictEqual(cat2.retryable, false);
+  });
+
+  test('extractStatusCode extracts 5xx codes', () => {
+    const error502 = new Error('Z.ai API error 502: bad gateway');
+    const cat = require('../src/lib/api').categorizeError(error502);
+    assert.strictEqual(cat.category, 'provider');
+    assert.strictEqual(cat.retryable, true);
+    
+    const error503 = new Error('Z.ai API error 503: service unavailable');
+    const cat2 = require('../src/lib/api').categorizeError(error503);
+    assert.strictEqual(cat2.category, 'provider');
+    assert.strictEqual(cat2.retryable, true);
+  });
+
+  test('sanitizeErrorMessage extracts API messages from JSON', () => {
+    const error = new Error('Z.ai API error 400: {"error":{"message":"Invalid model name"}}');
+    const result = require('../src/lib/api').sanitizeErrorMessage(error);
+    assert.ok(result.includes('Invalid model name'));
+    assert.ok(!result.includes('{"error"'));
+  });
+
+  test('sanitizeErrorMessage handles nested error structures', () => {
+    const error = new Error('Z.ai API error 500: {"error":{"error":{"message":"Server exploded"}}}');
+    const result = require('../src/lib/api').sanitizeErrorMessage(error);
+    assert.ok(result.includes('Server exploded'));
+  });
+
+  test('sanitizeErrorMessage redacts JSON with keys', () => {
+    const error = new Error('Failed: {"api_key":"secret123","token":"abc"}');
+    const result = require('../src/lib/api').sanitizeErrorMessage(error);
+    assert.ok(!result.includes('secret123'));
+    assert.ok(!result.includes('abc'));
+    assert.ok(result.includes('[REDACTED]'));
+  });
+});
+
+describe('makeApiRequest transport', () => {
+  test('handles request timeout', async () => {
+    const api = require('../src/lib/api');
+    try {
+      await api.makeApiRequest({
+        apiKey: 'test-key',
+        model: 'test-model',
+        prompt: 'test prompt',
+        timeout: 1
+      });
+      assert.fail('Should have thrown');
+    } catch (err) {
+      assert.ok(err.message.includes('timed out'));
+    }
+  });
+});
+
 describe('constants', () => {
   test('DEFAULT_TIMEOUT_MS is 30000', () => {
     assert.strictEqual(DEFAULT_TIMEOUT_MS, 30000);

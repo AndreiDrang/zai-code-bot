@@ -5,7 +5,9 @@ const {
   extractLines,
   validateRange,
   getDefaultMaxChars,
-  DEFAULT_MAX_CHARS
+  DEFAULT_MAX_CHARS,
+  buildHandlerContext,
+  ContextError,
 } = require('../src/lib/context');
 
 describe('truncateContext', () => {
@@ -143,5 +145,148 @@ describe('validateRange', () => {
 describe('getDefaultMaxChars', () => {
   test('returns 8000', () => {
     assert.strictEqual(getDefaultMaxChars(), 8000);
+  });
+});
+
+describe('buildHandlerContext', () => {
+  test('PR payload happy path - returns proper context with owner, repo, pullNumber', async () => {
+    const mockOctokit = {
+      rest: {
+        pulls: {
+          listFiles: async () => ({ data: [{ filename: 'test.js' }] }),
+        },
+      },
+    };
+    const mockPayload = {
+      repository: { owner: { login: 'owner' }, name: 'repo' },
+      pull_request: { number: 1 },
+      sender: { login: 'user' },
+    };
+
+    const result = await buildHandlerContext(mockPayload, mockOctokit, {});
+
+    assert.strictEqual(result.owner, 'owner');
+    assert.strictEqual(result.repo, 'repo');
+    assert.strictEqual(result.pullNumber, 1);
+    assert.strictEqual(result.sender, 'user');
+    assert.deepStrictEqual(result.changedFiles, [{ filename: 'test.js' }]);
+  });
+
+  test('Issue-comment-on-PR happy path - extracts PR number from issue', async () => {
+    const mockOctokit = {
+      rest: {
+        pulls: {
+          listFiles: async () => ({ data: [] }),
+        },
+      },
+    };
+    const mockPayload = {
+      repository: { owner: { login: 'owner' }, name: 'repo' },
+      issue: { number: 42, pull_request: { url: 'https://api.github.com/repos/o/r/pulls/42' } },
+      comment: { id: 100, body: 'test comment' },
+      sender: { login: 'user' },
+    };
+
+    const result = await buildHandlerContext(mockPayload, mockOctokit, {});
+
+    assert.strictEqual(result.owner, 'owner');
+    assert.strictEqual(result.repo, 'repo');
+    assert.strictEqual(result.pullNumber, 42);
+    assert.strictEqual(result.commentId, 100);
+    assert.strictEqual(result.commentBody, 'test comment');
+  });
+
+  test('fetchFiles: false option - skips file fetching', async () => {
+    const mockOctokit = {
+      rest: {
+        pulls: {
+          listFiles: async () => { throw new Error('Should not be called'); },
+        },
+      },
+    };
+    const mockPayload = {
+      repository: { owner: { login: 'owner' }, name: 'repo' },
+      pull_request: { number: 1 },
+      sender: { login: 'user' },
+    };
+
+    const result = await buildHandlerContext(mockPayload, mockOctokit, { fetchFiles: false });
+
+    assert.strictEqual(result.owner, 'owner');
+    assert.strictEqual(result.changedFiles, undefined);
+  });
+
+  test('Changed-file fetch failure stores _fileFetchError', async () => {
+    const mockOctokit = {
+      rest: {
+        pulls: {
+          listFiles: async () => { throw new Error('API error'); },
+        },
+      },
+    };
+    const mockPayload = {
+      repository: { owner: { login: 'owner' }, name: 'repo' },
+      pull_request: { number: 1 },
+      sender: { login: 'user' },
+    };
+
+    const result = await buildHandlerContext(mockPayload, mockOctokit, {});
+
+    assert.deepStrictEqual(result.changedFiles, []);
+    assert.strictEqual(result._fileFetchError, 'API error');
+  });
+
+  test('Missing owner throws ContextError', async () => {
+    const mockOctokit = {};
+    const mockPayload = {
+      repository: { name: 'repo' },
+      pull_request: { number: 1 },
+      sender: { login: 'user' },
+    };
+
+    await assert.rejects(
+      () => buildHandlerContext(mockPayload, mockOctokit, {}),
+      (err) => err instanceof ContextError && err.field === 'owner'
+    );
+  });
+
+  test('Missing repo throws ContextError', async () => {
+    const mockOctokit = {};
+    const mockPayload = {
+      repository: { owner: { login: 'owner' } },
+      pull_request: { number: 1 },
+      sender: { login: 'user' },
+    };
+
+    await assert.rejects(
+      () => buildHandlerContext(mockPayload, mockOctokit, {}),
+      (err) => err instanceof ContextError && err.field === 'repo'
+    );
+  });
+
+  test('Missing pullNumber throws ContextError', async () => {
+    const mockOctokit = {};
+    const mockPayload = {
+      repository: { owner: { login: 'owner' }, name: 'repo' },
+      sender: { login: 'user' },
+    };
+
+    await assert.rejects(
+      () => buildHandlerContext(mockPayload, mockOctokit, {}),
+      (err) => err instanceof ContextError && err.field === 'pullNumber'
+    );
+  });
+
+  test('Missing sender throws ContextError', async () => {
+    const mockOctokit = {};
+    const mockPayload = {
+      repository: { owner: { login: 'owner' }, name: 'repo' },
+      pull_request: { number: 1 },
+    };
+
+    await assert.rejects(
+      () => buildHandlerContext(mockPayload, mockOctokit, {}),
+      (err) => err instanceof ContextError && err.field === 'sender'
+    );
   });
 });

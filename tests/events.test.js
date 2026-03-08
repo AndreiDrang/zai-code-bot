@@ -5,6 +5,7 @@ const {
   isBotComment,
   shouldProcessEvent,
   getEventInfo,
+  extractReviewCommentAnchor,
 } = require('../src/lib/events.js');
 
 describe('getEventType', () => {
@@ -175,5 +176,65 @@ describe('getEventInfo', () => {
     const info = getEventInfo(context);
     assert.strictEqual(info.isBot, true);
     assert.strictEqual(info.shouldProcess, false);
+  });
+});
+
+describe('extractReviewCommentAnchor', () => {
+  test('returns anchor when path, line, and body present', () => {
+    const payload = {
+      comment: {
+        path: 'src/index.js',
+        line: 42,
+        diff_hunk: '@@ -1,3 +1,4 @@',
+        body: 'Fix this line',
+      },
+    };
+    const result = extractReviewCommentAnchor(payload);
+    assert.deepStrictEqual(result, {
+      commentPath: 'src/index.js',
+      commentLine: 42,
+      commentStartLine: null,
+      commentDiffHunk: '@@ -1,3 +1,4 @@',
+    });
+  });
+
+  test('returns anchor with start_line when present', () => {
+    const payload = {
+      comment: {
+        path: 'src/index.js',
+        line: 50,
+        start_line: 45,
+        body: 'Multi-line comment',
+      },
+    };
+    const result = extractReviewCommentAnchor(payload);
+    assert.strictEqual(result.commentLine, 50);
+    assert.strictEqual(result.commentStartLine, 45);
+  });
+
+  test('returns null when missing path', () => {
+    const payload = {
+      comment: {
+        line: 42,
+        body: 'Comment without path',
+      },
+    };
+    const result = extractReviewCommentAnchor(payload);
+    assert.strictEqual(result, null);
+  });
+
+  test('returns null when missing comment entirely', () => {
+    const payload = {};
+    const result = extractReviewCommentAnchor(payload);
+    assert.strictEqual(result, null);
+  });
+
+  test('returns null when not a review comment payload', () => {
+    const payload = {
+      issue: { number: 42 },
+      comment: { id: 100, body: 'Regular comment' },
+    };
+    const result = extractReviewCommentAnchor(payload);
+    assert.strictEqual(result, null);
   });
 });

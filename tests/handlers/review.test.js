@@ -3,7 +3,8 @@ const assert = require('node:assert');
 const { 
   parseFilePath, 
   validateFileInPr, 
-  buildReviewPrompt 
+  buildReviewPrompt,
+  handleReviewCommand
 } = require('../../src/lib/handlers/review');
 
 describe('review.js - parseFilePath', () => {
@@ -139,5 +140,235 @@ describe('review.js - buildReviewPrompt', () => {
     
     assert.ok(result.truncated, true);
     assert.ok(result.prompt.includes('[truncated'));
+  });
+});
+
+describe('review.js - handleReviewCommand', () => {
+  test('returns error when parseFilePath fails', async () => {
+    let commentPosted = false;
+    let reactionPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => { reactionPosted = true; },
+      fetchFileAtPrHead: async () => ({ success: true, data: 'content' }),
+      createLogger: () => ({ info: () => {}, error: () => {} }),
+      generateCorrelationId: () => 'test-id',
+    };
+    
+    const context = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      changedFiles: [],
+      apiClient: { call: async () => ({}) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      commentId: 999,
+      pullNumber: 1,
+    };
+    
+    const result = await handleReviewCommand(context, [], mockDeps);
+    
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.includes('No file path provided'));
+    assert.ok(commentPosted);
+    assert.ok(reactionPosted);
+  });
+
+  test('returns error when validateFileInPr fails', async () => {
+    let commentPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({ success: true, data: 'content' }),
+      createLogger: () => ({ info: () => {}, error: () => {} }),
+      generateCorrelationId: () => 'test-id',
+    };
+    
+    const changedFiles = [
+      { filename: 'src/index.js', status: 'modified', patch: '...' }
+    ];
+    
+    const context = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      changedFiles,
+      apiClient: { call: async () => ({}) },
+      apiKey: 'test-key',
+      model: 'test-model',
+      commentId: null,
+      pullNumber: 1,
+    };
+    
+    const result = await handleReviewCommand(context, ['nonexistent.js'], mockDeps);
+    
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.includes('not found in PR'));
+    assert.ok(commentPosted);
+  });
+
+  test('calls API and posts review on success', async () => {
+    let commentPosted = false;
+    let reactionPosted = false;
+    let apiCalled = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => { reactionPosted = true; },
+      fetchFileAtPrHead: async () => ({ success: true, data: 'file content' }),
+      createLogger: () => ({ info: () => {}, error: () => {} }),
+      generateCorrelationId: () => 'test-id',
+    };
+    
+    const changedFiles = [
+      { filename: 'src/index.js', status: 'modified', patch: '@@ -1,2 +1,3 @@\n+new line' }
+    ];
+    
+    const context = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      changedFiles,
+      apiClient: { 
+        call: async () => { 
+          apiCalled = true;
+          return { success: true, data: 'Great code review!' }; 
+        } 
+      },
+      apiKey: 'test-key',
+      model: 'test-model',
+      commentId: 999,
+      pullNumber: 1,
+    };
+    
+    const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
+    
+    assert.strictEqual(result.success, true);
+    assert.ok(apiCalled);
+    assert.ok(commentPosted);
+    assert.ok(reactionPosted);
+  });
+
+  test('handles API failure gracefully', async () => {
+    let commentPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { commentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({ success: true, data: 'file content' }),
+      createLogger: () => ({ info: () => {}, error: () => {} }),
+      generateCorrelationId: () => 'test-id',
+    };
+    
+    const changedFiles = [
+      { filename: 'src/index.js', status: 'modified', patch: '@@ -1,2 +1,3 @@\n+new line' }
+    ];
+    
+    const context = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      changedFiles,
+      apiClient: { 
+        call: async () => ({ 
+          success: false, 
+          error: { message: 'Rate limit exceeded' } 
+        }) 
+      },
+      apiKey: 'test-key',
+      model: 'test-model',
+      commentId: null,
+      pullNumber: 1,
+    };
+    
+    const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
+    
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error.includes('Rate limit exceeded'));
+    assert.ok(commentPosted);
+  });
+
+  test('handles exception in try/catch block', async () => {
+    let errorCommentPosted = false;
+    
+    const mockDeps = {
+      upsertComment: async () => { errorCommentPosted = true; return { data: { id: 123 } }; },
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({ success: true, data: 'file content' }),
+      createLogger: () => ({ info: () => {}, error: () => {} }),
+      generateCorrelationId: () => 'test-id',
+    };
+    
+    const changedFiles = [
+      { filename: 'src/index.js', status: 'modified', patch: '@@ -1,2 +1,3 @@\n+new line' }
+    ];
+    
+    const context = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      changedFiles,
+      apiClient: { 
+        call: async () => { throw new Error('Unexpected error'); }
+      },
+      apiKey: 'test-key',
+      model: 'test-model',
+      commentId: null,
+      pullNumber: 1,
+    };
+    
+    const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
+    
+    assert.strictEqual(result.success, false);
+    assert.ok(result.error);
+    assert.ok(errorCommentPosted);
+  });
+
+  test('uses fallback when fullContent fetch fails', async () => {
+    let apiCalled = false;
+    
+    const mockDeps = {
+      upsertComment: async () => ({ data: { id: 123 } }),
+      setReaction: async () => {},
+      fetchFileAtPrHead: async () => ({ success: false, error: 'File too large' }),
+      createLogger: () => ({ info: () => {}, error: () => {} }),
+      generateCorrelationId: () => 'test-id',
+    };
+    
+    const changedFiles = [
+      { filename: 'src/index.js', status: 'modified', patch: '@@ -1,2 +1,3 @@\n+new line' }
+    ];
+    
+    const context = {
+      octokit: {},
+      owner: 'test-owner',
+      repo: 'test-repo',
+      issueNumber: 1,
+      changedFiles,
+      apiClient: { 
+        call: async (params) => { 
+          apiCalled = true;
+          assert.ok(params.prompt.includes('Full file content unavailable'));
+          return { success: true, data: 'Review complete' }; 
+        } 
+      },
+      apiKey: 'test-key',
+      model: 'test-model',
+      commentId: null,
+      pullNumber: 1,
+    };
+    
+    const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
+    
+    assert.strictEqual(result.success, true);
+    assert.ok(apiCalled);
   });
 });
