@@ -5,7 +5,7 @@ GitHub Action for automatic PR reviews and context-rich `/zai` commands powered 
 ## Features
 
 - Automatic pull request review on `opened` and `synchronize`
-#XT|- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai suggest`, `/zai compare`, `/zai describe`, `/zai help`
+- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai suggest`, `/zai compare`, `/zai describe`, `/zai impact`, `/zai help`
 - Context-aware command prompts with full-file, diff, and thread context
 - Inline review-comment support (`pull_request_review_comment`) with file/line anchors
 - `/zai explain` auto-detects selected line range from review comments
@@ -49,10 +49,6 @@ jobs:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           ZAI_MODEL: ${{ vars.ZAI_MODEL }}
           GITHUB_TOKEN: ${{ github.token }}
-        uses: AndreiDrang/zai-code-bot@v0.0.1
-        with:
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          ZAI_MODEL: ${{ vars.ZAI_MODEL }}
 ```
 
 ## Inputs
@@ -73,21 +69,12 @@ Commands are processed from PR issue comments and PR review comments. Supported 
 | `/zai review` | `/zai review [file]` | Review specific files or all changed files |
 | `/zai explain` | `/zai explain <lines>` | Explain selected lines (e.g., `/zai explain 10-25`) |
 | `/zai suggest` | `/zai suggest <prompt>` | Suggest improvements or refactoring ideas |
-#JB|  | `/zai compare` | `/zai compare` | Compare old vs new behavior across the diff |
-#TH|  | `/zai describe` | `/zai describe` | Generate a PR description from commit messages |
-#PZ|  | `/zai help` | `/zai help` | Show this help message |
-| `/zai help` | `/zai help` | Show this help message |
+| `/zai compare` | `/zai compare` | Compare old vs new behavior across the diff |
+| `/zai describe` | `/zai describe` | Generate a PR description from commit messages |
+| `/zai impact` | `/zai impact` | Analyze potential impact of changes |
+| `/zai help` | `/zai help` | Show command help |
 
 **Note:** Only collaborators (and PR authors on their own fork PRs) can use these commands.
-|---|---|---|
-| `/zai ask <question>` | `/zai ask what changed in auth flow?` | Ask about current PR changes |
-| `/zai review <path>` | `/zai review src/lib/auth.js` | Review one changed file |
-| `/zai explain <start-end>` | `/zai explain 10-25` | Explain a line range in selected file context |
-| `/zai suggest <prompt>` | `/zai suggest propose safer error handling` | Request targeted improvement ideas |
-| `/zai compare` | `/zai compare` | Compare old vs new behavior across diff |
-| `/zai describe` | `/zai describe` | Generate PR description from commit messages |
-| `/zai help` | `/zai help` | Show command help |
-| `/zai help` | `/zai help` | Show command help |
 
 ## Behavior
 
