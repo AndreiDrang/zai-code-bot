@@ -7,23 +7,29 @@
 
 const comments = require('../comments');
 const auth = require('../auth');
+const { COMMAND_DESCRIPTIONS } = require('../commands');
 
 const { REACTIONS, setReaction } = require('../comments');
 
-const HELP_TEXT = `## Available Commands
+const HELP_MARKER = '<!-- ZAI-HELP-RESPONSE -->';
+
+/**
+ * Build help text from COMMAND_DESCRIPTIONS
+ * @returns {string} Formatted help text
+ */
+function buildHelpText() {
+  const rows = Object.entries(COMMAND_DESCRIPTIONS).map(([name, { usage, description }]) => {
+    return `| \`/zai ${name}\` | \`${usage}\` | ${description} |`;
+  }).join('\n');
+
+  return `## Available Commands
 
 | Command | Usage | Description |
 |---------|-------|-------------|
-| \`/zai ask\` | \`/zai ask <question>\` | Ask a question about the code |
-| \`/zai review\` | \`/zai review [file]\` | Review specific files |
-| \`/zai explain\` | \`/zai explain <lines>\` | Explain selected lines |
-| \`/zai suggest\` | \`/zai suggest <prompt>\` | Suggest improvements |
-| \`/zai compare\` | \`/zai compare\` | Compare old vs new version |
-| \`/zai help\` | \`/zai help\` | Show this help message |
+${rows}
 
 **Note:** Only collaborators can use these commands.`;
-
-const HELP_MARKER = '<!-- ZAI-HELP-RESPONSE -->';
+}
 
 /**
  * Handle the help command
@@ -58,7 +64,7 @@ async function handleHelpCommand({ octokit, context: githubContext, commenter, a
     owner,
     repo,
     issueNumber,
-    HELP_TEXT + '\n\n' + HELP_MARKER,
+    buildHelpText() + '\n\n' + HELP_MARKER,
     HELP_MARKER,
     { replyToId: commentId, updateExisting: false }
   );
@@ -83,6 +89,7 @@ async function handleHelpCommand({ octokit, context: githubContext, commenter, a
 
 module.exports = {
   handleHelpCommand,
-  HELP_TEXT,
+  buildHelpText,
+  HELP_TEXT: buildHelpText(),
   HELP_MARKER,
 };

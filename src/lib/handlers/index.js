@@ -5,6 +5,7 @@ const explainHandler = require('./explain');
 const suggestHandler = require('./suggest');
 const compareHandler = require('./compare');
 const impactHandler = require('./impact');
+const describeHandler = require('./describe');
 
 const HANDLERS = {
   ask: askHandler.handleAskCommand,
@@ -14,6 +15,7 @@ const HANDLERS = {
   suggest: suggestHandler.handleSuggestCommand,
   compare: compareHandler.handleCompareCommand,
   impact: impactHandler.handleImpactCommand,
+  describe: describeHandler.handleDescribeCommand,
 };
 
 function getHandler(command) {
@@ -40,4 +42,5 @@ module.exports = {
   suggest: suggestHandler,
   compare: compareHandler,
   impact: impactHandler,
+  describe: describeHandler,
 };
