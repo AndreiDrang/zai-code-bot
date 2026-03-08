@@ -32351,7 +32351,7 @@ module.exports = {
  */
 
 // Allowlisted commands
-const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'review', 'suggest'];
+const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'impact', 'review', 'suggest'];
 
 // Error types
 const ERROR_TYPES = {
@@ -41250,6 +41250,39 @@ ${COMMENT_MARKER}`;
         responseMessage = `## Z.ai Compare\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
       }
       break;
+    }
+
+    case 'impact': {
+      const impactContext = {
+        octokit,
+        owner,
+        repo,
+        issueNumber: pullNumber,
+        commentId,
+        changedFiles,
+        apiClient: createApiClient({ timeout: zaiTimeout }),
+        apiKey,
+        model,
+        logger,
+        maxChars: DEFAULT_MAX_CHARS,
+        continuityState,
+        baseRef,
+        headRef,
+        pullNumber,
+      };
+
+      core.info('Processing impact command');
+
+      const result = await handleImpactCommand(impactContext, args);
+
+      // Impact handler manages its own comment posting via upsertComment
+      // So we return early and don't post a duplicate comment
+      if (result.success) {
+        terminalReaction = REACTIONS.ROCKET;
+      } else {
+        terminalReaction = REACTIONS.X;
+      }
+      return;
     }
 
     default:
