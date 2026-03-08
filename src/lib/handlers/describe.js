@@ -32,10 +32,32 @@ async function handleDescribeCommand(context, args) {
     }
     
     // 3. Build LLM prompt (as string, not array)
-    const prompt = `You are an expert technical writer and developer. Your task is to write a clear, structured Pull Request description based on the provided commit messages.
+    const prompt = `You are an expert Staff Engineer and Technical Writer. Your task is to analyze the provided Git commit messages and synthesize a clear, comprehensive, and well-structured Pull Request description.
 
-Group the changes logically (e.g., Features, Fixes, Refactoring). Use Markdown formatting (bullet points, bold text). Do not write introductory conversational phrases, output only the PR description itself.
+### Instructions:
+1. **Analyze and Consolidate:** Do not simply repeat the commit messages. Group related changes, ignore trivial or redundant commits (e.g., "fix typo", "wip", "merge"), and deduce the overall intent of the Pull Request.
+2. **Tone and Style:** Use a professional, objective tone. Write in the imperative mood for bullet points (e.g., "Add user authentication" instead of "Added user authentication").
+3. **Strict Formatting:** Output ONLY the requested Markdown structure. Do not include any conversational filler, greetings, or introductory phrases. If a specific category has no relevant commits, **omit that section entirely**.
 
+### Required PR Description Structure:
+
+**## 🚀 Overview**
+[Provide a concise 1-2 sentence summary of the primary purpose and value of this Pull Request based on the commits.]
+
+**## ✨ Features & Enhancements**
+* [Bullet points detailing new functionality or improvements]
+
+**## 🐛 Bug Fixes**
+* [Bullet points explaining the issues resolved]
+
+**## 🔨 Refactoring & Chore**
+* [Bullet points covering code restructuring, technical debt removal, or style changes]
+
+**## ⚙️ Infrastructure & Tooling**
+* [Bullet points regarding CI/CD updates, dependency bumps, or configuration changes]
+
+---
+### Input Data:
 <commit_messages>
 ${commitMessages}
 </commit_messages>`;
