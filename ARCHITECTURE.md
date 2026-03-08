@@ -99,7 +99,7 @@ zai-code-bot/
 │
 ├── .github/workflows/
 │   ├── ci.yml                # CI: test, build, dist-drift, security-audit
-│   └── zai-code-bot.yml      # Example consumer workflow
+│   └── code-review.yml       # Example consumer workflow
 │
 ├── action.yml                # GitHub Action inputs and runtime config
 ├── package.json              # Dependencies and build scripts
@@ -201,7 +201,7 @@ src/index.js:handleIssueCommentEvent()
 ### 5.7 No Secret Leakage
 - **Rule**: Error messages and logs must never contain API keys, tokens, or credentials
 - **Rationale**: Security; logs are visible in GitHub Actions UI
-- **Enforcement**: `api.js:sanitizeErrorMessage()` strips sensitive patterns; `logging.js:redactSensitiveData()`
+- **Enforcement**: `api.js:sanitizeErrorMessage()` strips Bearer tokens and API keys; `logging.js:redactSensitiveData()` redacts sensitive fields from log objects
 
 ### 5.8 Anti-Loop Protection
 - **Rule**: Bot must not respond to its own comments
