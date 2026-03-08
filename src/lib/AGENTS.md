@@ -14,8 +14,8 @@ src/lib/
 ├── api.js          # Z.ai HTTP client and retry wrapper
 ├── logging.js      # Categorized safe errors and logger wrappers
 ├── continuity.js   # Hidden marker state persistence
+├── code-scope.js   # Token budget calculation for prompt sizing
 └── handlers/       # Command-specific logic (see child AGENTS)
-```
 
 ## WHERE TO LOOK
 | Task | File | Notes |
