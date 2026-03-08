@@ -746,6 +746,39 @@ ${COMMENT_MARKER}`;
       break;
     }
 
+    case 'impact': {
+      const impactContext = {
+        octokit,
+        owner,
+        repo,
+        issueNumber: pullNumber,
+        commentId,
+        changedFiles,
+        apiClient: createApiClient({ timeout: zaiTimeout }),
+        apiKey,
+        model,
+        logger,
+        maxChars: DEFAULT_MAX_CHARS,
+        continuityState,
+        baseRef,
+        headRef,
+        pullNumber,
+      };
+
+      core.info('Processing impact command');
+
+      const result = await handleImpactCommand(impactContext, args);
+
+      // Impact handler manages its own comment posting via upsertComment
+      // So we return early and don't post a duplicate comment
+      if (result.success) {
+        terminalReaction = REACTIONS.ROCKET;
+      } else {
+        terminalReaction = REACTIONS.X;
+      }
+      return;
+    }
+
     default:
       responseMessage = GUIDANCE_MESSAGES.unknown_command;
   }

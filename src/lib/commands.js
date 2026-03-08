@@ -6,7 +6,7 @@
  */
 
 // Allowlisted commands
-const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'review', 'suggest'];
+const ALLOWED_COMMANDS = ['ask', 'compare', 'describe', 'explain', 'help', 'impact', 'review', 'suggest'];
 
 // Error types
 const ERROR_TYPES = {
