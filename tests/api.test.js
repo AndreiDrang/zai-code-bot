@@ -1,5 +1,4 @@
-const { test, describe, mock } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect, mock } from 'vitest';
 const {
   createApiClient,
   callWithRetry,
@@ -14,16 +13,16 @@ const {
 describe('createApiClient', () => {
   test('creates client with default config', () => {
     const client = createApiClient();
-    assert.strictEqual(client.config.timeout, DEFAULT_TIMEOUT_MS);
-    assert.strictEqual(client.config.maxRetries, DEFAULT_MAX_RETRIES);
-    assert.strictEqual(client.config.baseDelay, DEFAULT_BASE_DELAY_MS);
+    expect(client.config.timeout).toBe(DEFAULT_TIMEOUT_MS);
+    expect(client.config.maxRetries).toBe(DEFAULT_MAX_RETRIES);
+    expect(client.config.baseDelay).toBe(DEFAULT_BASE_DELAY_MS);
   });
 
   test('creates client with custom config', () => {
     const client = createApiClient({ timeout: 5000, maxRetries: 5, baseDelay: 1000 });
-    assert.strictEqual(client.config.timeout, 5000);
-    assert.strictEqual(client.config.maxRetries, 5);
-    assert.strictEqual(client.config.baseDelay, 1000);
+    expect(client.config.timeout).toBe(5000);
+    expect(client.config.maxRetries).toBe(5);
+    expect(client.config.baseDelay).toBe(1000);
   });
 
   test('call method returns success structure on success', async () => {
@@ -32,7 +31,7 @@ describe('createApiClient', () => {
     // Mock the internal function to succeed
     const original = require('../src/lib/api');
     // We can't easily mock without more infrastructure, so test the structure
-    assert.ok(typeof client.call === 'function');
+    expect(typeof client.call === 'function').toBeTruthy();
   });
 });
 
@@ -45,10 +44,10 @@ describe('callWithRetry', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.data, 'success');
-    assert.strictEqual(result.usedFallback, false);
-    assert.strictEqual(attempts, 1);
+    expect(result.success).toBe(true);
+    expect(result.data).toBe('success');
+    expect(result.usedFallback).toBe(false);
+    expect(attempts).toBe(1);
   });
 
   test('retries on failure and succeeds', async () => {
@@ -62,10 +61,10 @@ describe('callWithRetry', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.data, 'success');
-    assert.strictEqual(result.usedFallback, false);
-    assert.strictEqual(attempts, 3);
+    expect(result.success).toBe(true);
+    expect(result.data).toBe('success');
+    expect(result.usedFallback).toBe(false);
+    expect(attempts).toBe(3);
   });
 
   test('returns structured error after max retries', async () => {
@@ -74,10 +73,10 @@ describe('callWithRetry', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 2, baseDelay: 10 });
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error);
-    assert.strictEqual(result.error.category, 'internal');
-    assert.strictEqual(result.error.retryable, false);
+    expect(result.success).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error.category).toBe('internal');
+    expect(result.error.retryable).toBe(false);
   });
 
   test('returns structured error for non-retryable errors immediately', async () => {
@@ -86,9 +85,9 @@ describe('callWithRetry', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error.category, 'auth');
-    assert.strictEqual(result.error.retryable, false);
+    expect(result.success).toBe(false);
+    expect(result.error.category).toBe('auth');
+    expect(result.error.retryable).toBe(false);
   });
 });
 
@@ -96,110 +95,110 @@ describe('categorizeError', () => {
   test('categorizes timeout errors', () => {
     const error = new Error('Request timed out');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'timeout');
-    assert.strictEqual(result.retryable, true);
+    expect(result.category).toBe('timeout');
+    expect(result.retryable).toBe(true);
   });
 
   test('categorizes rate limit errors', () => {
     const error = new Error('Z.ai API error 429: rate limited');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'rate-limit');
-    assert.strictEqual(result.retryable, true);
+    expect(result.category).toBe('rate-limit');
+    expect(result.retryable).toBe(true);
   });
 
   test('categorizes auth errors', () => {
     const error = new Error('Z.ai API error 401: unauthorized');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'auth');
-    assert.strictEqual(result.retryable, false);
+    expect(result.category).toBe('auth');
+    expect(result.retryable).toBe(false);
   });
 
   test('categorizes validation errors', () => {
     const error = new Error('Z.ai API error 400: bad request');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'validation');
-    assert.strictEqual(result.retryable, false);
+    expect(result.category).toBe('validation');
+    expect(result.retryable).toBe(false);
   });
 
   test('categorizes server errors as provider', () => {
     const error = new Error('Z.ai API error 500: internal server error');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'provider');
-    assert.strictEqual(result.retryable, true);
+    expect(result.category).toBe('provider');
+    expect(result.retryable).toBe(true);
   });
 
   test('categorizes network errors as provider', () => {
     const error = new Error('connect ECONNREFUSED');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'provider');
-    assert.strictEqual(result.retryable, true);
+    expect(result.category).toBe('provider');
+    expect(result.retryable).toBe(true);
   });
 
   test('categorizes empty response as provider', () => {
     const error = new Error('Z.ai API returned an empty response');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'provider');
-    assert.strictEqual(result.retryable, true);
+    expect(result.category).toBe('provider');
+    expect(result.retryable).toBe(true);
   });
 
   test('defaults to internal for unknown errors', () => {
     const error = new Error('Something unexpected happened');
     const result = categorizeError(error);
-    assert.strictEqual(result.category, 'internal');
-    assert.strictEqual(result.retryable, false);
+    expect(result.category).toBe('internal');
+    expect(result.retryable).toBe(false);
   });
 });
 
 describe('sanitizeErrorMessage', () => {
   test('returns unknown error for null input', () => {
     const result = sanitizeErrorMessage(null);
-    assert.strictEqual(result, 'An unknown error occurred');
+    expect(result).toBe('An unknown error occurred');
   });
 
   test('returns unknown error for error without message', () => {
     const result = sanitizeErrorMessage({});
-    assert.strictEqual(result, 'An unknown error occurred');
+    expect(result).toBe('An unknown error occurred');
   });
 
   test('redacts Bearer tokens', () => {
     const error = new Error('Bearer sk-1234567890abcdef failed');
     const result = sanitizeErrorMessage(error);
-    assert.strictEqual(result, 'Bearer [REDACTED] failed');
-    assert.ok(!result.includes('sk-1234567890'));
+    expect(result).toBe('Bearer [REDACTED] failed');
+    expect(result).not.toContain('sk-1234567890');
   });
 
   test('redacts API keys', () => {
     const error = new Error('api_key=secret123 failed');
     const result = sanitizeErrorMessage(error);
-    assert.ok(!result.includes('secret123'));
-    assert.ok(result.includes('[REDACTED]'));
+    expect(result).not.toContain('secret123');
+    expect(result).toContain('[REDACTED]');
   });
 
   test('redacts URLs with credentials', () => {
     const error = new Error('Failed to connect to https://user:pass@api.example.com');
     const result = sanitizeErrorMessage(error);
-    assert.ok(!result.includes('user:pass'));
-    assert.ok(result.includes('[URL_REDACTED]'));
+    expect(result).not.toContain('user:pass');
+    expect(result).toContain('[URL_REDACTED]');
   });
 
   test('redacts Authorization headers', () => {
     const error = new Error('Authorization: Bearer mytoken123 failed');
     const result = sanitizeErrorMessage(error);
-    assert.ok(!result.includes('mytoken123'));
+    expect(result).not.toContain('mytoken123');
   });
 
   test('truncates very long messages', () => {
     const longMessage = 'A'.repeat(1000);
     const error = new Error(longMessage);
     const result = sanitizeErrorMessage(error);
-    assert.ok(result.length <= 510);
-    assert.ok(result.endsWith('...'));
+    expect(result.length <= 510).toBeTruthy();
+    expect(result.endsWith('...')).toBeTruthy();
   });
 
   test('passes through safe messages unchanged', () => {
     const error = new Error('Request timed out after 30000ms');
     const result = sanitizeErrorMessage(error);
-    assert.strictEqual(result, 'Request timed out after 30000ms');
+    expect(result).toBe('Request timed out after 30000ms');
   });
 });
 
@@ -209,9 +208,9 @@ describe('createApiClient - withFallback', () => {
     const fallbackFn = () => ({ prompt: 'fallback prompt' });
     const fallbackClient = client.withFallback(fallbackFn);
 
-    assert.ok(fallbackClient);
-    assert.ok(typeof fallbackClient.call === 'function');
-    assert.ok(typeof fallbackClient.withFallback === 'function');
+    expect(fallbackClient).toBeTruthy();
+    expect(typeof fallbackClient.call === 'function').toBeTruthy();
+    expect(typeof fallbackClient.withFallback === 'function').toBeTruthy();
   });
 
   test('withFallback preserves original config', () => {
@@ -219,9 +218,9 @@ describe('createApiClient - withFallback', () => {
     const fallbackFn = () => ({ prompt: 'fallback' });
     const fallbackClient = client.withFallback(fallbackFn);
 
-    assert.strictEqual(fallbackClient.config.timeout, 5000);
-    assert.strictEqual(fallbackClient.config.maxRetries, 3);
-    assert.strictEqual(fallbackClient.config.baseDelay, 1000);
+    expect(fallbackClient.config.timeout).toBe(5000);
+    expect(fallbackClient.config.maxRetries).toBe(3);
+    expect(fallbackClient.config.baseDelay).toBe(1000);
   });
 
   test('fallback client uses fallback prompt after timeout', async () => {
@@ -243,8 +242,8 @@ describe('createApiClient - withFallback', () => {
       }
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.usedFallback, true);
+    expect(result.success).toBe(true);
+    expect(result.usedFallback).toBe(true);
   });
 
   test('onFallback callback is invoked when switching to fallback', async () => {
@@ -270,10 +269,10 @@ describe('createApiClient - withFallback', () => {
       }
     );
 
-    assert.strictEqual(fallbackCalled, true);
-    assert.ok(fallbackInfo);
-    assert.ok(fallbackInfo.attempt >= 0);
-    assert.ok(fallbackInfo.originalError);
+    expect(fallbackCalled).toBe(true);
+    expect(fallbackInfo).toBeTruthy();
+    expect(fallbackInfo.attempt >= 0).toBeTruthy();
+    expect(fallbackInfo.originalError).toBeTruthy();
   });
 
   test('fallback can override apiKey and model', async () => {
@@ -305,13 +304,13 @@ describe('createApiClient - withFallback', () => {
       }
     );
 
-    assert.strictEqual(capturedApiKey, 'fallback-key');
-    assert.strictEqual(capturedModel, 'fallback-model');
+    expect(capturedApiKey).toBe('fallback-key');
+    expect(capturedModel).toBe('fallback-model');
   });
 
   test('client.call method accepts per-call fallbackPrompt', async () => {
     const client = createApiClient({ maxRetries: 0 });
-    assert.ok(typeof client.call === 'function');
+    expect(typeof client.call === 'function').toBeTruthy();
   });
 });
 
@@ -322,10 +321,10 @@ describe('createApiClient - non-retryable errors', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error.category, 'auth');
-    assert.strictEqual(result.error.retryable, false);
-    assert.strictEqual(result.error.attempts, 1);
+    expect(result.success).toBe(false);
+    expect(result.error.category).toBe('auth');
+    expect(result.error.retryable).toBe(false);
+    expect(result.error.attempts).toBe(1);
   });
 
   test('validation errors return immediately without retry', async () => {
@@ -334,10 +333,10 @@ describe('createApiClient - non-retryable errors', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 3, baseDelay: 10 });
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error.category, 'validation');
-    assert.strictEqual(result.error.retryable, false);
-    assert.strictEqual(result.error.attempts, 1);
+    expect(result.success).toBe(false);
+    expect(result.error.category).toBe('validation');
+    expect(result.error.retryable).toBe(false);
+    expect(result.error.attempts).toBe(1);
   });
 });
 
@@ -356,16 +355,16 @@ describe('callWithRetry - progressive retry', () => {
 
     await callWithRetry(fn, { maxRetries: 3, baseDelay: 10, baseTimeout: 30000 });
 
-    assert.ok(timeouts[0] >= 10000);
-    assert.ok(timeouts[1] < timeouts[0]);
-    assert.ok(timeouts[2] < timeouts[1]);
+    expect(timeouts[0] >= 10000).toBeTruthy();
+    expect(timeouts[1] < timeouts[0]).toBeTruthy();
+    expect(timeouts[2] < timeouts[1]).toBeTruthy();
   });
 
   test('returns usedFallback false when fallback not used', async () => {
     const fn = async () => 'success';
 
     const result = await callWithRetry(fn, { maxRetries: 2, baseDelay: 10 });
-    assert.strictEqual(result.usedFallback, false);
+    expect(result.usedFallback).toBe(false);
   });
 
   test('includes totalDuration in error response', async () => {
@@ -377,9 +376,9 @@ describe('callWithRetry - progressive retry', () => {
     const result = await callWithRetry(fn, { maxRetries: 1, baseDelay: 10 });
     const after = Date.now();
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.totalDuration >= 0);
-    assert.ok(result.error.totalDuration <= after - before + 50);
+    expect(result.success).toBe(false);
+    expect(result.error.totalDuration >= 0).toBeTruthy();
+    expect(result.error.totalDuration <= after - before + 50).toBeTruthy();
   });
 });
 
@@ -406,9 +405,9 @@ describe('callWithRetry - fallback switching', () => {
       }
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.usedFallback, true);
-    assert.strictEqual(promptUsed, 'fallback prompt');
+    expect(result.success).toBe(true);
+    expect(result.usedFallback).toBe(true);
+    expect(promptUsed).toBe('fallback prompt');
   });
 
   test('fallback does not activate on non-timeout errors', async () => {
@@ -430,7 +429,7 @@ describe('callWithRetry - fallback switching', () => {
       }
     );
 
-    assert.strictEqual(fallbackTriggered, false);
+    expect(fallbackTriggered).toBe(false);
   });
 
   test('fallback does not activate on first attempt timeout', async () => {
@@ -457,7 +456,7 @@ describe('callWithRetry - fallback switching', () => {
       }
     );
 
-    assert.strictEqual(fallbackTriggered, false);
+    expect(fallbackTriggered).toBe(false);
   });
 });
 
@@ -482,8 +481,8 @@ describe('callWithRetry - edge cases', () => {
       }
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.usedFallback, false);
+    expect(result.success).toBe(true);
+    expect(result.usedFallback).toBe(false);
   });
 
   test('handles function that returns fallback without prompt', async () => {
@@ -506,8 +505,8 @@ describe('callWithRetry - edge cases', () => {
       }
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.usedFallback, false);
+    expect(result.success).toBe(true);
+    expect(result.usedFallback).toBe(false);
   });
 
   test('preserves error category in final response', async () => {
@@ -516,9 +515,9 @@ describe('callWithRetry - edge cases', () => {
     };
 
     const result = await callWithRetry(fn, { maxRetries: 2, baseDelay: 10 });
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error.category, 'rate-limit');
-    assert.strictEqual(result.error.retryable, true);
+    expect(result.success).toBe(false);
+    expect(result.error.category).toBe('rate-limit');
+    expect(result.error.retryable).toBe(true);
   });
 });
 
@@ -530,58 +529,58 @@ describe('Transport - https.request mocking', () => {
     
     const error1 = new Error('ECONNREFUSED');
     const cat1 = require('../src/lib/api').categorizeError(error1);
-    assert.strictEqual(cat1.category, 'provider');
-    assert.strictEqual(cat1.retryable, true);
+    expect(cat1.category).toBe('provider');
+    expect(cat1.retryable).toBe(true);
     
     const error2 = new Error('ENETUNREACH');
     const cat2 = require('../src/lib/api').categorizeError(error2);
-    assert.strictEqual(cat2.category, 'provider');
-    assert.strictEqual(cat2.retryable, true);
+    expect(cat2.category).toBe('provider');
+    expect(cat2.retryable).toBe(true);
   });
 
   test('extractStatusCode extracts 4xx codes', () => {
     const error400 = new Error('Z.ai API error 400: bad request');
     const cat = require('../src/lib/api').categorizeError(error400);
-    assert.strictEqual(cat.category, 'validation');
-    assert.strictEqual(cat.retryable, false);
+    expect(cat.category).toBe('validation');
+    expect(cat.retryable).toBe(false);
     
     const error403 = new Error('Z.ai API error 403: forbidden');
     const cat2 = require('../src/lib/api').categorizeError(error403);
-    assert.strictEqual(cat2.category, 'auth');
-    assert.strictEqual(cat2.retryable, false);
+    expect(cat2.category).toBe('auth');
+    expect(cat2.retryable).toBe(false);
   });
 
   test('extractStatusCode extracts 5xx codes', () => {
     const error502 = new Error('Z.ai API error 502: bad gateway');
     const cat = require('../src/lib/api').categorizeError(error502);
-    assert.strictEqual(cat.category, 'provider');
-    assert.strictEqual(cat.retryable, true);
+    expect(cat.category).toBe('provider');
+    expect(cat.retryable).toBe(true);
     
     const error503 = new Error('Z.ai API error 503: service unavailable');
     const cat2 = require('../src/lib/api').categorizeError(error503);
-    assert.strictEqual(cat2.category, 'provider');
-    assert.strictEqual(cat2.retryable, true);
+    expect(cat2.category).toBe('provider');
+    expect(cat2.retryable).toBe(true);
   });
 
   test('sanitizeErrorMessage extracts API messages from JSON', () => {
     const error = new Error('Z.ai API error 400: {"error":{"message":"Invalid model name"}}');
     const result = require('../src/lib/api').sanitizeErrorMessage(error);
-    assert.ok(result.includes('Invalid model name'));
-    assert.ok(!result.includes('{"error"'));
+    expect(result).toContain('Invalid model name');
+    expect(result).not.toContain('{"error"');
   });
 
   test('sanitizeErrorMessage handles nested error structures', () => {
     const error = new Error('Z.ai API error 500: {"error":{"error":{"message":"Server exploded"}}}');
     const result = require('../src/lib/api').sanitizeErrorMessage(error);
-    assert.ok(result.includes('Server exploded'));
+    expect(result).toContain('Server exploded');
   });
 
   test('sanitizeErrorMessage redacts JSON with keys', () => {
     const error = new Error('Failed: {"api_key":"secret123","token":"abc"}');
     const result = require('../src/lib/api').sanitizeErrorMessage(error);
-    assert.ok(!result.includes('secret123'));
-    assert.ok(!result.includes('abc'));
-    assert.ok(result.includes('[REDACTED]'));
+    expect(result).not.toContain('secret123');
+    expect(result).not.toContain('abc');
+    expect(result).toContain('[REDACTED]');
   });
 });
 
@@ -595,27 +594,27 @@ describe('makeApiRequest transport', () => {
         prompt: 'test prompt',
         timeout: 1
       });
-      assert.fail('Should have thrown');
+      throw new Error('Should have thrown');
     } catch (err) {
-      assert.ok(err.message.includes('timed out'));
+      expect(err.message.includes('timed out')).toBe(true);
     }
   });
 });
 
 describe('constants', () => {
   test('DEFAULT_TIMEOUT_MS is 30000', () => {
-    assert.strictEqual(DEFAULT_TIMEOUT_MS, 30000);
+    expect(DEFAULT_TIMEOUT_MS).toBe(30000);
   });
 
   test('DEFAULT_MAX_RETRIES is 3', () => {
-    assert.strictEqual(DEFAULT_MAX_RETRIES, 3);
+    expect(DEFAULT_MAX_RETRIES).toBe(3);
   });
 
   test('DEFAULT_BASE_DELAY_MS is 2000', () => {
-    assert.strictEqual(DEFAULT_BASE_DELAY_MS, 2000);
+    expect(DEFAULT_BASE_DELAY_MS).toBe(2000);
   });
 
   test('ZAI_API_URL is correct endpoint', () => {
-    assert.strictEqual(ZAI_API_URL, 'https://api.z.ai/api/coding/paas/v4/chat/completions');
+    expect(ZAI_API_URL).toBe('https://api.z.ai/api/coding/paas/v4/chat/completions');
   });
 });

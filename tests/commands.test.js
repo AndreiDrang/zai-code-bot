@@ -1,164 +1,163 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const { parseCommand, normalizeInput, isValid, ALLOWED_COMMANDS, ERROR_TYPES } = require('../src/lib/commands.js');
 
 describe('parseCommand', () => {
   test('parses valid /zai ask command', () => {
     const result = parseCommand('/zai ask what is this function doing?');
-    assert.strictEqual(result.command, 'ask');
-    assert.deepStrictEqual(result.args, ['what', 'is', 'this', 'function', 'doing?']);
-    assert.strictEqual(result.raw, '/zai ask what is this function doing?');
-    assert.strictEqual(result.error, null);
-    assert.strictEqual(isValid(result), true);
+    expect(result.command).toBe('ask');
+    expect(result.args).toEqual(['what', 'is', 'this', 'function', 'doing?']);
+    expect(result.raw).toBe('/zai ask what is this function doing?');
+    expect(result.error).toBe(null);
+    expect(isValid(result)).toBe(true);
   });
 
   test('parses valid /zai review command', () => {
     const result = parseCommand('/zai review src/utils.ts');
-    assert.strictEqual(result.command, 'review');
-    assert.deepStrictEqual(result.args, ['src/utils.ts']);
-    assert.strictEqual(result.error, null);
+    expect(result.command).toBe('review');
+    expect(result.args).toEqual(['src/utils.ts']);
+    expect(result.error).toBe(null);
   });
 
   test('parses valid /zai explain command', () => {
     const result = parseCommand('/zai explain 10-15');
-    assert.strictEqual(result.command, 'explain');
-    assert.deepStrictEqual(result.args, ['10-15']);
-    assert.strictEqual(result.error, null);
+    expect(result.command).toBe('explain');
+    expect(result.args).toEqual(['10-15']);
+    expect(result.error).toBe(null);
   });
 
   test('returns unknown_command error for /zai suggest (removed command)', () => {
     const result = parseCommand('/zai suggest better naming');
-    assert.strictEqual(result.error.type, ERROR_TYPES.UNKNOWN_COMMAND);
-    assert.strictEqual(result.error.message, 'Unknown command: suggest');
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.UNKNOWN_COMMAND);
+    expect(result.error.message).toBe('Unknown command: suggest');
+    expect(isValid(result)).toBe(false);
   });
 
   test('returns unknown_command error for /zai compare (removed command)', () => {
     const result = parseCommand('/zai compare');
-    assert.strictEqual(result.error.type, ERROR_TYPES.UNKNOWN_COMMAND);
-    assert.strictEqual(result.error.message, 'Unknown command: compare');
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.UNKNOWN_COMMAND);
+    expect(result.error.message).toBe('Unknown command: compare');
+    expect(isValid(result)).toBe(false);
   });
 
   test('parses valid /zai help command', () => {
     const result = parseCommand('/zai help');
-    assert.strictEqual(result.command, 'help');
-    assert.deepStrictEqual(result.args, []);
-    assert.strictEqual(result.error, null);
+    expect(result.command).toBe('help');
+    expect(result.args).toEqual([]);
+    expect(result.error).toBe(null);
   });
 
   test('returns empty_input error for null input', () => {
     const result = parseCommand(null);
-    assert.strictEqual(result.command, null);
-    assert.deepStrictEqual(result.args, []);
-    assert.strictEqual(result.error.type, ERROR_TYPES.EMPTY_INPUT);
-    assert.strictEqual(isValid(result), false);
+    expect(result.command).toBe(null);
+    expect(result.args).toEqual([]);
+    expect(result.error.type).toBe(ERROR_TYPES.EMPTY_INPUT);
+    expect(isValid(result)).toBe(false);
   });
 
   test('returns empty_input error for undefined input', () => {
     const result = parseCommand(undefined);
-    assert.strictEqual(result.error.type, ERROR_TYPES.EMPTY_INPUT);
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.EMPTY_INPUT);
+    expect(isValid(result)).toBe(false);
   });
 
   test('returns empty_input error for empty string', () => {
     const result = parseCommand('');
-    assert.strictEqual(result.error.type, ERROR_TYPES.EMPTY_INPUT);
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.EMPTY_INPUT);
+    expect(isValid(result)).toBe(false);
   });
 
   test('returns empty_input error for whitespace-only string', () => {
     const result = parseCommand('   ');
-    assert.strictEqual(result.error.type, ERROR_TYPES.EMPTY_INPUT);
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.EMPTY_INPUT);
+    expect(isValid(result)).toBe(false);
   });
 
   test('returns malformed_input error for input without /zai', () => {
     const result = parseCommand('hello world');
-    assert.strictEqual(result.error.type, ERROR_TYPES.MALFORMED_INPUT);
-    assert.strictEqual(result.error.message, 'Input must start with /zai');
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.MALFORMED_INPUT);
+    expect(result.error.message).toBe('Input must start with /zai');
+    expect(isValid(result)).toBe(false);
   });
 
   test('returns malformed_input error for /zai with no command', () => {
     const result = parseCommand('/zai');
-    assert.strictEqual(result.error.type, ERROR_TYPES.MALFORMED_INPUT);
-    assert.strictEqual(result.error.message, 'Missing command after /zai');
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.MALFORMED_INPUT);
+    expect(result.error.message).toBe('Missing command after /zai');
+    expect(isValid(result)).toBe(false);
   });
 
   test('returns unknown_command error for invalid command', () => {
     const result = parseCommand('/zai execute something');
-    assert.strictEqual(result.error.type, ERROR_TYPES.UNKNOWN_COMMAND);
-    assert.strictEqual(result.error.message, 'Unknown command: execute');
-    assert.strictEqual(isValid(result), false);
+    expect(result.error.type).toBe(ERROR_TYPES.UNKNOWN_COMMAND);
+    expect(result.error.message).toBe('Unknown command: execute');
+    expect(isValid(result)).toBe(false);
   });
 
   test('handles command case-insensitively', () => {
     const result = parseCommand('/ZAI ASK question');
-    assert.strictEqual(result.command, 'ask');
-    assert.strictEqual(result.error, null);
+    expect(result.command).toBe('ask');
+    expect(result.error).toBe(null);
   });
 
   test('preserves raw input in result', () => {
     const input = '/zai ask my question';
     const result = parseCommand(input);
-    assert.strictEqual(result.raw, input);
+    expect(result.raw).toBe(input);
   });
 });
 
 describe('normalizeInput', () => {
   test('normalizes @zai-bot mention to /zai', () => {
-    assert.strictEqual(normalizeInput('@zai-bot ask question'), '/zai ask question');
+    expect(normalizeInput('@zai-bot ask question')).toBe('/zai ask question');
   });
 
   test('normalizes @zai-bot with hyphen', () => {
-    assert.strictEqual(normalizeInput('@zai-bot ask question'), '/zai ask question');
+    expect(normalizeInput('@zai-bot ask question')).toBe('/zai ask question');
   });
 
   test('normalizes @zaibot (no hyphen)', () => {
-    assert.strictEqual(normalizeInput('@zaibot ask question'), '/zai ask question');
+    expect(normalizeInput('@zaibot ask question')).toBe('/zai ask question');
   });
 
   test('normalizes @zai (no bot suffix)', () => {
-    assert.strictEqual(normalizeInput('@zai ask question'), '/zai ask question');
+    expect(normalizeInput('@zai ask question')).toBe('/zai ask question');
   });
 
   test('normalizes @ZAI-BOT (uppercase)', () => {
-    assert.strictEqual(normalizeInput('@ZAI-BOT ask question'), '/zai ask question');
+    expect(normalizeInput('@ZAI-BOT ask question')).toBe('/zai ask question');
   });
 
   test('preserves /zai input unchanged', () => {
-    assert.strictEqual(normalizeInput('/zai ask question'), '/zai ask question');
+    expect(normalizeInput('/zai ask question')).toBe('/zai ask question');
   });
 
   test('handles non-string input', () => {
-    assert.strictEqual(normalizeInput(null), '');
-    assert.strictEqual(normalizeInput(undefined), '');
+    expect(normalizeInput(null)).toBe('');
+    expect(normalizeInput(undefined)).toBe('');
   });
 
   test('trims whitespace', () => {
-    assert.strictEqual(normalizeInput('  /zai ask  '), '/zai ask');
+    expect(normalizeInput('  /zai ask  ')).toBe('/zai ask');
   });
 });
 
 describe('mention normalization in parseCommand', () => {
   test('parses @zai-bot mention as /zai command', () => {
     const result = parseCommand('@zai-bot ask what is this?');
-    assert.strictEqual(result.command, 'ask');
-    assert.strictEqual(result.error, null);
+    expect(result.command).toBe('ask');
+    expect(result.error).toBe(null);
   });
 
   test('parses @zaibot mention as /zai command', () => {
     const result = parseCommand('@zaibot review file.ts');
-    assert.strictEqual(result.command, 'review');
-    assert.strictEqual(result.error, null);
+    expect(result.command).toBe('review');
+    expect(result.error).toBe(null);
   });
 
   test('parses @ZAI-BOT uppercase mention', () => {
     const result = parseCommand('@ZAI-BOT describe');
-    assert.strictEqual(result.command, 'describe');
-    assert.strictEqual(result.error, null);
+    expect(result.command).toBe('describe');
+    expect(result.error).toBe(null);
   });
 });
 
@@ -180,8 +179,8 @@ describe('ALLOWED_COMMANDS', () => {
 
 describe('ERROR_TYPES', () => {
   test('has all expected error types', () => {
-    assert.strictEqual(ERROR_TYPES.UNKNOWN_COMMAND, 'unknown_command');
-    assert.strictEqual(ERROR_TYPES.MALFORMED_INPUT, 'malformed_input');
-    assert.strictEqual(ERROR_TYPES.EMPTY_INPUT, 'empty_input');
+    expect(ERROR_TYPES.UNKNOWN_COMMAND).toBe('unknown_command');
+    expect(ERROR_TYPES.MALFORMED_INPUT).toBe('malformed_input');
+    expect(ERROR_TYPES.EMPTY_INPUT).toBe('empty_input');
   });
 });

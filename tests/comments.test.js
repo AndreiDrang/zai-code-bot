@@ -1,5 +1,3 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
 const {
   REACTIONS,
   findCommentByMarker,
@@ -11,19 +9,19 @@ const {
 
 describe('REACTIONS', () => {
   test('has EYES constant', () => {
-    assert.strictEqual(REACTIONS.EYES, 'eyes');
+    expect(REACTIONS.EYES).toBe('eyes');
   });
 
   test('has THINKING constant', () => {
-    assert.strictEqual(REACTIONS.THINKING, 'eyes');
+    expect(REACTIONS.THINKING).toBe('eyes');
   });
 
   test('has ROCKET constant', () => {
-    assert.strictEqual(REACTIONS.ROCKET, 'rocket');
+    expect(REACTIONS.ROCKET).toBe('rocket');
   });
 
   test('has X constant', () => {
-    assert.strictEqual(REACTIONS.X, '-1');
+    expect(REACTIONS.X).toBe('-1');
   });
 });
 
@@ -44,8 +42,8 @@ describe('findCommentByMarker', () => {
     };
 
     const result = await findCommentByMarker(mockOctokit, 'owner', 'repo', 1, 'test-marker');
-    assert.strictEqual(result.id, 2);
-    assert.strictEqual(result.body.includes('test-marker'), true);
+    expect(result.id).toBe(2);
+    expect(result.body.includes('test-marker')).toBe(true);
   });
 
   test('returns null when no matching marker found', async () => {
@@ -63,7 +61,7 @@ describe('findCommentByMarker', () => {
     };
 
     const result = await findCommentByMarker(mockOctokit, 'owner', 'repo', 1, 'nonexistent');
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 
   test('returns null when no comments exist', async () => {
@@ -78,7 +76,7 @@ describe('findCommentByMarker', () => {
     };
 
     const result = await findCommentByMarker(mockOctokit, 'owner', 'repo', 1, 'marker');
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 });
 
@@ -109,9 +107,9 @@ describe('upsertComment', () => {
       '<!-- marker -->'
     );
 
-    assert.strictEqual(createCalled, true);
-    assert.strictEqual(result.action, 'created');
-    assert.strictEqual(result.comment.id, 100);
+    expect(createCalled).toBe(true);
+    expect(result.action).toBe('created');
+    expect(result.comment.id).toBe(100);
   });
 
   test('updates existing comment when marker found', async () => {
@@ -144,9 +142,9 @@ describe('upsertComment', () => {
       '<!-- marker -->'
     );
 
-    assert.strictEqual(updateCalled, true);
-    assert.strictEqual(result.action, 'updated');
-    assert.strictEqual(result.comment.id, 50);
+    expect(updateCalled).toBe(true);
+    expect(result.action).toBe('updated');
+    expect(result.comment.id).toBe(50);
   });
 
   test('creates reply comment when replyToId provided', async () => {
@@ -175,9 +173,9 @@ describe('upsertComment', () => {
       { replyToId: 100 }
     );
 
-    assert.strictEqual(createCalled, true);
-    assert.strictEqual(result.action, 'created');
-    assert.strictEqual(createParams.in_reply_to_comment_id, 100);
+    expect(createCalled).toBe(true);
+    expect(result.action).toBe('created');
+    expect(createParams.in_reply_to_comment_id).toBe(100);
   });
 
   test('skips finding existing when updateExisting is false', async () => {
@@ -204,7 +202,7 @@ describe('upsertComment', () => {
       { updateExisting: false }
     );
 
-    assert.strictEqual(listCommentsCalled, false);
+    expect(listCommentsCalled).toBe(false);
   });
 });
 
@@ -222,8 +220,8 @@ describe('addReaction', () => {
 
     const result = await addReaction(mockOctokit, 'owner', 'repo', 123, 'eyes');
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.reaction.content, 'eyes');
+    expect(result.success).toBe(true);
+    expect(result.reaction.content).toBe('eyes');
   });
 
   test('handles 404 error gracefully', async () => {
@@ -241,8 +239,8 @@ describe('addReaction', () => {
 
     const result = await addReaction(mockOctokit, 'owner', 'repo', 123, 'eyes');
 
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error, 'comment_not_found');
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('comment_not_found');
   });
 
   test('throws on non-404 errors', async () => {
@@ -258,10 +256,9 @@ describe('addReaction', () => {
       },
     };
 
-    await assert.rejects(
-      addReaction(mockOctokit, 'owner', 'repo', 123, 'eyes'),
-      { message: 'Server Error' }
-    );
+    await expect(
+      addReaction(mockOctokit, 'owner', 'repo', 123, 'eyes')
+    ).rejects.toThrow('Server Error');
   });
 });
 
@@ -286,9 +283,9 @@ describe('updateReaction', () => {
       'rocket'
     );
 
-    assert.strictEqual(result.oldReactionRemoved, true);
-    assert.strictEqual(result.newReaction.success, true);
-    assert.strictEqual(result.newReaction.reaction.content, 'rocket');
+    expect(result.oldReactionRemoved).toBe(true);
+    expect(result.newReaction.success).toBe(true);
+    expect(result.newReaction.reaction.content).toBe('rocket');
   });
 });
 
@@ -306,7 +303,7 @@ describe('setReaction', () => {
 
     const result = await setReaction(mockOctokit, 'owner', 'repo', 123, 'thinking');
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.reaction.content, 'thinking');
+    expect(result.success).toBe(true);
+    expect(result.reaction.content).toBe('thinking');
   });
 });

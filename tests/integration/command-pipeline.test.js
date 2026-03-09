@@ -1,5 +1,4 @@
-const { test, describe, beforeEach, afterEach } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect, beforeEach, afterEach } from 'vitest';
 const COMMENT_MARKER = '<!-- zai-code-review -->';
 
 const {
@@ -147,15 +146,15 @@ describe('Command Pipeline Integration', () => {
     mockGithub.context.payload = payload;
 
     const parseResult = commands.parseCommand('/zai ask what is this?');
-    assert.strictEqual(parseResult.command, 'ask');
-    assert.strictEqual(parseResult.error, null);
-    assert.strictEqual(commands.isValid(parseResult), true);
+    expect(parseResult.command).toBe('ask');
+    expect(parseResult.error).toBe(null);
+    expect(commands.isValid(parseResult)).toBe(true);
   });
 
   test('/zai help command parses correctly', () => {
     const parseResult = commands.parseCommand('/zai help');
-    assert.strictEqual(parseResult.command, 'help');
-    assert.strictEqual(parseResult.args.length, 0);
+    expect(parseResult.command).toBe('help');
+    expect(parseResult.args.length).toBe(0);
   });
 
   test('event routing identifies PR comment events', () => {
@@ -163,10 +162,10 @@ describe('Command Pipeline Integration', () => {
     mockGithub.context.payload = payload;
 
     const eventType = events.getEventType(mockGithub.context);
-    assert.strictEqual(eventType, 'issue_comment_pr');
+    expect(eventType).toBe('issue_comment_pr');
 
     const shouldProcess = events.shouldProcessEvent(mockGithub.context);
-    assert.strictEqual(shouldProcess.process, true);
+    expect(shouldProcess.process).toBe(true);
   });
 
   test('authorized user passes authorization check', async () => {
@@ -180,7 +179,7 @@ describe('Command Pipeline Integration', () => {
       { login: 'test-user' }
     );
 
-    assert.strictEqual(authResult.authorized, true);
+    expect(authResult.authorized).toBe(true);
   });
 
   // Now permissive - all identifiable users allowed
@@ -197,7 +196,7 @@ describe('Command Pipeline Integration', () => {
       { login: 'unknown-user' }
     );
 
-    assert.strictEqual(authResult.authorized, true);
+    expect(authResult.authorized).toBe(true);
   });
 
   test('review comment auth falls back to sender when comment.user is missing', async () => {
@@ -234,25 +233,25 @@ describe('Command Pipeline Integration', () => {
       commenter
     );
 
-    assert.strictEqual(commenter.login, 'test-owner');
-    assert.strictEqual(authResult.authorized, true);
+    expect(commenter.login).toBe('test-owner');
+    expect(authResult.authorized).toBe(true);
   });
 
   test('ask handler executes and formats response', () => {
     const handlerModule = handlers.ask;
-    assert.ok(handlerModule);
+    expect(handlerModule).toBeTruthy();
 
     const validation = handlerModule.validateArgs(['what', 'is', 'this?']);
-    assert.strictEqual(validation.valid, true);
+    expect(validation.valid).toBe(true);
 
     const prompt = handlerModule.buildPrompt('What is this?', 'PR context here');
-    assert.ok(prompt.includes('What is this?'));
-    assert.ok(prompt.includes('PR context here'));
+    expect(prompt.includes('What is this?')).toBe(true);
+    expect(prompt.includes('PR context here')).toBe(true);
   });
 
   test('help handler returns help text', async () => {
     const handlerModule = handlers.help;
-    assert.ok(handlerModule);
+    expect(handlerModule).toBeTruthy();
 
     mockGithub.context.payload = {
       pull_request: { number: 42 },
@@ -267,7 +266,7 @@ describe('Command Pipeline Integration', () => {
       logger: { info: () => {} }
     });
 
-    assert.strictEqual(helpResponse.success, true);
+    expect(helpResponse.success).toBe(true);
   });
 
   test('full pipeline: authorized user asks question', async () => {
@@ -275,38 +274,38 @@ describe('Command Pipeline Integration', () => {
     mockGithub.context.payload = payload;
 
     const shouldProcess = events.shouldProcessEvent(mockGithub.context);
-    assert.strictEqual(shouldProcess.process, true);
+    expect(shouldProcess.process).toBe(true);
 
     const parseResult = commands.parseCommand('/zai ask what does this do?');
-    assert.strictEqual(commands.isValid(parseResult), true);
+    expect(commands.isValid(parseResult)).toBe(true);
 
     const authResult = await auth.checkAuthorization(
       mockOctokit,
       mockGithub.context,
       { login: 'test-user' }
     );
-    assert.strictEqual(authResult.authorized, true);
+    expect(authResult.authorized).toBe(true);
 
     const handlerModule = handlers.ask;
     const context = 'PR context: src/test.js modified';
     const prompt = handlerModule.buildPrompt(parseResult.args.join(' '), context);
 
-    assert.ok(prompt.includes('what does this do?'));
+    expect(prompt.includes('what does this do?')).toBe(true);
   });
 
   test('unknown command returns error', () => {
     const parseResult = commands.parseCommand('/zai unknown-cmd');
-    assert.strictEqual(parseResult.error.type, 'unknown_command');
+    expect(parseResult.error.type).toBe('unknown_command');
   });
 
   test('malformed input returns error', () => {
     const parseResult = commands.parseCommand('hello world');
-    assert.strictEqual(parseResult.error.type, 'malformed_input');
+    expect(parseResult.error.type).toBe('malformed_input');
   });
 
   test('empty input returns error', () => {
     const parseResult = commands.parseCommand('');
-    assert.strictEqual(parseResult.error.type, 'empty_input');
+    expect(parseResult.error.type).toBe('empty_input');
   });
 });
 
@@ -442,10 +441,10 @@ describe('Runtime-Path Command Matrix', () => {
   test('/zai ask passes full pipeline', async () => {
     const result = await runFullPipeline('/zai ask what does this function do?');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.stage, 'complete');
-    assert.strictEqual(result.command, 'ask');
-    assert.strictEqual(result.args.join(' '), 'what does this function do?');
+    expect(result.success).toBe(true);
+    expect(result.stage).toBe('complete');
+    expect(result.command).toBe('ask');
+    expect(result.args.join(' ')).toBe('what does this function do?');
     
     // Note: core.getInput is not called in pipeline component tests
   });
@@ -453,43 +452,43 @@ describe('Runtime-Path Command Matrix', () => {
   test('/zai help passes full pipeline', async () => {
     const result = await runFullPipeline('/zai help');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.stage, 'complete');
-    assert.strictEqual(result.command, 'help');
-    assert.strictEqual(result.args.length, 0);
+    expect(result.success).toBe(true);
+    expect(result.stage).toBe('complete');
+    expect(result.command).toBe('help');
+    expect(result.args.length).toBe(0);
   });
 
   test('/zai review passes full pipeline', async () => {
     const result = await runFullPipeline('/zai review');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.stage, 'complete');
-    assert.strictEqual(result.command, 'review');
+    expect(result.success).toBe(true);
+    expect(result.stage).toBe('complete');
+    expect(result.command).toBe('review');
   });
 
   test('/zai explain passes full pipeline', async () => {
     const result = await runFullPipeline('/zai explain 10-20');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.stage, 'complete');
-    assert.strictEqual(result.command, 'explain');
-    assert.strictEqual(result.args.join(' '), '10-20');
+    expect(result.success).toBe(true);
+    expect(result.stage).toBe('complete');
+    expect(result.command).toBe('explain');
+    expect(result.args.join(' ')).toBe('10-20');
   });
 
   test('/zai suggest fails at parsing (removed command)', async () => {
     const result = await runFullPipeline('/zai suggest');
     
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'parsing');
-    assert.strictEqual(result.error.type, 'unknown_command');
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('parsing');
+    expect(result.error.type).toBe('unknown_command');
   });
 
   test('/zai compare fails at parsing (removed command)', async () => {
     const result = await runFullPipeline('/zai compare');
     
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'parsing');
-    assert.strictEqual(result.error.type, 'unknown_command');
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('parsing');
+    expect(result.error.type).toBe('unknown_command');
   });
 
   // =====================================================
@@ -499,15 +498,15 @@ describe('Runtime-Path Command Matrix', () => {
   test('@zai-bot ask passes full pipeline', async () => {
     const result = await runFullPipeline('@zai-bot ask what is this?');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.command, 'ask');
+    expect(result.success).toBe(true);
+    expect(result.command).toBe('ask');
   });
 
   test('@zai-bot review passes full pipeline', async () => {
     const result = await runFullPipeline('@zai-bot review');
     
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.command, 'review');
+    expect(result.success).toBe(true);
+    expect(result.command).toBe('review');
   });
 
   // =====================================================
@@ -523,7 +522,7 @@ describe('Runtime-Path Command Matrix', () => {
     };
 
     const result = await runFullPipeline('/zai ask test', 'unknown-user');
-    assert.strictEqual(result.success, true);
+    expect(result.success).toBe(true);
 });
 
   // Now permissive - fork users also allowed
@@ -535,7 +534,7 @@ describe('Runtime-Path Command Matrix', () => {
     };
 
     const result = await runFullPipeline('/zai review', 'external-user');
-    assert.strictEqual(result.success, true);
+    expect(result.success).toBe(true);
   });
 
   // =====================================================
@@ -545,33 +544,33 @@ describe('Runtime-Path Command Matrix', () => {
   test('malformed command fails at parsing stage', async () => {
     const result = await runFullPipeline('just some random text');
     
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'parsing');
-    assert.strictEqual(result.error.type, 'malformed_input');
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('parsing');
+    expect(result.error.type).toBe('malformed_input');
   });
 
   test('empty command fails at parsing stage', async () => {
     const result = await runFullPipeline('');
     
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'parsing');
-    assert.strictEqual(result.error.type, 'empty_input');
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('parsing');
+    expect(result.error.type).toBe('empty_input');
   });
 
   test('unknown command fails at parsing stage', async () => {
     const result = await runFullPipeline('/zai unknown-command');
     
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'parsing');
-    assert.strictEqual(result.error.type, 'unknown_command');
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('parsing');
+    expect(result.error.type).toBe('unknown_command');
   });
 
   test('command without zai prefix fails at parsing stage', async () => {
     const result = await runFullPipeline('/ask help');
     
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.stage, 'parsing');
-    assert.strictEqual(result.error.type, 'malformed_input');
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('parsing');
+    expect(result.error.type).toBe('malformed_input');
   });
 
   // =====================================================
@@ -585,8 +584,8 @@ describe('Runtime-Path Command Matrix', () => {
     mockGithub.context.payload = payload;
 
     const shouldProcess = events.shouldProcessEvent(mockGithub.context);
-    assert.strictEqual(shouldProcess.process, false);
-    assert.strictEqual(shouldProcess.reason, 'non-PR issue comment - not supported');
+    expect(shouldProcess.process).toBe(false);
+    expect(shouldProcess.reason).toBe('non-PR issue comment - not supported');
   });
 
   test('deleted comment action is processed', async () => {
@@ -595,7 +594,7 @@ describe('Runtime-Path Command Matrix', () => {
 
     const shouldProcess = events.shouldProcessEvent(mockGithub.context);
     // Source code does not filter on action, so deleted comments are processed
-    assert.strictEqual(shouldProcess.process, true);
+    expect(shouldProcess.process).toBe(true);
   });
 
   test('bot comment is skipped', async () => {
@@ -604,7 +603,7 @@ describe('Runtime-Path Command Matrix', () => {
     mockGithub.context.payload = payload;
 
     const shouldProcess = events.shouldProcessEvent(mockGithub.context);
-    assert.strictEqual(shouldProcess.process, false);
+    expect(shouldProcess.process).toBe(false);
   });
 
   // =====================================================
@@ -616,27 +615,27 @@ describe('Runtime-Path Command Matrix', () => {
     
     for (const cmd of commands) {
       const handler = handlers.getHandler(cmd);
-      assert.ok(handler, `Handler for ${cmd} should exist`);
+      expect(handler, `Handler for ${cmd} should exist`).toBeTruthy();
     }
   });
 
   test('removed commands have no handlers', () => {
-    assert.strictEqual(handlers.getHandler('suggest'), null);
-    assert.strictEqual(handlers.getHandler('compare'), null);
+    expect(handlers.getHandler('suggest')).toBe(null);
+    expect(handlers.getHandler('compare')).toBe(null);
   });
 
   test('handler returns correct command list', () => {
     const allCommands = handlers.getAllCommands();
     
-    assert.strictEqual(allCommands.length, 6);
-    assert.ok(allCommands.includes('ask'));
-    assert.ok(allCommands.includes('help'));
-    assert.ok(allCommands.includes('review'));
-    assert.ok(allCommands.includes('explain'));
-    assert.ok(allCommands.includes('describe'));
-    assert.ok(allCommands.includes('impact'));
-    assert.ok(!allCommands.includes('suggest'));
-    assert.ok(!allCommands.includes('compare'));
+    expect(allCommands.length).toBe(6);
+    expect(allCommands).toContain('ask');
+    expect(allCommands).toContain('help');
+    expect(allCommands).toContain('review');
+    expect(allCommands).toContain('explain');
+    expect(allCommands).toContain('describe');
+    expect(allCommands).toContain('impact');
+    expect(allCommands).not.toContain('suggest');
+    expect(allCommands).not.toContain('compare');
   });
 
   // =====================================================
@@ -649,8 +648,8 @@ describe('Runtime-Path Command Matrix', () => {
 
     const result = await runFullPipeline('not a command');
     
-    assert.strictEqual(result.stage, 'parsing');
-    assert.strictEqual(result.error.type, 'malformed_input');
+    expect(result.stage).toBe('parsing');
+    expect(result.error.type).toBe('malformed_input');
   });
 
   // Now permissive - all identifiable users pass auth
@@ -660,6 +659,6 @@ describe('Runtime-Path Command Matrix', () => {
     };
 
     const result = await runFullPipeline('/zai review', 'unauthorized-user');
-    assert.strictEqual(result.success, true);
+    expect(result.success).toBe(true);
   });
 });

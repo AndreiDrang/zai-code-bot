@@ -1,5 +1,4 @@
-const { describe, test } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const { 
   buildPrompt, 
   GUIDANCE_MESSAGES, 
@@ -31,13 +30,13 @@ describe('index.js - buildPrompt', () => {
     
     const result = buildPrompt(files);
     
-    assert.ok(result.includes('<file name="src/index.js">'));
-    assert.ok(result.includes('<diff>'));
-    assert.ok(result.includes('+new line\n-old line'));
-    assert.ok(result.includes('</diff>'));
-    assert.ok(result.includes('</file>'));
-    assert.ok(result.includes('<pull_request_changes>'));
-    assert.ok(result.includes('</pull_request_changes>'));
+    expect(result.includes('<file name="src/index.js">')).toBe(true);
+    expect(result.includes('<diff>')).toBe(true);
+    expect(result.includes('+new line\n-old line')).toBe(true);
+    expect(result.includes('</diff>')).toBe(true);
+    expect(result.includes('</file>')).toBe(true);
+    expect(result.includes('<pull_request_changes>')).toBe(true);
+    expect(result.includes('</pull_request_changes>')).toBe(true);
   });
 
   test('filters out files without patches', () => {
@@ -49,15 +48,15 @@ describe('index.js - buildPrompt', () => {
     
     const result = buildPrompt(files);
     
-    assert.ok(result.includes('src/has-patch.js'));
-    assert.ok(!result.includes('src/no-patch.js'));
-    assert.ok(!result.includes('src/also-no-patch.js'));
+    expect(result.includes('src/has-patch.js')).toBe(true);
+    expect(result.includes('src/no-patch.js')).toBeFalsy();
+    expect(result.includes('src/also-no-patch.js')).toBeFalsy();
   });
 
   test('handles empty files array', () => {
     const result = buildPrompt([]);
-    assert.ok(result.includes('<pull_request_changes>'));
-    assert.ok(result.includes('</pull_request_changes>'));
+    expect(result.includes('<pull_request_changes>')).toBe(true);
+    expect(result.includes('</pull_request_changes>')).toBe(true);
   });
 
   test('handles files with empty patches', () => {
@@ -66,62 +65,62 @@ describe('index.js - buildPrompt', () => {
     ];
     
     const result = buildPrompt(files);
-    assert.ok(!result.includes('src/empty.js'));
+    expect(result.includes('src/empty.js')).toBeFalsy();
   });
 
   test('includes system instructions reference', () => {
     const files = [{ filename: 'test.js', patch: '+x' }];
     const result = buildPrompt(files);
-    assert.ok(result.includes('system instructions'));
+    expect(result.includes('system instructions')).toBe(true);
   });
 });
 
 describe('index.js - GUIDANCE_MESSAGES', () => {
   test('unknown_command contains all commands', () => {
     const msg = GUIDANCE_MESSAGES.unknown_command;
-    assert.ok(msg.includes('/zai ask'));
-    assert.ok(msg.includes('/zai review'));
-    assert.ok(msg.includes('/zai explain'));
-    assert.ok(msg.includes('/zai describe'));
-    assert.ok(msg.includes('/zai impact'));
-    assert.ok(msg.includes('/zai help'));
-    assert.ok(msg.includes('@zai-bot'));
+    expect(msg.includes('/zai ask')).toBe(true);
+    expect(msg.includes('/zai review')).toBe(true);
+    expect(msg.includes('/zai explain')).toBe(true);
+    expect(msg.includes('/zai describe')).toBe(true);
+    expect(msg.includes('/zai impact')).toBe(true);
+    expect(msg.includes('/zai help')).toBe(true);
+    expect(msg.includes('@zai-bot')).toBe(true);
   });
 
   test('malformed_input contains examples', () => {
     const msg = GUIDANCE_MESSAGES.malformed_input;
-    assert.ok(msg.includes('/zai ask'));
-    assert.ok(msg.includes('/zai review'));
-    assert.ok(msg.includes('/zai explain'));
+    expect(msg.includes('/zai ask')).toBe(true);
+    expect(msg.includes('/zai review')).toBe(true);
+    expect(msg.includes('/zai explain')).toBe(true);
   });
 
   test('empty_input mentions help command', () => {
     const msg = GUIDANCE_MESSAGES.empty_input;
-    assert.ok(msg.includes('/zai help'));
+    expect(msg.includes('/zai help')).toBe(true);
   });
 
   test('all messages contain comment marker', () => {
     Object.values(GUIDANCE_MESSAGES).forEach(msg => {
-      assert.ok(msg.includes(COMMENT_MARKER), `Message should contain COMMENT_MARKER`);
+      expect(msg.includes(COMMENT_MARKER)).toBeTruthy(`Message should contain COMMENT_MARKER`);
     });
   });
 });
 
 describe('index.js - Markers', () => {
   test('COMMENT_MARKER is defined', () => {
-    assert.strictEqual(COMMENT_MARKER, '<!-- zai-code-review -->');
+    expect(COMMENT_MARKER).toBe('<!-- zai-code-review -->');
   });
 
   test('GUIDANCE_MARKER is defined', () => {
-    assert.strictEqual(GUIDANCE_MARKER, '<!-- zai-guidance -->');
+    expect(GUIDANCE_MARKER).toBe('<!-- zai-guidance -->');
   });
 
   test('PROGRESS_MARKER is defined', () => {
-    assert.strictEqual(PROGRESS_MARKER, '<!-- zai-progress -->');
+    expect(PROGRESS_MARKER).toBe('<!-- zai-progress -->');
   });
 
   test('AUTH_MARKER is defined', () => {
-    assert.strictEqual(AUTH_MARKER, '<!-- zai-auth -->');
+    expect(AUTH_MARKER).toBe('<!-- zai-auth -->');
   });
 });
 
@@ -142,9 +141,9 @@ describe('index.js - getChangedFiles', () => {
 
     const files = await getChangedFiles(mockOctokit, 'owner', 'repo', 1);
     
-    assert.strictEqual(files.length, 2);
-    assert.strictEqual(files[0].filename, 'src/a.js');
-    assert.strictEqual(files[1].filename, 'src/b.js');
+    expect(files.length).toBe(2);
+    expect(files[0].filename).toBe('src/a.js');
+    expect(files[1].filename).toBe('src/b.js');
   });
 
   test('handles empty response', async () => {
@@ -158,7 +157,7 @@ describe('index.js - getChangedFiles', () => {
 
     const files = await getChangedFiles(mockOctokit, 'owner', 'repo', 1);
     
-    assert.strictEqual(files.length, 0);
+    expect(files.length).toBe(0);
   });
 
   test('passes correct params to octokit', async () => {
@@ -176,10 +175,10 @@ describe('index.js - getChangedFiles', () => {
 
     await getChangedFiles(mockOctokit, 'myowner', 'myrepo', 42);
     
-    assert.strictEqual(capturedParams.owner, 'myowner');
-    assert.strictEqual(capturedParams.repo, 'myrepo');
-    assert.strictEqual(capturedParams.pull_number, 42);
-    assert.strictEqual(capturedParams.per_page, 100);
+    expect(capturedParams.owner).toBe('myowner');
+    expect(capturedParams.repo).toBe('myrepo');
+    expect(capturedParams.pull_number).toBe(42);
+    expect(capturedParams.per_page).toBe(100);
   });
 });
 
@@ -206,8 +205,8 @@ describe('index.js - enforceCommandAuthorization', () => {
       mockDeps
     );
     
-    assert.strictEqual(result.authorized, true);
-    assert.strictEqual(result.commenter.login, 'user');
+    expect(result.authorized).toBe(true);
+    expect(result.commenter.login).toBe('user');
   });
 
   test('returns silent block for fork PRs', async () => {
@@ -236,9 +235,9 @@ describe('index.js - enforceCommandAuthorization', () => {
       mockDeps
     );
     
-    assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.silent, true);
-    assert.ok(infoLogged.includes('Silently blocking'));
+    expect(result.authorized).toBe(false);
+    expect(result.silent).toBe(true);
+    expect(infoLogged.includes('Silently blocking')).toBe(true);
   });
 
   test('posts auth message and reaction when not authorized', async () => {
@@ -269,11 +268,11 @@ describe('index.js - enforceCommandAuthorization', () => {
       mockDeps
     );
     
-    assert.strictEqual(result.authorized, false);
-    assert.strictEqual(result.silent, false);
-    assert.ok(commentPosted !== null);
-    assert.strictEqual(commentPosted.marker, AUTH_MARKER);
-    assert.strictEqual(reactionSet, '-1');
+    expect(result.authorized).toBe(false);
+    expect(result.silent).toBe(false);
+    expect(commentPosted ).not.toBeNull();
+    expect(commentPosted.marker).toBe(AUTH_MARKER);
+    expect(reactionSet).toBe('-1');
   });
 
   test('handles missing replyToId', async () => {
@@ -299,7 +298,7 @@ describe('index.js - enforceCommandAuthorization', () => {
       mockDeps
     );
     
-    assert.strictEqual(reactionCalled, false);
+    expect(reactionCalled).toBe(false);
   });
 
   test('handles reaction error gracefully', async () => {
@@ -328,8 +327,8 @@ describe('index.js - enforceCommandAuthorization', () => {
       mockDeps
     );
     
-    assert.strictEqual(result.authorized, false);
-    assert.ok(warningLogged.includes('Rate limited'));
+    expect(result.authorized).toBe(false);
+    expect(warningLogged.includes('Rate limited')).toBe(true);
   });
 
   test('uses default dependencies when not provided', async () => {
@@ -349,8 +348,8 @@ describe('index.js - enforceCommandAuthorization', () => {
       { issueNumber: 1, pullNumber: 1 }
     );
 
-    assert.ok(result.hasOwnProperty('authorized'));
-    assert.ok(result.hasOwnProperty('commenter'));
+    expect(result.hasOwnProperty('authorized')).toBe(true);
+    expect(result.hasOwnProperty('commenter')).toBe(true);
   });
 });
 
@@ -388,8 +387,8 @@ describe('index.js - handlePullRequestEvent', () => {
       { core: mockCore, github: mockGithub }
     );
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('No pull request number'));
+    expect(result.success).toBe(false);
+    expect(result.error.includes('No pull request number')).toBe(true);
   });
 
   test('skips when no patchable changes', async () => {
@@ -410,8 +409,8 @@ describe('index.js - handlePullRequestEvent', () => {
       }
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.skipped, true);
+    expect(result.success).toBe(true);
+    expect(result.skipped).toBe(true);
   });
 
   test('creates comment when no existing review', async () => {
@@ -445,10 +444,10 @@ describe('index.js - handlePullRequestEvent', () => {
       }
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.action, 'created');
-    assert.strictEqual(result.commentId, 123);
-    assert.ok(commentCreated);
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('created');
+    expect(result.commentId).toBe(123);
+    expect(commentCreated).toBeTruthy();
   });
 
   test('updates existing comment when review exists', async () => {
@@ -481,10 +480,10 @@ describe('index.js - handlePullRequestEvent', () => {
       }
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.action, 'updated');
-    assert.strictEqual(result.commentId, 456);
-    assert.ok(commentUpdated);
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('updated');
+    expect(result.commentId).toBe(456);
+    expect(commentUpdated).toBeTruthy();
   });
 
   test('uses custom comment marker', async () => {
@@ -520,7 +519,7 @@ describe('index.js - handlePullRequestEvent', () => {
       }
     );
 
-    assert.ok(capturedBody.includes(customMarker));
+    expect(capturedBody.includes(customMarker)).toBe(true);
   });
 });
 
@@ -603,7 +602,7 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(result.success, true);
+    expect(result.success).toBe(true);
   });
 
   test('review command failure path returns error', async () => {
@@ -630,8 +629,8 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('Failed to review'));
+    expect(result.success).toBe(false);
+    expect(result.error.includes('Failed to review')).toBe(true);
   });
 
   test('explain command with explicit args returns success', async () => {
@@ -658,7 +657,7 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(result.success, true);
+    expect(result.success).toBe(true);
   });
 
   test('explain command infers range from review comment anchor', async () => {
@@ -689,7 +688,7 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.deepStrictEqual(explainArgsUsed, ['10-15']);
+    expect(explainArgsUsed).toEqual(['10-15']);
   });
 
   test('describe command success path returns success', async () => {
@@ -714,7 +713,7 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(result.success, true);
+    expect(result.success).toBe(true);
   });
 
   test('describe command failure path returns error', async () => {
@@ -739,8 +738,8 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('Failed to describe'));
+    expect(result.success).toBe(false);
+    expect(result.error.includes('Failed to describe')).toBe(true);
   });
 
   test('ask command silent block when authorized false', async () => {
@@ -765,8 +764,8 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.silent, true);
+    expect(result.success).toBe(true);
+    expect(result.silent).toBe(true);
   });
 
   test('ask command success path returns success', async () => {
@@ -791,7 +790,7 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(result.success, true);
+    expect(result.success).toBe(true);
   });
 
   test('impact command returns early without posting comment', async () => {
@@ -817,7 +816,7 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(commentPosted, false);
+    expect(commentPosted).toBe(false);
   });
 
   test('changed-file fetch warning path when fetch fails', async () => {
@@ -846,7 +845,7 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.ok(warningLogged.includes('Failed to fetch changed files'));
+    expect(warningLogged.includes('Failed to fetch changed files')).toBe(true);
   });
 
   test('explain command uses commentPath when available', async () => {
@@ -877,6 +876,6 @@ describe('index.js - dispatchCommand', () => {
       mockDeps
     );
 
-    assert.strictEqual(filenameUsed, 'src/utils.js');
+    expect(filenameUsed).toBe('src/utils.js');
   });
 });

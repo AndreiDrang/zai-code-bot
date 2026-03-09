@@ -1,5 +1,4 @@
-const test = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 
 const {
   parsePatchLineRanges,
@@ -28,11 +27,11 @@ test('parsePatchLineRanges parses new and old hunk ranges', () => {
   const newRanges = parsePatchLineRanges(patch, 'new');
   const oldRanges = parsePatchLineRanges(patch, 'old');
 
-  assert.deepStrictEqual(newRanges, [
+  expect(newRanges).toEqual([
     { start: 20, end: 23 },
     { start: 80, end: 81 },
   ]);
-  assert.deepStrictEqual(oldRanges, [
+  expect(oldRanges).toEqual([
     { start: 10, end: 12 },
     { start: 50, end: 50 },
   ]);
@@ -46,13 +45,13 @@ test('scopeLargeFileContent uses sliding window for >10k lines with changed rang
     windowSize: 10,
   });
 
-  assert.strictEqual(scoped.scoped, true);
-  assert.strictEqual(scoped.scopeStrategy, 'sliding_window');
-  assert.strictEqual(scoped.scopeStartLine, 10990);
-  assert.strictEqual(scoped.scopeEndLine, 11020);
-  assert.ok(scoped.content.includes('line 11000'));
-  assert.ok(scoped.scopeStartLine > 1);
-  assert.ok(!scoped.content.startsWith('line 1\n'));
+  expect(scoped.scoped).toBe(true);
+  expect(scoped.scopeStrategy).toBe('sliding_window');
+  expect(scoped.scopeStartLine).toBe(10990);
+  expect(scoped.scopeEndLine).toBe(11020);
+  expect(scoped.content.includes('line 11000')).toBe(true);
+  expect(scoped.scopeStartLine > 1).toBeTruthy();
+  expect(scoped.content.startsWith('line 1\n')).toBeFalsy();
 });
 
 test('scopeLargeFileContent uses enclosing block strategy when requested', () => {
@@ -71,9 +70,9 @@ test('scopeLargeFileContent uses enclosing block strategy when requested', () =>
     preferEnclosingBlock: true,
   });
 
-  assert.strictEqual(scoped.scoped, true);
-  assert.strictEqual(scoped.scopeStrategy, 'enclosing_block');
-  assert.ok(scoped.content.includes('function targetBlock() {'));
+  expect(scoped.scoped).toBe(true);
+  expect(scoped.scopeStrategy).toBe('enclosing_block');
+  expect(scoped.content).toContain('function targetBlock() {');
 });
 
 test('fetchFileAtRef returns scoped content metadata for very large files', async () => {
@@ -105,12 +104,12 @@ test('fetchFileAtRef returns scoped content metadata for very large files', asyn
     }
   );
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.scoped, true);
-  assert.strictEqual(result.scopeStrategy, 'sliding_window');
-  assert.ok(result.data.includes('line 10020'));
-  assert.ok(result.scopeStartLine > 1);
-  assert.ok(!result.data.startsWith('line 1\n'));
+  expect(result.success).toBe(true);
+  expect(result.scoped).toBe(true);
+  expect(result.scopeStrategy).toBe('sliding_window');
+  expect(result.data.includes('line 10020')).toBe(true);
+  expect(result.scopeStartLine > 1).toBeTruthy();
+  expect(result.data.startsWith('line 1\n')).toBeFalsy();
 });
 
 // fetchPrFiles tests
@@ -131,10 +130,10 @@ test('fetchPrFiles returns file list on success', async () => {
 
   const result = await fetchPrFiles(mockOctokit, 'owner', 'repo', 1);
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.data.length, 2);
-  assert.strictEqual(result.data[0].filename, 'test.js');
-  assert.strictEqual(result.data[1].filename, 'new.js');
+  expect(result.success).toBe(true);
+  expect(result.data.length).toBe(2);
+  expect(result.data[0].filename).toBe('test.js');
+  expect(result.data[1].filename).toBe('new.js');
 });
 
 test('fetchPrFiles returns fallback on 404 error', async () => {
@@ -152,9 +151,9 @@ test('fetchPrFiles returns fallback on 404 error', async () => {
 
   const result = await fetchPrFiles(mockOctokit, 'owner', 'repo', 1);
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.fallback.includes('Content not found'));
-  assert.ok(result.error);
+  expect(result.success).toBe(false);
+  expect(result.fallback.includes('Content not found')).toBe(true);
+  expect(result.error).toBeTruthy();
 });
 
 test('fetchPrFiles returns fallback on 429 rate limit error', async () => {
@@ -172,9 +171,9 @@ test('fetchPrFiles returns fallback on 429 rate limit error', async () => {
 
   const result = await fetchPrFiles(mockOctokit, 'owner', 'repo', 1);
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.fallback.includes('rate limit'));
-  assert.ok(result.error);
+  expect(result.success).toBe(false);
+  expect(result.fallback.includes('rate limit')).toBe(true);
+  expect(result.error).toBeTruthy();
 });
 
 test('fetchPrFiles returns fallback on 500 server error', async () => {
@@ -192,49 +191,49 @@ test('fetchPrFiles returns fallback on 500 server error', async () => {
 
   const result = await fetchPrFiles(mockOctokit, 'owner', 'repo', 1);
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.fallback.includes('temporarily unavailable'));
-  assert.ok(result.error);
+  expect(result.success).toBe(false);
+  expect(result.fallback.includes('temporarily unavailable')).toBe(true);
+  expect(result.error).toBeTruthy();
 });
 
 test('mapErrorToFallback maps 404 to NOT_FOUND category', () => {
   const error = { status: 404, message: 'Not Found' };
   const result = mapErrorToFallback(error, 'test-file.js');
 
-  assert.strictEqual(result.category, 'NOT_FOUND');
-  assert.ok(result.fallback.includes('test-file.js'));
+  expect(result.category).toBe('NOT_FOUND');
+  expect(result.fallback.includes('test-file.js')).toBe(true);
 });
 
 test('mapErrorToFallback maps 429 to RATE_LIMIT category', () => {
   const error = { status: 429, message: 'Rate limit exceeded' };
   const result = mapErrorToFallback(error, 'test-file.js');
 
-  assert.strictEqual(result.category, 'RATE_LIMIT');
-  assert.ok(result.fallback.includes('rate limit'));
+  expect(result.category).toBe('RATE_LIMIT');
+  expect(result.fallback.includes('rate limit')).toBe(true);
 });
 
 test('mapErrorToFallback maps 403 to PERMISSION category', () => {
   const error = { status: 403, message: 'Forbidden' };
   const result = mapErrorToFallback(error, 'test-file.js');
 
-  assert.strictEqual(result.category, 'PERMISSION');
-  assert.ok(result.fallback.includes('Permission denied'));
+  expect(result.category).toBe('PERMISSION');
+  expect(result.fallback.includes('Permission denied')).toBe(true);
 });
 
 test('mapErrorToFallback maps 500+ to PROVIDER category', () => {
   const error = { status: 502, message: 'Bad Gateway' };
   const result = mapErrorToFallback(error, 'test-file.js');
 
-  assert.strictEqual(result.category, 'PROVIDER');
-  assert.ok(result.fallback.includes('unavailable'));
+  expect(result.category).toBe('PROVIDER');
+  expect(result.fallback.includes('unavailable')).toBe(true);
 });
 
 test('mapErrorToFallback maps unknown errors to UNKNOWN category', () => {
   const error = { status: 418, message: 'Unknown error' };
   const result = mapErrorToFallback(error, 'test-file.js');
 
-  assert.strictEqual(result.category, 'UNKNOWN');
-  assert.ok(result.fallback.includes('Failed to retrieve'));
+  expect(result.category).toBe('UNKNOWN');
+  expect(result.fallback.includes('Failed to retrieve')).toBe(true);
 });
 
 // fetchFileAtRef tests
@@ -250,8 +249,8 @@ test('fetchFileAtRef returns error for invalid path', async () => {
 
   const result = await fetchFileAtRef(mockOctokit, 'owner', 'repo', '', 'main');
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.error.includes('required'));
+  expect(result.success).toBe(false);
+  expect(result.error.includes('required')).toBe(true);
 });
 
 test('fetchFileAtRef returns error for invalid ref', async () => {
@@ -265,8 +264,8 @@ test('fetchFileAtRef returns error for invalid ref', async () => {
 
   const result = await fetchFileAtRef(mockOctokit, 'owner', 'repo', 'file.js', '');
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.error.includes('required'));
+  expect(result.success).toBe(false);
+  expect(result.error.includes('required')).toBe(true);
 });
 
 test('fetchFileAtRef handles directory response correctly', async () => {
@@ -282,8 +281,8 @@ test('fetchFileAtRef handles directory response correctly', async () => {
 
   const result = await fetchFileAtRef(mockOctokit, 'owner', 'repo', 'src/', 'main');
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.error.includes('directory'));
+  expect(result.success).toBe(false);
+  expect(result.error.includes('directory')).toBe(true);
 });
 
 test('fetchFileAtRef handles binary/no-content response correctly', async () => {
@@ -302,9 +301,9 @@ test('fetchFileAtRef handles binary/no-content response correctly', async () => 
 
   const result = await fetchFileAtRef(mockOctokit, 'owner', 'repo', 'image.png', 'main');
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.error.includes('not available'));
-  assert.ok(result.fallback.includes('Binary'));
+  expect(result.success).toBe(false);
+  expect(result.error.includes('not available')).toBe(true);
+  expect(result.fallback.includes('Binary')).toBe(true);
 });
 
 test('fetchFileAtRef returns truncated flag when content exceeds maxFileSize', async () => {
@@ -330,10 +329,10 @@ test('fetchFileAtRef returns truncated flag when content exceeds maxFileSize', a
     { maxFileSize: 100000 }
   );
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.truncated, true);
-  assert.ok(result.omitted > 0);
-  assert.ok(result.data.length <= 100000);
+  expect(result.success).toBe(true);
+  expect(result.truncated).toBe(true);
+  expect(result.omitted > 0).toBeTruthy();
+  expect(result.data.length <= 100000).toBeTruthy();
 });
 
 test('fetchFileAtRef returns scoped metadata for large files', async () => {
@@ -359,10 +358,10 @@ test('fetchFileAtRef returns scoped metadata for large files', async () => {
     { maxFileLines: 10000 }
   );
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.scoped, true);
-  assert.ok(result.scopeStrategy);
-  assert.ok(result.lineCount > 10000);
+  expect(result.success).toBe(true);
+  expect(result.scoped).toBe(true);
+  expect(result.scopeStrategy).toBeTruthy();
+  expect(result.lineCount > 10000).toBeTruthy();
 });
 
 test('fetchFileAtRef returns fallback on API error', async () => {
@@ -380,9 +379,9 @@ test('fetchFileAtRef returns fallback on API error', async () => {
 
   const result = await fetchFileAtRef(mockOctokit, 'owner', 'repo', 'missing.js', 'main');
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.fallback);
-  assert.ok(result.error);
+  expect(result.success).toBe(false);
+  expect(result.fallback).toBeTruthy();
+  expect(result.error).toBeTruthy();
 });
 
 // resolvePrRefs tests
@@ -403,11 +402,11 @@ test('resolvePrRefs returns base and head refs on success', async () => {
 
   const result = await resolvePrRefs(mockOctokit, 'owner', 'repo', 1);
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.data.base.ref, 'main');
-  assert.strictEqual(result.data.base.sha, 'abc123base');
-  assert.strictEqual(result.data.head.ref, 'feature-branch');
-  assert.strictEqual(result.data.head.sha, 'def456head');
+  expect(result.success).toBe(true);
+  expect(result.data.base.ref).toBe('main');
+  expect(result.data.base.sha).toBe('abc123base');
+  expect(result.data.head.ref).toBe('feature-branch');
+  expect(result.data.head.sha).toBe('def456head');
 });
 
 test('resolvePrRefs handles missing refs metadata gracefully', async () => {
@@ -426,9 +425,9 @@ test('resolvePrRefs handles missing refs metadata gracefully', async () => {
 
   const result = await resolvePrRefs(mockOctokit, 'owner', 'repo', 1);
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.error.includes('not found'));
-  assert.ok(result.fallback.includes('unavailable'));
+  expect(result.success).toBe(false);
+  expect(result.error.includes('not found')).toBe(true);
+  expect(result.fallback.includes('unavailable')).toBe(true);
 });
 
 test('resolvePrRefs returns fallback on API error', async () => {
@@ -446,9 +445,9 @@ test('resolvePrRefs returns fallback on API error', async () => {
 
   const result = await resolvePrRefs(mockOctokit, 'owner', 'repo', 1);
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.fallback);
-  assert.ok(result.error);
+  expect(result.success).toBe(false);
+  expect(result.fallback).toBeTruthy();
+  expect(result.error).toBeTruthy();
 });
 
 test('resolvePrRefs returns error for missing pullNumber', async () => {
@@ -456,8 +455,8 @@ test('resolvePrRefs returns error for missing pullNumber', async () => {
 
   const result = await resolvePrRefs(mockOctokit, 'owner', 'repo', null);
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.error.includes('required'));
+  expect(result.success).toBe(false);
+  expect(result.error.includes('required')).toBe(true);
 });
 
 // fetchFileAtPrHead tests
@@ -499,10 +498,10 @@ test('fetchFileAtPrHead forwards resolved SHA and options to fetchFileAtRef', as
     { maxFileSize: 50000 }
   );
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(capturedRef, 'resolved-sha');
-  assert.strictEqual(capturedOptions.path, 'src/file.js');
-  assert.ok(capturedOptions.ref);
+  expect(result.success).toBe(true);
+  expect(capturedRef).toBe('resolved-sha');
+  expect(capturedOptions.path).toBe('src/file.js');
+  expect(capturedOptions.ref).toBeTruthy();
 });
 
 test('fetchFileAtPrHead returns error when resolvePrRefs fails', async () => {
@@ -520,9 +519,9 @@ test('fetchFileAtPrHead returns error when resolvePrRefs fails', async () => {
 
   const result = await fetchFileAtPrHead(mockOctokit, 'owner', 'repo', 'file.js', 1);
 
-  assert.strictEqual(result.success, false);
-  assert.ok(result.fallback);
-  assert.ok(result.error);
+  expect(result.success).toBe(false);
+  expect(result.fallback).toBeTruthy();
+  expect(result.error).toBeTruthy();
 });
 
 test('fetchFileAtPrHead success path returns file content', async () => {
@@ -548,6 +547,6 @@ test('fetchFileAtPrHead success path returns file content', async () => {
 
   const result = await fetchFileAtPrHead(mockOctokit, 'owner', 'repo', 'hello.js', 1);
 
-  assert.strictEqual(result.success, true);
-  assert.ok(result.data.includes('hello'));
+  expect(result.success).toBe(true);
+  expect(result.data.includes('hello')).toBe(true);
 });

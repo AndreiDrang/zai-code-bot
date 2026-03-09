@@ -1,5 +1,3 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
 const {
   CONTINUITY_MARKER,
   CONTINUITY_MARKER_END,
@@ -17,19 +15,19 @@ const {
 
 describe('Constants', () => {
   test('CONTINUITY_MARKER is defined', () => {
-    assert.strictEqual(CONTINUITY_MARKER, '<!-- zai-continuity:');
+    expect(CONTINUITY_MARKER).toBe('<!-- zai-continuity:');
   });
 
   test('CONTINUITY_MARKER_END is defined', () => {
-    assert.strictEqual(CONTINUITY_MARKER_END, ' -->');
+    expect(CONTINUITY_MARKER_END).toBe(' -->');
   });
 
   test('STATE_VERSION is 1', () => {
-    assert.strictEqual(STATE_VERSION, 1);
+    expect(STATE_VERSION).toBe(1);
   });
 
   test('MAX_STATE_SIZE is 2048', () => {
-    assert.strictEqual(MAX_STATE_SIZE, 2048);
+    expect(MAX_STATE_SIZE).toBe(2048);
   });
 });
 
@@ -38,8 +36,8 @@ describe('encodeState', () => {
     const state = { key: 'value' };
     const encoded = encodeState(state);
     
-    assert.ok(typeof encoded === 'string');
-    assert.ok(encoded.length > 0);
+    expect(typeof encoded === 'string').toBeTruthy();
+    expect(encoded.length > 0).toBeTruthy();
   });
 
   test('includes version in encoded state', () => {
@@ -47,14 +45,14 @@ describe('encodeState', () => {
     const encoded = encodeState(state);
     const decoded = decodeState(encoded);
     
-    assert.strictEqual(decoded.v, STATE_VERSION);
-    assert.strictEqual(decoded.data, 'test');
+    expect(decoded.v).toBe(STATE_VERSION);
+    expect(decoded.data).toBe('test');
   });
 
   test('throws when state exceeds size limit', () => {
     const largeState = { data: 'x'.repeat(MAX_STATE_SIZE) };
     
-    assert.throws(
+    expect(() => 
       () => encodeState(largeState),
       /exceeds limit/
     );
@@ -64,9 +62,9 @@ describe('encodeState', () => {
     const state = { test: 'value' };
     const encoded = encodeState(state);
     
-    assert.ok(!encoded.includes('+'));
-    assert.ok(!encoded.includes('/'));
-    assert.ok(!encoded.includes('='));
+    expect(encoded).not.toContain('+');
+    expect(encoded).not.toContain('/');
+    expect(encoded).not.toContain('=');
   });
 });
 
@@ -76,28 +74,28 @@ describe('decodeState', () => {
     const encoded = encodeState(state);
     const decoded = decodeState(encoded);
     
-    assert.deepStrictEqual(decoded, { v: STATE_VERSION, ...state });
+    expect(decoded).toEqual({ v: STATE_VERSION, ...state });
   });
 
   test('returns null for null input', () => {
-    assert.strictEqual(decodeState(null), null);
+    expect(decodeState(null)).toBe(null);
   });
 
   test('returns null for undefined input', () => {
-    assert.strictEqual(decodeState(undefined), null);
+    expect(decodeState(undefined)).toBe(null);
   });
 
   test('returns null for empty string', () => {
-    assert.strictEqual(decodeState(''), null);
+    expect(decodeState('')).toBe(null);
   });
 
   test('returns null for invalid base64', () => {
-    assert.strictEqual(decodeState('not-valid-base64!!!'), null);
+    expect(decodeState('not-valid-base64!!!')).toBe(null);
   });
 
   test('returns null for invalid JSON', () => {
     const validBase64 = Buffer.from('not-json').toString('base64url');
-    assert.strictEqual(decodeState(validBase64), null);
+    expect(decodeState(validBase64)).toBe(null);
   });
 
   test('handles legacy state without version', () => {
@@ -105,7 +103,7 @@ describe('decodeState', () => {
     const legacyEncoded = Buffer.from(legacyJson, 'utf8').toString('base64url');
     const decoded = decodeState(legacyEncoded);
     
-    assert.strictEqual(decoded.oldKey, 'oldValue');
+    expect(decoded.oldKey).toBe('oldValue');
   });
 
   test('handles standard base64 input', () => {
@@ -113,7 +111,7 @@ describe('decodeState', () => {
     const standardBase64 = Buffer.from(JSON.stringify(state)).toString('base64');
     const decoded = decodeState(standardBase64);
     
-    assert.strictEqual(decoded.test, 'data');
+    expect(decoded.test).toBe('data');
   });
 });
 
@@ -125,31 +123,31 @@ describe('extractStateFromComment', () => {
     
     const extracted = extractStateFromComment(commentBody);
     
-    assert.strictEqual(extracted.conversationId, 'abc123');
+    expect(extracted.conversationId).toBe('abc123');
   });
 
   test('returns null when no marker present', () => {
     const result = extractStateFromComment('Just a regular comment');
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 
   test('returns null for null body', () => {
-    assert.strictEqual(extractStateFromComment(null), null);
+    expect(extractStateFromComment(null)).toBe(null);
   });
 
   test('returns null for empty string', () => {
-    assert.strictEqual(extractStateFromComment(''), null);
+    expect(extractStateFromComment('')).toBe(null);
   });
 
   test('returns null for incomplete marker', () => {
     const result = extractStateFromComment('Start <!-- zai-continuity: incomplete');
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 
   test('returns null for corrupted state in marker', () => {
     const commentBody = `${CONTINUITY_MARKER} invalid-base64${CONTINUITY_MARKER_END}`;
     const result = extractStateFromComment(commentBody);
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 });
 
@@ -160,28 +158,28 @@ describe('createCommentWithState', () => {
     
     const result = createCommentWithState(content, state);
     
-    assert.ok(result.includes(content));
-    assert.ok(result.includes(CONTINUITY_MARKER));
-    assert.ok(result.includes(CONTINUITY_MARKER_END));
+    expect(result.includes(content)).toBe(true);
+    expect(result.includes(CONTINUITY_MARKER)).toBe(true);
+    expect(result.includes(CONTINUITY_MARKER_END)).toBe(true);
   });
 
   test('returns original content when state is empty', () => {
     const content = 'Just content';
     const result = createCommentWithState(content, {});
-    assert.strictEqual(result, content);
+    expect(result).toBe(content);
   });
 
   test('returns original content when state is null', () => {
     const content = 'Just content';
     const result = createCommentWithState(content, null);
-    assert.strictEqual(result, content);
+    expect(result).toBe(content);
   });
 
   test('returns original content when encoding fails', () => {
     const content = 'Content';
     const state = { data: 'x'.repeat(MAX_STATE_SIZE * 2) };
     const result = createCommentWithState(content, state);
-    assert.strictEqual(result, content);
+    expect(result).toBe(content);
   });
 });
 
@@ -201,7 +199,7 @@ describe('findStateComment', () => {
     };
 
     const result = await findStateComment(mockOctokit, 'owner', 'repo', 1);
-    assert.strictEqual(result.id, 2);
+    expect(result.id).toBe(2);
   });
 
   test('returns null when no continuity comment', async () => {
@@ -218,7 +216,7 @@ describe('findStateComment', () => {
     };
 
     const result = await findStateComment(mockOctokit, 'owner', 'repo', 1);
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 });
 
@@ -240,7 +238,7 @@ describe('loadContinuityState', () => {
     };
 
     const result = await loadContinuityState(mockOctokit, 'owner', 'repo', 1);
-    assert.strictEqual(result.threadId, 'thread-456');
+    expect(result.threadId).toBe('thread-456');
   });
 
   test('returns null when no comment found', async () => {
@@ -253,7 +251,7 @@ describe('loadContinuityState', () => {
     };
 
     const result = await loadContinuityState(mockOctokit, 'owner', 'repo', 1);
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 
   test('returns null when comment has no marker', async () => {
@@ -270,7 +268,7 @@ describe('loadContinuityState', () => {
     };
 
     const result = await loadContinuityState(mockOctokit, 'owner', 'repo', 1);
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 });
 
@@ -295,9 +293,9 @@ describe('saveContinuityState', () => {
       { content: 'New comment' }
     );
 
-    assert.strictEqual(createCalled, true);
-    assert.strictEqual(result.action, 'created');
-    assert.ok(result.comment.body.includes('zai-continuity'));
+    expect(createCalled).toBe(true);
+    expect(result.action).toBe('created');
+    expect(result.comment.body.includes('zai-continuity')).toBe(true);
   });
 
   test('updates existing comment preserving content', async () => {
@@ -324,8 +322,8 @@ describe('saveContinuityState', () => {
       { newState: 'new' }
     );
 
-    assert.strictEqual(result.action, 'updated');
-    assert.ok(result.comment.body.includes(CONTINUITY_MARKER));
+    expect(result.action).toBe('updated');
+    expect(result.comment.body.includes(CONTINUITY_MARKER)).toBe(true);
   });
 
   test('throws when creating without content', async () => {
@@ -337,17 +335,16 @@ describe('saveContinuityState', () => {
       },
     };
 
-    await assert.rejects(
-      saveContinuityState(mockOctokit, 'owner', 'repo', 1, { data: 'test' }),
-      { message: 'Cannot create comment without content' }
-    );
+    await expect(
+      saveContinuityState(mockOctokit, 'owner', 'repo', 1, { data: 'test' })
+    ).rejects.toThrow('Cannot create comment without content');
   });
 });
 
 describe('mergeState', () => {
   test('merges updates into empty state', () => {
     const result = mergeState(null, { key: 'value' });
-    assert.deepStrictEqual(result, { key: 'value' });
+    expect(result).toEqual({ key: 'value' });
   });
 
   test('merges updates into existing state', () => {
@@ -356,13 +353,13 @@ describe('mergeState', () => {
     
     const result = mergeState(current, updates);
     
-    assert.strictEqual(result.existing, 'updated');
-    assert.strictEqual(result.keep, 'this');
-    assert.strictEqual(result.new, 'field');
+    expect(result.existing).toBe('updated');
+    expect(result.keep).toBe('this');
+    expect(result.new).toBe('field');
   });
 
   test('returns updates when current is undefined', () => {
     const result = mergeState(undefined, { key: 'value' });
-    assert.deepStrictEqual(result, { key: 'value' });
+    expect(result).toEqual({ key: 'value' });
   });
 });

@@ -1,5 +1,4 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -16,10 +15,10 @@ describe('Fixtures', () => {
     const content = fs.readFileSync(fixturePath, 'utf-8');
     const payload = JSON.parse(content);
 
-    assert.ok(payload.pull_request, 'payload should have pull_request');
-    assert.ok(payload.repository, 'payload should have repository');
-    assert.strictEqual(payload.pull_request.number, 42);
-    assert.strictEqual(payload.repository.name, 'Hello-World');
+    expect(payload.pull_request, 'payload should have pull_request').toBeTruthy();
+    expect(payload.repository, 'payload should have repository').toBeTruthy();
+    expect(payload.pull_request.number).toBe(42);
+    expect(payload.repository.name).toBe('Hello-World');
   });
 
   test('issue-comment-event.json is valid JSON', () => {
@@ -27,11 +26,11 @@ describe('Fixtures', () => {
     const content = fs.readFileSync(fixturePath, 'utf-8');
     const payload = JSON.parse(content);
 
-    assert.ok(payload.issue, 'payload should have issue');
-    assert.ok(payload.comment, 'payload should have comment');
-    assert.ok(payload.repository, 'payload should have repository');
-    assert.strictEqual(payload.issue.number, 42);
-    assert.ok(payload.issue.pull_request, 'issue should have pull_request field');
+    expect(payload.issue, 'payload should have issue').toBeTruthy();
+    expect(payload.comment, 'payload should have comment').toBeTruthy();
+    expect(payload.repository, 'payload should have repository').toBeTruthy();
+    expect(payload.issue.number).toBe(42);
+    expect(payload.issue.pull_request, 'issue should have pull_request field').toBeTruthy();
   });
 
   test('pr-event fixture has required fields for action', () => {
@@ -39,9 +38,9 @@ describe('Fixtures', () => {
     const content = fs.readFileSync(fixturePath, 'utf-8');
     const payload = JSON.parse(content);
 
-    assert.ok(payload.pull_request.number, 'PR number is required');
-    assert.ok(payload.repository.owner, 'repository owner is required');
-    assert.ok(payload.repository.name, 'repository name is required');
+    expect(payload.pull_request.number, 'PR number is required').toBeTruthy();
+    expect(payload.repository.owner, 'repository owner is required').toBeTruthy();
+    expect(payload.repository.name, 'repository name is required').toBeTruthy();
   });
 });
 
@@ -49,9 +48,9 @@ describe('Mocks', () => {
   test('createMockOctokit returns object with rest API', () => {
     const mockOctokit = createMockOctokit();
 
-    assert.ok(mockOctokit.rest, 'should have rest property');
-    assert.ok(typeof mockOctokit.rest.pulls.listFiles, 'should have listFiles');
-    assert.ok(typeof mockOctokit.rest.issues.listComments, 'should have listComments');
+    expect(mockOctokit.rest, 'should have rest property').toBeTruthy();
+    expect(typeof mockOctokit.rest.pulls.listFiles, 'should have listFiles').toBeTruthy();
+    expect(typeof mockOctokit.rest.issues.listComments, 'should have listComments').toBeTruthy();
   });
 
   test('createMockOctokit accepts custom files', async () => {
@@ -66,8 +65,8 @@ describe('Mocks', () => {
       pull_number: 1,
     });
 
-    assert.strictEqual(result.data.length, 1);
-    assert.strictEqual(result.data[0].filename, 'test.js');
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].filename).toBe('test.js');
   });
 
   test('createMockOctokit accepts custom comments', async () => {
@@ -82,14 +81,14 @@ describe('Mocks', () => {
       issue_number: 1,
     });
 
-    assert.strictEqual(result.data.length, 1);
-    assert.strictEqual(result.data[0].body, 'Test comment');
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].body).toBe('Test comment');
   });
 
   test('createMockApiClient returns function', () => {
     const mockClient = createMockApiClient();
 
-    assert.strictEqual(typeof mockClient, 'function');
+    expect(typeof mockClient).toBe('function');
   });
 
   test('createMockApiClient returns response', async () => {
@@ -97,14 +96,14 @@ describe('Mocks', () => {
 
     const result = await mockClient('apiKey', 'model', 'prompt');
 
-    assert.strictEqual(result, 'Test response');
+    expect(result).toBe('Test response');
   });
 
   test('createMockApiClient throws error when configured', async () => {
     const mockError = new Error('API Error');
     const mockClient = createMockApiClient({ response: mockError });
 
-    await assert.rejects(
+    await await expect(
       async () => await mockClient('apiKey', 'model', 'prompt'),
       { message: 'API Error' }
     );
@@ -119,8 +118,8 @@ describe('Mocks', () => {
     };
     const ctx = createMockContext(payload);
 
-    assert.strictEqual(ctx.repo.owner, 'test-owner');
-    assert.strictEqual(ctx.repo.repo, 'test-repo');
+    expect(ctx.repo.owner).toBe('test-owner');
+    expect(ctx.repo.repo).toBe('test-repo');
   });
 
   test('createMockCore getInput returns input value', () => {
@@ -129,13 +128,13 @@ describe('Mocks', () => {
 
     const result = core.getInput('test_input');
 
-    assert.strictEqual(result, 'test_value');
+    expect(result).toBe('test_value');
   });
 
   test('createMockCore getInput throws for required missing input', () => {
     const core = createMockCore();
 
-    assert.throws(
+    expect(() => 
       () => core.getInput('missing', { required: true }),
       { message: 'Input required and not provided: missing' }
     );
@@ -146,6 +145,6 @@ describe('Mocks', () => {
     core.setFailed('Test failure');
 
     const failedMsg = core.messages.find(m => m.level === 'failed');
-    assert.strictEqual(failedMsg.message, 'Test failure');
+    expect(failedMsg.message).toBe('Test failure');
   });
 });

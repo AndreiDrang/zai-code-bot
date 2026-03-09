@@ -1,5 +1,3 @@
-const { describe, test, beforeEach } = require('node:test');
-const assert = require('node:assert');
 const { handleDescribeCommand, DESCRIBE_MARKER, AI_DESCRIPTION_START } = require('../src/lib/handlers/describe');
 
 describe('describe handler', () => {
@@ -88,29 +86,29 @@ describe('describe handler', () => {
       const result = await handleDescribeCommand(context, {});
       
       // Assert success
-      assert.strictEqual(result.success, true);
+      expect(result.success).toBe(true);
       
       // Assert commits were fetched
-      assert.strictEqual(calls.listCommits.length, 1);
-      assert.strictEqual(calls.listCommits[0].pull_number, 1);
+      expect(calls.listCommits.length).toBe(1);
+      expect(calls.listCommits[0].pull_number).toBe(1);
       
       // Assert PR body was fetched
-      assert.strictEqual(calls.pullsGet.length, 1);
+      expect(calls.pullsGet.length).toBe(1);
       
       // Assert PR was updated
-      assert.strictEqual(calls.pullsUpdate.length, 1);
+      expect(calls.pullsUpdate.length).toBe(1);
       const updatedBody = calls.pullsUpdate[0].body;
-      assert.ok(updatedBody.includes('Original PR description'));
-      assert.ok(updatedBody.includes(AI_DESCRIPTION_START));
-      assert.ok(updatedBody.includes('This PR adds a new feature and resolves a bug.'));
-      assert.ok(updatedBody.includes('<!-- ZAI_DESCRIPTION_END -->'));
+      expect(updatedBody.includes('Original PR description')).toBe(true);
+      expect(updatedBody.includes(AI_DESCRIPTION_START)).toBe(true);
+      expect(updatedBody.includes('This PR adds a new feature and resolves a bug.')).toBe(true);
+      expect(updatedBody.includes('<!-- ZAI_DESCRIPTION_END -->')).toBe(true);
       
       // Assert success comment was posted
-      assert.strictEqual(calls.createComment.length, 1);
-      assert.ok(calls.createComment[0].body.includes('✅ I have successfully updated the PR description'));
+      expect(calls.createComment.length).toBe(1);
+      expect(calls.createComment[0].body.includes('✅ I have successfully updated the PR description')).toBe(true);
       
       // Assert reaction was set
-      assert.strictEqual(calls.createReaction.length, 1);
+      expect(calls.createReaction.length).toBe(1);
     });
     
     test('replaces existing AI section on re-run', async () => {
@@ -176,20 +174,20 @@ Old description here
       
       const result = await handleDescribeCommand(context, {});
       
-      assert.strictEqual(result.success, true);
-      assert.strictEqual(calls.pullsUpdate.length, 1);
+      expect(result.success).toBe(true);
+      expect(calls.pullsUpdate.length).toBe(1);
       
       const newBody = calls.pullsUpdate[0].body;
       
       // Should have only ONE AI_DESCRIPTION_START
       const startCount = (newBody.match(/<!-- ZAI_DESCRIPTION_START -->/g) || []).length;
-      assert.strictEqual(startCount, 1);
+      expect(startCount).toBe(1);
       
       // Should NOT contain old description
-      assert.ok(!newBody.includes('Old description here'));
+      expect(newBody).not.toContain('Old description here');
       
       // Should contain new description
-      assert.ok(newBody.includes('New updated description.'));
+      expect(newBody).toContain('New updated description.');
     });
     
     test('handles empty PR body', async () => {
@@ -236,14 +234,14 @@ Old description here
       
       const result = await handleDescribeCommand(context, {});
       
-      assert.strictEqual(result.success, true);
-      assert.strictEqual(calls.pullsUpdate.length, 1);
+      expect(result.success).toBe(true);
+      expect(calls.pullsUpdate.length).toBe(1);
       
       const newBody = calls.pullsUpdate[0].body;
       
       // With empty original body, the new body should contain AI section
-      assert.ok(newBody.includes(AI_DESCRIPTION_START), 'Should contain AI description start marker');
-      assert.ok(newBody.includes('A feature was added.'), 'Should contain generated description');
+      expect(newBody).toContain(AI_DESCRIPTION_START);
+      expect(newBody).toContain('A feature was added.');
     });
     
     test('LLM failure - body unchanged, error posted', async () => {
@@ -304,19 +302,19 @@ Old description here
       const result = await handleDescribeCommand(context, {});
       
       // Assert failure result
-      assert.strictEqual(result.success, false);
-      assert.ok(result.error.includes('API error'));
+      expect(result.success).toBe(false);
+      expect(result.error.includes('API error')).toBe(true);
       
       // PR body should NOT be updated
-      assert.strictEqual(calls.pullsUpdate.length, 0);
+      expect(calls.pullsUpdate.length).toBe(0);
       
       // Error comment should be posted
-      assert.strictEqual(calls.createComment.length, 1);
-      assert.ok(calls.createComment[0].body.includes('❌ Failed to generate description'));
+      expect(calls.createComment.length).toBe(1);
+      expect(calls.createComment[0].body.includes('❌ Failed to generate description')).toBe(true);
       
       // Error reaction should be set
-      assert.strictEqual(calls.createReaction.length, 1);
-      assert.strictEqual(calls.createReaction[0].content, '-1');
+      expect(calls.createReaction.length).toBe(1);
+      expect(calls.createReaction[0].content).toBe('-1');
     });
     
     test('handles PR with no commits', async () => {
@@ -362,11 +360,11 @@ Old description here
       const result = await handleDescribeCommand(context, {});
       
       // Should return success
-      assert.strictEqual(result.success, true);
+      expect(result.success).toBe(true);
       
       // Should post "no commits" message
-      assert.strictEqual(calls.createComment.length, 1);
-      assert.ok(calls.createComment[0].body.includes('No commits found in this PR'));
+      expect(calls.createComment.length).toBe(1);
+      expect(calls.createComment[0].body.includes('No commits found in this PR')).toBe(true);
       
       // Should NOT call LLM or update PR
     });

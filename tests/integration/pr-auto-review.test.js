@@ -1,6 +1,3 @@
-const { test, describe, beforeEach, afterEach } = require('node:test');
-const assert = require('node:assert');
-
 const COMMENT_MARKER = '<!-- zai-code-review -->';
 
 const {
@@ -84,9 +81,9 @@ describe('PR Auto-Review Integration', () => {
     mockGithub.context.payload = payload;
 
     const eventInfo = events.getEventInfo(mockGithub.context);
-    assert.strictEqual(eventInfo.eventType, 'pull_request');
-    assert.strictEqual(eventInfo.shouldProcess, true);
-    assert.strictEqual(eventInfo.pullNumber, 42);
+    expect(eventInfo.eventType).toBe('pull_request');
+    expect(eventInfo.shouldProcess).toBe(true);
+    expect(eventInfo.pullNumber).toBe(42);
 
     const octokit = mockGithub.getOctokit('test-token');
     const files = await octokit.rest.pulls.listFiles({
@@ -96,17 +93,17 @@ describe('PR Auto-Review Integration', () => {
       per_page: 100
     });
 
-    assert.ok(files.data.length > 0);
-    assert.ok(files.data[0].patch);
+    expect(files.data.length > 0).toBeTruthy();
+    expect(files.data[0].patch).toBeTruthy();
 
     const prompt = buildPrompt(files.data);
-    assert.ok(prompt.includes('src/test.js'));
+    expect(prompt.includes('src/test.js')).toBe(true);
 
     const reviewContent = 'Mock AI review response';
     const body = buildCommentBody(reviewContent, 'pr_review');
 
-    assert.ok(body.includes(COMMENT_MARKER));
-    assert.ok(body.includes(reviewContent));
+    expect(body.includes(COMMENT_MARKER)).toBe(true);
+    expect(body.includes(reviewContent)).toBe(true);
 
     const existingComments = await octokit.rest.issues.listComments({
       owner: 'test-owner',
@@ -114,7 +111,7 @@ describe('PR Auto-Review Integration', () => {
       issue_number: 42
     });
 
-    assert.strictEqual(existingComments.data.length, 0);
+    expect(existingComments.data.length).toBe(0);
 
     const newComment = await octokit.rest.issues.createComment({
       owner: 'test-owner',
@@ -123,7 +120,7 @@ describe('PR Auto-Review Integration', () => {
       body
     });
 
-    assert.strictEqual(newComment.data.id, 123);
+    expect(newComment.data.id).toBe(123);
   });
 
   test('full PR synchronize pipeline updates existing comment', async () => {
@@ -131,8 +128,8 @@ describe('PR Auto-Review Integration', () => {
     mockGithub.context.payload = payload;
 
     const eventInfo = events.getEventInfo(mockGithub.context);
-    assert.strictEqual(eventInfo.eventType, 'pull_request');
-    assert.strictEqual(eventInfo.shouldProcess, true);
+    expect(eventInfo.eventType).toBe('pull_request');
+    expect(eventInfo.shouldProcess).toBe(true);
 
     const existingBody = `## Z.ai Code Review\n\nOld review\n\n${COMMENT_MARKER}`;
 
@@ -141,7 +138,7 @@ describe('PR Auto-Review Integration', () => {
       repo: 'test-repo',
       issue_number: 42
     });
-    assert.strictEqual(existingCommentsResponse.data.length, 0);
+    expect(existingCommentsResponse.data.length).toBe(0);
 
     const createdComment = await mockGithub.getOctokit('test-token').rest.issues.createComment({
       owner: 'test-owner',
@@ -149,10 +146,10 @@ describe('PR Auto-Review Integration', () => {
       issue_number: 42,
       body: existingBody
     });
-    assert.strictEqual(createdComment.data.id, 123);
+    expect(createdComment.data.id).toBe(123);
 
     const findResult = existingBody.includes(COMMENT_MARKER);
-    assert.strictEqual(findResult, true);
+    expect(findResult).toBe(true);
   });
 
   test('PR event with no patchable changes skips review', async () => {
@@ -169,7 +166,7 @@ describe('PR Auto-Review Integration', () => {
     const noPatchFiles = files.data.map(f => ({ ...f, patch: null }));
     const hasPatchable = noPatchFiles.some(f => f.patch);
 
-    assert.strictEqual(hasPatchable, false);
+    expect(hasPatchable).toBe(false);
   });
 
   test('event routing correctly identifies PR comment events', () => {
@@ -188,10 +185,10 @@ describe('PR Auto-Review Integration', () => {
     };
 
     const eventType = events.getEventType(commentPayload);
-    assert.strictEqual(eventType, 'issue_comment_pr');
+    expect(eventType).toBe('issue_comment_pr');
 
     const shouldProcess = events.shouldProcessEvent(commentPayload);
-    assert.strictEqual(shouldProcess.process, true);
+    expect(shouldProcess.process).toBe(true);
   });
 
   test('bot comments are filtered out by anti-loop guard', () => {
@@ -210,8 +207,8 @@ describe('PR Auto-Review Integration', () => {
     };
 
     const shouldProcess = events.shouldProcessEvent(botPayload);
-    assert.strictEqual(shouldProcess.process, false);
-    assert.ok(shouldProcess.reason.includes('bot comment'));
+    expect(shouldProcess.process).toBe(false);
+    expect(shouldProcess.reason.includes('bot comment')).toBe(true);
   });
   // T12: Regression tests for PR auto-review marker-based upsert idempotency
   test('PR opened creates new comment when no marker exists', async () => {
@@ -244,7 +241,7 @@ describe('PR Auto-Review Integration', () => {
       issue_number: 42
     });
     const existingMarkerComment = existingComments.data.find(c => c.body.includes(COMMENT_MARKER));
-    assert.strictEqual(existingMarkerComment, undefined, 'No marker comment should exist');
+    expect(existingMarkerComment).toBe(undefined, 'No marker comment should exist');
 
     // Create new comment (simulating PR opened behavior)
     const reviewContent = 'Mock AI review for new PR';
@@ -257,8 +254,8 @@ describe('PR Auto-Review Integration', () => {
       body
     });
 
-    assert.strictEqual(createCallCount, 1, 'createComment should be called');
-    assert.strictEqual(updateCallCount, 0, 'updateComment should NOT be called');
+    expect(createCallCount).toBe(1, 'createComment should be called');
+    expect(updateCallCount).toBe(0, 'updateComment should NOT be called');
   });
 
   test('PR synchronize updates existing marker comment (not create duplicate)', async () => {
@@ -283,7 +280,7 @@ describe('PR Auto-Review Integration', () => {
       issue_number: 42
     });
     const markerCommentBefore = commentsBefore.data.find(c => c.body.includes(COMMENT_MARKER));
-    assert.ok(markerCommentBefore, 'Marker comment should exist from previous PR opened');
+    expect(markerCommentBefore, 'Marker comment should exist from previous PR opened').toBeTruthy();
     const existingCommentId = markerCommentBefore.id;
 
     // Track calls for update vs create
@@ -332,9 +329,9 @@ describe('PR Auto-Review Integration', () => {
     }
 
     // Verify: update called, NOT create (update-not-duplicate semantics)
-    assert.strictEqual(updateCallCount, 1, 'updateComment should be called for synchronize');
-    assert.strictEqual(createCallCount, 0, 'createComment should NOT be called (would duplicate)');
-    assert.strictEqual(updatedCommentId, existingCommentId, 'Should update the same comment, not create new');
+    expect(updateCallCount).toBe(1, 'updateComment should be called for synchronize');
+    expect(createCallCount).toBe(0, 'createComment should NOT be called (would duplicate)');
+    expect(updatedCommentId).toBe(existingCommentId, 'Should update the same comment, not create new');
 
     // Verify only one marker comment exists after update
     const commentsAfter = await octokit.rest.issues.listComments({
@@ -343,7 +340,7 @@ describe('PR Auto-Review Integration', () => {
       issue_number: 42
     });
     const markerCommentsAfter = commentsAfter.data.filter(c => c.body.includes(COMMENT_MARKER));
-    assert.strictEqual(markerCommentsAfter.length, 1, 'Only one marker comment should exist after upsert');
+    expect(markerCommentsAfter.length).toBe(1, 'Only one marker comment should exist after upsert');
   });
 
   test('PR synchronize creates new comment when no marker exists', async () => {
@@ -359,7 +356,7 @@ describe('PR Auto-Review Integration', () => {
       issue_number: 42
     });
     const markerCommentBefore = commentsBefore.data.find(c => c.body.includes(COMMENT_MARKER));
-    assert.strictEqual(markerCommentBefore, undefined, 'No marker comment should exist');
+    expect(markerCommentBefore).toBe(undefined, 'No marker comment should exist');
 
     // Track calls
     let createCallCount = 0;
@@ -404,8 +401,8 @@ describe('PR Auto-Review Integration', () => {
       });
     }
 
-    assert.strictEqual(createCallCount, 1, 'createComment should be called when no marker exists');
-    assert.strictEqual(updateCallCount, 0, 'updateComment should NOT be called');
+    expect(createCallCount).toBe(1, 'createComment should be called when no marker exists');
+    expect(updateCallCount).toBe(0, 'updateComment should NOT be called');
   });
 
   test('marker-based upsert is idempotent - multiple synchronizes do not duplicate', async () => {
@@ -451,7 +448,7 @@ describe('PR Auto-Review Integration', () => {
     });
     const markerComments = finalComments.data.filter(c => c.body.includes(COMMENT_MARKER));
 
-    assert.strictEqual(markerComments.length, 1, 'Idempotency: only one marker comment after multiple synchronizes');
-    assert.ok(markerComments[0].body.includes('Review iteration 3'), 'Should have latest content');
+    expect(markerComments.length).toBe(1, 'Idempotency: only one marker comment after multiple synchronizes');
+    expect(markerComments[0].body).toContain('Review iteration 3');
   });
 });

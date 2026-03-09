@@ -1,5 +1,4 @@
-const { describe, test } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const { 
   extractWindow, 
   extractTargetBlock, 
@@ -12,64 +11,64 @@ describe('code-scope.js - extractWindow', () => {
     const content = 'line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10';
     const result = extractWindow(content, 5, 6, 2);
     
-    assert.ok(Array.isArray(result.target));
-    assert.ok(Array.isArray(result.surrounding));
-    assert.strictEqual(result.fallback, false);
-    assert.ok(result.bounds.start <= 5);
-    assert.ok(result.bounds.end >= 6);
+    expect(Array.isArray(result.target)).toBeTruthy();
+    expect(Array.isArray(result.surrounding)).toBeTruthy();
+    expect(result.fallback).toBe(false);
+    expect(result.bounds.start <= 5).toBeTruthy();
+    expect(result.bounds.end >= 6).toBeTruthy();
   });
 
   test('clamps window to file bounds', () => {
     const content = 'line1\nline2\nline3';
     const result = extractWindow(content, 1, 2, 10);
     
-    assert.strictEqual(result.bounds.start, 1);
-    assert.strictEqual(result.bounds.maxLines, 3);
+    expect(result.bounds.start).toBe(1);
+    expect(result.bounds.maxLines).toBe(3);
   });
 
   test('handles invalid content gracefully', () => {
     const result = extractWindow(null, 1, 5);
     
-    assert.strictEqual(result.fallback, true);
-    assert.deepStrictEqual(result.target, []);
-    assert.ok(result.note.includes('Invalid content'));
+    expect(result.fallback).toBe(true);
+    expect(result.target).toEqual([]);
+    expect(result.note.includes('Invalid content')).toBe(true);
   });
 
   test('handles empty string content', () => {
     const result = extractWindow('', 1, 5);
     
-    assert.strictEqual(result.fallback, true);
+    expect(result.fallback).toBe(true);
   });
 
   test('handles invalid start line', () => {
     const content = 'line1\nline2\nline3\nline4\nline5';
     const result = extractWindow(content, 10, 15);
     
-    assert.strictEqual(result.fallback, true);
-    assert.ok(result.note.includes('Invalid target range'));
+    expect(result.fallback).toBe(true);
+    expect(result.note.includes('Invalid target range')).toBe(true);
   });
 
   test('handles start > end', () => {
     const content = 'line1\nline2\nline3\nline4\nline5';
     const result = extractWindow(content, 5, 1);
     
-    assert.strictEqual(result.fallback, true);
+    expect(result.fallback).toBe(true);
   });
 
   test('uses default window size when not specified', () => {
     const content = Array(50).fill('line').join('\n');
     const result = extractWindow(content, 25, 25);
     
-    assert.strictEqual(result.fallback, false);
-    assert.ok(result.bounds.start <= 25 - DEFAULT_WINDOW_SIZE);
-    assert.ok(result.bounds.end >= 25 + DEFAULT_WINDOW_SIZE);
+    expect(result.fallback).toBe(false);
+    expect(result.bounds.start <= 25 - DEFAULT_WINDOW_SIZE).toBeTruthy();
+    expect(result.bounds.end >= 25 + DEFAULT_WINDOW_SIZE).toBeTruthy();
   });
 
   test('extracts correct target lines', () => {
     const content = 'a\nb\nc\nd\ne';
     const result = extractWindow(content, 2, 3, 1);
     
-    assert.deepStrictEqual(result.target, ['b', 'c']);
+    expect(result.target).toEqual(['b', 'c']);
   });
 });
 
@@ -78,50 +77,50 @@ describe('code-scope.js - extractTargetBlock', () => {
     const content = 'line1\nline2\nline3\nline4\nline5';
     const result = extractTargetBlock(content, 2, 4);
     
-    assert.strictEqual(result.fallback, false);
-    assert.deepStrictEqual(result.target, ['line2', 'line3', 'line4']);
-    assert.strictEqual(result.bounds.start, 2);
-    assert.strictEqual(result.bounds.end, 4);
+    expect(result.fallback).toBe(false);
+    expect(result.target).toEqual(['line2', 'line3', 'line4']);
+    expect(result.bounds.start).toBe(2);
+    expect(result.bounds.end).toBe(4);
   });
 
   test('handles single line extraction', () => {
     const content = 'line1\nline2\nline3';
     const result = extractTargetBlock(content, 2, 2);
     
-    assert.strictEqual(result.fallback, false);
-    assert.deepStrictEqual(result.target, ['line2']);
+    expect(result.fallback).toBe(false);
+    expect(result.target).toEqual(['line2']);
   });
 
   test('handles invalid content', () => {
     const result = extractTargetBlock(null, 1, 5);
     
-    assert.strictEqual(result.fallback, true);
-    assert.deepStrictEqual(result.target, []);
-    assert.ok(result.note.includes('Invalid content'));
+    expect(result.fallback).toBe(true);
+    expect(result.target).toEqual([]);
+    expect(result.note.includes('Invalid content')).toBe(true);
   });
 
   test('handles out of bounds range', () => {
     const content = 'line1\nline2\nline3';
     const result = extractTargetBlock(content, 10, 20);
     
-    assert.strictEqual(result.fallback, true);
-    assert.ok(result.note.includes('Invalid range'));
+    expect(result.fallback).toBe(true);
+    expect(result.note.includes('Invalid range')).toBe(true);
   });
 
   test('handles invalid line order', () => {
     const content = 'line1\nline2\nline3\nline4\nline5';
     const result = extractTargetBlock(content, 5, 1);
     
-    assert.strictEqual(result.fallback, true);
+    expect(result.fallback).toBe(true);
   });
 
   test('includes bounds metadata', () => {
     const content = 'a\nb\nc';
     const result = extractTargetBlock(content, 1, 2);
     
-    assert.strictEqual(result.bounds.start, 1);
-    assert.strictEqual(result.bounds.end, 2);
-    assert.strictEqual(result.bounds.maxLines, 3);
+    expect(result.bounds.start).toBe(1);
+    expect(result.bounds.end).toBe(2);
+    expect(result.bounds.maxLines).toBe(3);
   });
 });
 
@@ -135,9 +134,9 @@ function myFunction() {
     `.trim();
     const result = extractEnclosingBlock(content, 3);
     
-    assert.ok(result.target.length > 0);
-    assert.ok(result.bounds.start <= 3);
-    assert.ok(result.bounds.end >= 3);
+    expect(result.target.length > 0).toBeTruthy();
+    expect(result.bounds.start <= 3).toBeTruthy();
+    expect(result.bounds.end >= 3).toBeTruthy();
   });
 
   test('extracts class block', () => {
@@ -154,7 +153,7 @@ class MyClass {
     `.trim();
     const result = extractEnclosingBlock(content, 4);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('extracts async function block', () => {
@@ -166,7 +165,7 @@ async function fetchData() {
     `.trim();
     const result = extractEnclosingBlock(content, 2);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('extracts exported function block', () => {
@@ -177,7 +176,7 @@ export function helper() {
     `.trim();
     const result = extractEnclosingBlock(content, 2);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('extracts default exported function', () => {
@@ -188,7 +187,7 @@ export default function main() {
     `.trim();
     const result = extractEnclosingBlock(content, 2);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('handles arrow function', () => {
@@ -199,29 +198,29 @@ const add = (a, b) => {
     `.trim();
     const result = extractEnclosingBlock(content, 2);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('handles invalid content', () => {
     const result = extractEnclosingBlock(null, 1);
     
-    assert.strictEqual(result.fallback, true);
-    assert.deepStrictEqual(result.target, []);
-    assert.ok(result.note.includes('Invalid content'));
+    expect(result.fallback).toBe(true);
+    expect(result.target).toEqual([]);
+    expect(result.note.includes('Invalid content')).toBe(true);
   });
 
   test('handles anchor line out of bounds', () => {
     const content = 'line1\nline2\nline3';
     const result = extractEnclosingBlock(content, 100);
     
-    assert.ok(result.fallback === true || result.target.length > 0);
+    expect(result.fallback === true || result.target.length > 0).toBeTruthy();
   });
 
   test('handles anchor line less than 1', () => {
     const content = 'line1\nline2\nline3';
     const result = extractEnclosingBlock(content, 0);
     
-    assert.ok(result.fallback === true || result.target.length > 0);
+    expect(result.fallback === true || result.target.length > 0).toBeTruthy();
   });
 
   test('uses custom options', () => {
@@ -231,15 +230,15 @@ const add = (a, b) => {
       windowSize: 5 
     });
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('falls back to window when no block found', () => {
     const content = 'x = 1\ny = 2\nz = 3';
     const result = extractEnclosingBlock(content, 2);
     
-    assert.ok(result.target.length > 0);
-    assert.ok(result.fallback === true || result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
+    expect(result.fallback === true || result.target.length > 0).toBeTruthy();
   });
 
   test('handles brace matching', () => {
@@ -250,7 +249,7 @@ if (condition) {
     `.trim();
     const result = extractEnclosingBlock(content, 2);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('handles nested braces', () => {
@@ -264,7 +263,7 @@ function outer() {
     `.trim();
     const result = extractEnclosingBlock(content, 3);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('handles object method arrow function', () => {
@@ -277,7 +276,7 @@ const obj = {
     `.trim();
     const result = extractEnclosingBlock(content, 3);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 
   test('handles multiline arrow function', () => {
@@ -290,12 +289,12 @@ const fn = (a,
     `.trim();
     const result = extractEnclosingBlock(content, 4);
     
-    assert.ok(result.target.length > 0);
+    expect(result.target.length > 0).toBeTruthy();
   });
 });
 
 describe('code-scope.js - DEFAULT_WINDOW_SIZE', () => {
   test('is defined with expected value', () => {
-    assert.strictEqual(DEFAULT_WINDOW_SIZE, 15);
+    expect(DEFAULT_WINDOW_SIZE).toBe(15);
   });
 });

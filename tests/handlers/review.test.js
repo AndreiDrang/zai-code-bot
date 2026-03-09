@@ -1,5 +1,4 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const { 
   parseFilePath, 
   validateFileInPr, 
@@ -10,37 +9,37 @@ const {
 describe('review.js - parseFilePath', () => {
   test('returns error when no args provided', () => {
     const result = parseFilePath([]);
-    assert.strictEqual(result.filePath, null);
-    assert.ok(result.error.includes('No file path provided'));
+    expect(result.filePath).toBe(null);
+    expect(result.error.includes('No file path provided')).toBe(true);
   });
 
   test('returns error when args is null', () => {
     const result = parseFilePath(null);
-    assert.strictEqual(result.filePath, null);
-    assert.ok(result.error.includes('No file path provided'));
+    expect(result.filePath).toBe(null);
+    expect(result.error.includes('No file path provided')).toBe(true);
   });
 
   test('returns file path when valid', () => {
     const result = parseFilePath(['src', 'index.js']);
-    assert.strictEqual(result.filePath, 'src/index.js');
-    assert.strictEqual(result.error, undefined);
+    expect(result.filePath).toBe('src/index.js');
+    expect(result.error).toBe(undefined);
   });
 
   test('returns error for path traversal attempt', () => {
     const result = parseFilePath(['..', 'etc', 'passwd']);
-    assert.strictEqual(result.filePath, null);
-    assert.ok(result.error.includes('Path traversal'));
+    expect(result.filePath).toBe(null);
+    expect(result.error.includes('Path traversal')).toBe(true);
   });
 
   test('returns error for absolute path', () => {
     const result = parseFilePath(['/etc/passwd']);
-    assert.strictEqual(result.filePath, null);
-    assert.ok(result.error.includes('Path traversal'));
+    expect(result.filePath).toBe(null);
+    expect(result.error.includes('Path traversal')).toBe(true);
   });
 
   test('handles single file argument', () => {
     const result = parseFilePath(['app.js']);
-    assert.strictEqual(result.filePath, 'app.js');
+    expect(result.filePath).toBe('app.js');
   });
 });
 
@@ -53,43 +52,43 @@ describe('review.js - validateFileInPr', () => {
 
   test('returns error when changedFiles is null', () => {
     const result = validateFileInPr('src/index.js', null);
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.error.includes('Unable to get'));
+    expect(result.valid).toBe(false);
+    expect(result.error.includes('Unable to get')).toBe(true);
   });
 
   test('returns error when changedFiles is not array', () => {
     const result = validateFileInPr('src/index.js', 'not-an-array');
-    assert.strictEqual(result.valid, false);
+    expect(result.valid).toBe(false);
   });
 
   test('returns error when file not in PR', () => {
     const result = validateFileInPr('nonexistent.js', mockChangedFiles);
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.error.includes('not found in PR'));
+    expect(result.valid).toBe(false);
+    expect(result.error.includes('not found in PR')).toBe(true);
   });
 
   test('returns valid when file found by exact match', () => {
     const result = validateFileInPr('src/index.js', mockChangedFiles);
-    assert.strictEqual(result.valid, true);
-    assert.strictEqual(result.file.filename, 'src/index.js');
+    expect(result.valid).toBe(true);
+    expect(result.file.filename).toBe('src/index.js');
   });
 
   test('returns valid when file found by basename', () => {
     const result = validateFileInPr('index.js', mockChangedFiles);
-    assert.strictEqual(result.valid, true);
-    assert.strictEqual(result.file.filename, 'src/index.js');
+    expect(result.valid).toBe(true);
+    expect(result.file.filename).toBe('src/index.js');
   });
 
   test('returns valid when file is case insensitive', () => {
     const result = validateFileInPr('SRC/INDEX.JS', mockChangedFiles);
-    assert.strictEqual(result.valid, true);
-    assert.strictEqual(result.file.filename, 'src/index.js');
+    expect(result.valid).toBe(true);
+    expect(result.file.filename).toBe('src/index.js');
   });
 
   test('returns file object with all properties', () => {
     const result = validateFileInPr('src/index.js', mockChangedFiles);
-    assert.strictEqual(result.file.status, 'modified');
-    assert.strictEqual(result.file.patch, '...');
+    expect(result.file.status).toBe('modified');
+    expect(result.file.patch).toBe('...');
   });
 });
 
@@ -101,11 +100,11 @@ describe('review.js - buildReviewPrompt', () => {
     
     const result = buildReviewPrompt(filePath, fullContent, patch, 10000);
     
-    assert.ok(result.prompt.includes('<file_path>src/index.js</file_path>'));
-    assert.ok(result.prompt.includes('<full_code>'));
-    assert.ok(result.prompt.includes('<changes_in_this_pr>'));
-    assert.ok(result.prompt.includes('+new line'));
-    assert.strictEqual(result.truncated, false);
+    expect(result.prompt.includes('<file_path>src/index.js</file_path>')).toBe(true);
+    expect(result.prompt.includes('<full_code>')).toBe(true);
+    expect(result.prompt.includes('<changes_in_this_pr>')).toBe(true);
+    expect(result.prompt.includes('+new line')).toBe(true);
+    expect(result.truncated).toBe(false);
   });
 
   test('handles file without patch', () => {
@@ -115,9 +114,9 @@ describe('review.js - buildReviewPrompt', () => {
     
     const result = buildReviewPrompt(filePath, fullContent, patch, 10000);
     
-    assert.ok(result.prompt.includes('No diff available'));
-    assert.ok(result.prompt.includes('<full_code>'));
-    assert.ok(result.prompt.includes('<changes_in_this_pr>'));
+    expect(result.prompt.includes('No diff available')).toBe(true);
+    expect(result.prompt.includes('<full_code>')).toBe(true);
+    expect(result.prompt.includes('<changes_in_this_pr>')).toBe(true);
   });
 
   test('handles missing full content gracefully', () => {
@@ -127,8 +126,8 @@ describe('review.js - buildReviewPrompt', () => {
     
     const result = buildReviewPrompt(filePath, fullContent, patch, 10000);
     
-    assert.ok(result.prompt.includes('Full file content unavailable'));
-    assert.ok(result.prompt.includes('<changes_in_this_pr>'));
+    expect(result.prompt.includes('Full file content unavailable')).toBe(true);
+    expect(result.prompt.includes('<changes_in_this_pr>')).toBe(true);
   });
 
   test('respects maxChars and truncates', () => {
@@ -138,8 +137,8 @@ describe('review.js - buildReviewPrompt', () => {
     
     const result = buildReviewPrompt(filePath, fullContent, patch, 100);
     
-    assert.ok(result.truncated, true);
-    assert.ok(result.prompt.includes('[truncated'));
+    expect(result.truncated, true).toBeTruthy();
+    expect(result.prompt.includes('[truncated')).toBe(true);
   });
 });
 
@@ -171,10 +170,10 @@ describe('review.js - handleReviewCommand', () => {
     
     const result = await handleReviewCommand(context, [], mockDeps);
     
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('No file path provided'));
-    assert.ok(commentPosted);
-    assert.ok(reactionPosted);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('No file path provided')).toBe(true);
+    expect(commentPosted).toBeTruthy();
+    expect(reactionPosted).toBeTruthy();
   });
 
   test('returns error when validateFileInPr fails', async () => {
@@ -207,9 +206,9 @@ describe('review.js - handleReviewCommand', () => {
     
     const result = await handleReviewCommand(context, ['nonexistent.js'], mockDeps);
     
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('not found in PR'));
-    assert.ok(commentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('not found in PR')).toBe(true);
+    expect(commentPosted).toBeTruthy();
   });
 
   test('calls API and posts review on success', async () => {
@@ -249,10 +248,10 @@ describe('review.js - handleReviewCommand', () => {
     
     const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
     
-    assert.strictEqual(result.success, true);
-    assert.ok(apiCalled);
-    assert.ok(commentPosted);
-    assert.ok(reactionPosted);
+    expect(result.success).toBe(true);
+    expect(apiCalled).toBeTruthy();
+    expect(commentPosted).toBeTruthy();
+    expect(reactionPosted).toBeTruthy();
   });
 
   test('handles API failure gracefully', async () => {
@@ -290,9 +289,9 @@ describe('review.js - handleReviewCommand', () => {
     
     const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
     
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('Rate limit exceeded'));
-    assert.ok(commentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('Rate limit exceeded')).toBe(true);
+    expect(commentPosted).toBeTruthy();
   });
 
   test('handles exception in try/catch block', async () => {
@@ -327,9 +326,9 @@ describe('review.js - handleReviewCommand', () => {
     
     const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
     
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error);
-    assert.ok(errorCommentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(errorCommentPosted).toBeTruthy();
   });
 
   test('uses fallback when fullContent fetch fails', async () => {
@@ -356,7 +355,7 @@ describe('review.js - handleReviewCommand', () => {
       apiClient: { 
         call: async (params) => { 
           apiCalled = true;
-          assert.ok(params.prompt.includes('Full file content unavailable'));
+          expect(params.prompt.includes('Full file content unavailable')).toBe(true);
           return { success: true, data: 'Review complete' }; 
         } 
       },
@@ -368,7 +367,7 @@ describe('review.js - handleReviewCommand', () => {
     
     const result = await handleReviewCommand(context, ['src/index.js'], mockDeps);
     
-    assert.strictEqual(result.success, true);
-    assert.ok(apiCalled);
+    expect(result.success).toBe(true);
+    expect(apiCalled).toBeTruthy();
   });
 });

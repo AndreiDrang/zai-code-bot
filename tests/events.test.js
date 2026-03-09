@@ -1,5 +1,4 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const {
   getEventType,
   isBotComment,
@@ -11,7 +10,7 @@ const {
 describe('getEventType', () => {
   test('returns pull_request for pull_request event', () => {
     const context = { eventName: 'pull_request', payload: {} };
-    assert.strictEqual(getEventType(context), 'pull_request');
+    expect(getEventType(context)).toBe('pull_request');
   });
 
   test('returns issue_comment_pr for issue_comment on PR', () => {
@@ -23,7 +22,7 @@ describe('getEventType', () => {
         },
       },
     };
-    assert.strictEqual(getEventType(context), 'issue_comment_pr');
+    expect(getEventType(context)).toBe('issue_comment_pr');
   });
 
   test('returns issue_comment_non_pr for issue_comment on issue', () => {
@@ -33,30 +32,30 @@ describe('getEventType', () => {
         issue: { number: 42 },
       },
     };
-    assert.strictEqual(getEventType(context), 'issue_comment_non_pr');
+    expect(getEventType(context)).toBe('issue_comment_non_pr');
   });
 
   test('returns issue_comment_non_pr for unknown event', () => {
     const context = { eventName: 'push', payload: {} };
-    assert.strictEqual(getEventType(context), 'issue_comment_non_pr');
+    expect(getEventType(context)).toBe('issue_comment_non_pr');
   });
 });
 
 describe('isBotComment', () => {
   test('returns true for bot user', () => {
     const comment = { user: { type: 'Bot', login: 'github-actions[bot]' } };
-    assert.strictEqual(isBotComment(comment), true);
+    expect(isBotComment(comment)).toBe(true);
   });
 
   test('returns false for regular user', () => {
     const comment = { user: { type: 'User', login: 'octocat' } };
-    assert.strictEqual(isBotComment(comment), false);
+    expect(isBotComment(comment)).toBe(false);
   });
 
   test('returns false for missing user', () => {
-    assert.strictEqual(isBotComment({}), false);
-    assert.strictEqual(isBotComment(null), false);
-    assert.strictEqual(isBotComment(undefined), false);
+    expect(isBotComment({})).toBe(false);
+    expect(isBotComment(null)).toBe(false);
+    expect(isBotComment(undefined)).toBe(false);
   });
 });
 
@@ -67,8 +66,8 @@ describe('shouldProcessEvent', () => {
       payload: { pull_request: { number: 42 } },
     };
     const result = shouldProcessEvent(context);
-    assert.strictEqual(result.process, true);
-    assert.strictEqual(result.reason, 'pull_request event');
+    expect(result.process).toBe(true);
+    expect(result.reason).toBe('pull_request event');
   });
 
   test('processes issue_comment on PR from user', () => {
@@ -83,8 +82,8 @@ describe('shouldProcessEvent', () => {
       },
     };
     const result = shouldProcessEvent(context);
-    assert.strictEqual(result.process, true);
-    assert.strictEqual(result.reason, 'issue_comment on pull request');
+    expect(result.process).toBe(true);
+    expect(result.reason).toBe('issue_comment on pull request');
   });
 
   test('rejects issue_comment on PR from bot', () => {
@@ -99,8 +98,8 @@ describe('shouldProcessEvent', () => {
       },
     };
     const result = shouldProcessEvent(context);
-    assert.strictEqual(result.process, false);
-    assert.strictEqual(result.reason, 'bot comment - skipping to prevent loop');
+    expect(result.process).toBe(false);
+    expect(result.reason).toBe('bot comment - skipping to prevent loop');
   });
 
   test('rejects non-PR issue comments', () => {
@@ -112,8 +111,8 @@ describe('shouldProcessEvent', () => {
       },
     };
     const result = shouldProcessEvent(context);
-    assert.strictEqual(result.process, false);
-    assert.strictEqual(result.reason, 'non-PR issue comment - not supported');
+    expect(result.process).toBe(false);
+    expect(result.reason).toBe('non-PR issue comment - not supported');
   });
 
   test('rejects unknown event types', () => {
@@ -122,8 +121,8 @@ describe('shouldProcessEvent', () => {
       payload: {},
     };
     const result = shouldProcessEvent(context);
-    assert.strictEqual(result.process, false);
-    assert.strictEqual(result.reason, 'non-PR issue comment - not supported');
+    expect(result.process).toBe(false);
+    expect(result.reason).toBe('non-PR issue comment - not supported');
   });
 });
 
@@ -134,9 +133,9 @@ describe('getEventInfo', () => {
       payload: { pull_request: { number: 42 } },
     };
     const info = getEventInfo(context);
-    assert.strictEqual(info.eventType, 'pull_request');
-    assert.strictEqual(info.shouldProcess, true);
-    assert.strictEqual(info.pullNumber, 42);
+    expect(info.eventType).toBe('pull_request');
+    expect(info.shouldProcess).toBe(true);
+    expect(info.pullNumber).toBe(42);
   });
 
   test('extracts comment info from issue_comment', () => {
@@ -154,9 +153,9 @@ describe('getEventInfo', () => {
       },
     };
     const info = getEventInfo(context);
-    assert.strictEqual(info.commentId, 123);
-    assert.strictEqual(info.commentAuthor, 'octocat');
-    assert.strictEqual(info.isBot, false);
+    expect(info.commentId).toBe(123);
+    expect(info.commentAuthor).toBe('octocat');
+    expect(info.isBot).toBe(false);
   });
 
   test('detects bot comment in getEventInfo', () => {
@@ -174,8 +173,8 @@ describe('getEventInfo', () => {
       },
     };
     const info = getEventInfo(context);
-    assert.strictEqual(info.isBot, true);
-    assert.strictEqual(info.shouldProcess, false);
+    expect(info.isBot).toBe(true);
+    expect(info.shouldProcess).toBe(false);
   });
 });
 
@@ -190,7 +189,7 @@ describe('extractReviewCommentAnchor', () => {
       },
     };
     const result = extractReviewCommentAnchor(payload);
-    assert.deepStrictEqual(result, {
+    expect(result).toEqual({
       commentPath: 'src/index.js',
       commentLine: 42,
       commentStartLine: null,
@@ -208,8 +207,8 @@ describe('extractReviewCommentAnchor', () => {
       },
     };
     const result = extractReviewCommentAnchor(payload);
-    assert.strictEqual(result.commentLine, 50);
-    assert.strictEqual(result.commentStartLine, 45);
+    expect(result.commentLine).toBe(50);
+    expect(result.commentStartLine).toBe(45);
   });
 
   test('returns null when missing path', () => {
@@ -220,13 +219,13 @@ describe('extractReviewCommentAnchor', () => {
       },
     };
     const result = extractReviewCommentAnchor(payload);
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 
   test('returns null when missing comment entirely', () => {
     const payload = {};
     const result = extractReviewCommentAnchor(payload);
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 
   test('returns null when not a review comment payload', () => {
@@ -235,6 +234,6 @@ describe('extractReviewCommentAnchor', () => {
       comment: { id: 100, body: 'Regular comment' },
     };
     const result = extractReviewCommentAnchor(payload);
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 });

@@ -1,5 +1,4 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const { 
   buildImpactPrompt, 
   extractSuggestedLabels, 
@@ -13,12 +12,12 @@ const { upsertComment, setReaction, REACTIONS } = require('../../src/lib/comment
 describe('impact.js - formatChangedFiles', () => {
   test('returns "No files changed" when array is empty', () => {
     const result = formatChangedFiles([]);
-    assert.strictEqual(result, 'No files changed');
+    expect(result).toBe('No files changed');
   });
 
   test('returns "No files changed" when null', () => {
     const result = formatChangedFiles(null);
-    assert.strictEqual(result, 'No files changed');
+    expect(result).toBe('No files changed');
   });
 
   test('formats a single modified file with patch', () => {
@@ -30,10 +29,10 @@ describe('impact.js - formatChangedFiles', () => {
     
     const result = formatChangedFiles(files);
     
-    assert.ok(result.includes('`src/index.js`'));
-    assert.ok(result.includes('(modified)'));
-    assert.ok(result.includes('```diff'));
-    assert.ok(result.includes('+new line'));
+    expect(result).toContain('`src/index.js`');
+    expect(result).toContain('(modified)');
+    expect(result).toContain('```diff');
+    expect(result).toContain('+new line');
   });
 
   test('formats file without patch', () => {
@@ -45,9 +44,9 @@ describe('impact.js - formatChangedFiles', () => {
     
     const result = formatChangedFiles(files);
     
-    assert.ok(result.includes('`README.md`'));
-    assert.ok(result.includes('(added)'));
-    assert.ok(!result.includes('```diff'));
+    expect(result).toContain('`README.md`');
+    expect(result).toContain('(added)');
+    expect(result).not.toContain('```diff');
   });
 
   test('truncates long patches', () => {
@@ -60,7 +59,7 @@ describe('impact.js - formatChangedFiles', () => {
     
     const result = formatChangedFiles(files);
     
-    assert.ok(result.includes('[truncated'));
+    expect(result.includes('[truncated')).toBe(true);
   });
 
   test('handles multiple files', () => {
@@ -71,8 +70,8 @@ describe('impact.js - formatChangedFiles', () => {
     
     const result = formatChangedFiles(files);
     
-    assert.ok(result.includes('`a.js`'));
-    assert.ok(result.includes('`b.js`'));
+    expect(result.includes('`a.js`')).toBe(true);
+    expect(result.includes('`b.js`')).toBe(true);
   });
 });
 
@@ -83,10 +82,10 @@ describe('impact.js - buildImpactPrompt', () => {
     
     const result = buildImpactPrompt(pr, files, 10000);
     
-    assert.ok(result.prompt.includes('Add feature X'));
-    assert.ok(result.prompt.includes('This PR adds feature X'));
-    assert.ok(result.prompt.includes('src/x.js'));
-    assert.strictEqual(result.truncated, false);
+    expect(result.prompt.includes('Add feature X')).toBe(true);
+    expect(result.prompt.includes('This PR adds feature X')).toBe(true);
+    expect(result.prompt.includes('src/x.js')).toBe(true);
+    expect(result.truncated).toBe(false);
   });
 
   test('handles missing PR title', () => {
@@ -95,8 +94,8 @@ describe('impact.js - buildImpactPrompt', () => {
     
     const result = buildImpactPrompt(pr, files, 10000);
     
-    assert.ok(result.prompt.includes('No title provided'));
-    assert.ok(result.prompt.includes('Body only'));
+    expect(result.prompt.includes('No title provided')).toBe(true);
+    expect(result.prompt.includes('Body only')).toBe(true);
   });
 
   test('handles missing PR body', () => {
@@ -105,8 +104,8 @@ describe('impact.js - buildImpactPrompt', () => {
     
     const result = buildImpactPrompt(pr, files, 10000);
     
-    assert.ok(result.prompt.includes('Title only'));
-    assert.ok(result.prompt.includes('No description provided'));
+    expect(result.prompt.includes('Title only')).toBe(true);
+    expect(result.prompt.includes('No description provided')).toBe(true);
   });
 
   test('respects maxChars and truncates', () => {
@@ -118,7 +117,7 @@ describe('impact.js - buildImpactPrompt', () => {
     
     const result = buildImpactPrompt(pr, files, 100);
     
-    assert.strictEqual(result.truncated, true);
+    expect(result.truncated).toBe(true);
   });
 });
 
@@ -137,17 +136,17 @@ This PR modifies authentication logic.
 
     const labels = extractSuggestedLabels(response);
     
-    assert.deepStrictEqual(labels, ['risk: medium', 'area: auth', 'type: security']);
+    expect(labels).toEqual(['risk: medium', 'area: auth', 'type: security']);
   });
 
   test('returns empty array for null response', () => {
     const labels = extractSuggestedLabels(null);
-    assert.deepStrictEqual(labels, []);
+    expect(labels).toEqual([]);
   });
 
   test('returns empty array for empty string', () => {
     const labels = extractSuggestedLabels('');
-    assert.deepStrictEqual(labels, []);
+    expect(labels).toEqual([]);
   });
 
   test('returns empty array when no labels section found', () => {
@@ -157,7 +156,7 @@ This PR modifies authentication logic.
 Documentation changes only.`;
 
     const labels = extractSuggestedLabels(response);
-    assert.deepStrictEqual(labels, []);
+    expect(labels).toEqual([]);
   });
 
   test('handles labels with spaces', () => {
@@ -166,7 +165,7 @@ Documentation changes only.`;
 
     const labels = extractSuggestedLabels(response);
     
-    assert.deepStrictEqual(labels, ['risk: high', 'area: database', 'needs review']);
+    expect(labels).toEqual(['risk: high', 'area: database', 'needs review']);
   });
 
   test('deduplicates labels', () => {
@@ -175,7 +174,7 @@ Documentation changes only.`;
 
     const labels = extractSuggestedLabels(response);
     
-    assert.deepStrictEqual(labels, ['risk: medium', 'area: auth']);
+    expect(labels).toEqual(['risk: medium', 'area: auth']);
   });
 
   test('limits to 5 labels', () => {
@@ -184,7 +183,7 @@ Documentation changes only.`;
 
     const labels = extractSuggestedLabels(response);
     
-    assert.strictEqual(labels.length, 5);
+    expect(labels.length).toBe(5);
   });
 
   test('filters out empty and whitespace-only labels', () => {
@@ -194,7 +193,7 @@ Documentation changes only.`;
     const labels = extractSuggestedLabels(response);
     
     // Whitespace-only label should be filtered out after trim
-    assert.deepStrictEqual(labels, ['valid', 'also-valid']);
+    expect(labels).toEqual(['valid', 'also-valid']);
   });
   test('filters out excessively long labels', () => {
     const longLabel = 'x'.repeat(60);
@@ -203,7 +202,7 @@ Documentation changes only.`;
 
     const labels = extractSuggestedLabels(response);
     
-    assert.deepStrictEqual(labels, ['valid']);
+    expect(labels).toEqual(['valid']);
   });
 
   test('fallback to comma-separated if no backticks', () => {
@@ -212,7 +211,7 @@ risk: medium, area: auth, type: bugfix`;
 
     const labels = extractSuggestedLabels(response);
     
-    assert.deepStrictEqual(labels, ['risk: medium', 'area: auth', 'type: bugfix']);
+    expect(labels).toEqual(['risk: medium', 'area: auth', 'type: bugfix']);
   });
 
   test('case-insensitive labels section detection', () => {
@@ -221,7 +220,7 @@ risk: medium, area: auth, type: bugfix`;
 
     const labels = extractSuggestedLabels(response);
     
-    assert.deepStrictEqual(labels, ['risk: low']);
+    expect(labels).toEqual(['risk: low']);
   });
 });
 
@@ -237,7 +236,7 @@ describe('impact.js - applySuggestedLabels', () => {
     const mockLogger = { info: () => {}, warn: () => {} };
     
     const result = await applySuggestedLabels(mockOctokit, 'owner', 'repo', 1, [], mockLogger);
-    assert.strictEqual(result, true);
+    expect(result).toBe(true);
   });
 
   test('returns true when labels is null', async () => {
@@ -251,7 +250,7 @@ describe('impact.js - applySuggestedLabels', () => {
     const mockLogger = { info: () => {}, warn: () => {} };
     
     const result = await applySuggestedLabels(mockOctokit, 'owner', 'repo', 1, null, mockLogger);
-    assert.strictEqual(result, true);
+    expect(result).toBe(true);
   });
 
   test('calls octokit.issues.addLabels with correct params', async () => {
@@ -273,11 +272,11 @@ describe('impact.js - applySuggestedLabels', () => {
     const labels = ['risk: medium', 'area: auth'];
     await applySuggestedLabels(mockOctokit, 'test-owner', 'test-repo', 42, labels, mockLogger);
     
-    assert.strictEqual(addLabelsCalled, true);
-    assert.strictEqual(addLabelsParams.owner, 'test-owner');
-    assert.strictEqual(addLabelsParams.repo, 'test-repo');
-    assert.strictEqual(addLabelsParams.issue_number, 42);
-    assert.deepStrictEqual(addLabelsParams.labels, labels);
+    expect(addLabelsCalled).toBe(true);
+    expect(addLabelsParams.owner).toBe('test-owner');
+    expect(addLabelsParams.repo).toBe('test-repo');
+    expect(addLabelsParams.issue_number).toBe(42);
+    expect(addLabelsParams.labels).toEqual(labels);
   });
 
   test('returns false and logs warning on API error', async () => {
@@ -303,9 +302,9 @@ describe('impact.js - applySuggestedLabels', () => {
     const labels = ['risk: medium'];
     const result = await applySuggestedLabels(mockOctokit, 'owner', 'repo', 1, labels, mockLogger);
     
-    assert.strictEqual(result, false);
-    assert.strictEqual(warnCalled, true);
-    assert.strictEqual(warnArgs.labels, labels);
+    expect(result).toBe(false);
+    expect(warnCalled).toBe(true);
+    expect(warnArgs.labels).toBe(labels);
   });
 });
 
@@ -352,11 +351,11 @@ describe('impact.js - handleImpactCommand', () => {
     
     const result = await handleImpactCommand(context, [], mockDeps);
     
-    assert.strictEqual(result.success, true);
-    assert.ok(thinkingSet);
-    assert.ok(rocketSet);
-    assert.ok(commentPosted);
-    assert.ok(apiCalled);
+    expect(result.success).toBe(true);
+    expect(thinkingSet).toBeTruthy();
+    expect(rocketSet).toBeTruthy();
+    expect(commentPosted).toBeTruthy();
+    expect(apiCalled).toBeTruthy();
   });
 
   test('fetches PR metadata and builds prompt', async () => {
@@ -398,8 +397,8 @@ describe('impact.js - handleImpactCommand', () => {
     
     await handleImpactCommand(context, [], mockDeps);
     
-    assert.ok(apiCallParams.prompt.includes('Test PR'));
-    assert.ok(apiCallParams.prompt.includes('Test description'));
+    expect(apiCallParams.prompt.includes('Test PR')).toBe(true);
+    expect(apiCallParams.prompt.includes('Test description')).toBe(true);
   });
 
   test('returns error when PR fetch fails', async () => {
@@ -439,10 +438,10 @@ describe('impact.js - handleImpactCommand', () => {
     
     const result = await handleImpactCommand(context, [], mockDeps);
     
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('Failed to fetch PR metadata'));
-    assert.ok(commentPosted);
-    assert.ok(xReactionSet);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('Failed to fetch PR metadata')).toBe(true);
+    expect(commentPosted).toBeTruthy();
+    expect(xReactionSet).toBeTruthy();
   });
 
   test('returns error when API call fails', async () => {
@@ -484,10 +483,10 @@ describe('impact.js - handleImpactCommand', () => {
     
     const result = await handleImpactCommand(context, [], mockDeps);
     
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('API rate limit'));
-    assert.ok(commentPosted);
-    assert.ok(xReactionSet);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('API rate limit')).toBe(true);
+    expect(commentPosted).toBeTruthy();
+    expect(xReactionSet).toBeTruthy();
   });
 
   test('extracts and applies suggested labels', async () => {
@@ -532,7 +531,7 @@ describe('impact.js - handleImpactCommand', () => {
     
     await handleImpactCommand(context, [], mockDeps);
     
-    assert.deepStrictEqual(labelsApplied, ['risk: high', 'area: api']);
+    expect(labelsApplied).toEqual(['risk: high', 'area: api']);
   });
 
   test('handles exception and posts error comment', async () => {
@@ -570,9 +569,9 @@ describe('impact.js - handleImpactCommand', () => {
     
     const result = await handleImpactCommand(context, [], mockDeps);
     
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error !== undefined);
-    assert.ok(errorCommentPosted);
-    assert.ok(xReactionSet);
+    expect(result.success).toBe(false);
+    expect(result.error !== undefined).toBeTruthy();
+    expect(errorCommentPosted).toBeTruthy();
+    expect(xReactionSet).toBeTruthy();
   });
 });

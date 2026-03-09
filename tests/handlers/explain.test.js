@@ -1,71 +1,70 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const explainModule = require('../../src/lib/handlers/explain');
 const { parseLineRange, buildExplainPrompt } = explainModule;
 
 describe('explain.js - parseLineRange', () => {
   test('returns error when no arg provided', () => {
     const result = parseLineRange(null);
-    assert.strictEqual(result.startLine, null);
-    assert.strictEqual(result.endLine, null);
-    assert.ok(result.error.includes('No line range'));
+    expect(result.startLine).toBe(null);
+    expect(result.endLine).toBe(null);
+    expect(result.error.includes('No line range')).toBe(true);
   });
 
   test('returns error when arg is empty string', () => {
     const result = parseLineRange('');
-    assert.strictEqual(result.startLine, null);
-    assert.strictEqual(result.endLine, null);
-    assert.ok(result.error.includes('No line range'));
+    expect(result.startLine).toBe(null);
+    expect(result.endLine).toBe(null);
+    expect(result.error.includes('No line range')).toBe(true);
   });
 
   test('parses hyphen format 10-15', () => {
     const result = parseLineRange('10-15');
-    assert.strictEqual(result.startLine, 10);
-    assert.strictEqual(result.endLine, 15);
-    assert.strictEqual(result.error, undefined);
+    expect(result.startLine).toBe(10);
+    expect(result.endLine).toBe(15);
+    expect(result.error).toBe(undefined);
   });
 
   test('parses colon format 10:15', () => {
     const result = parseLineRange('10:15');
-    assert.strictEqual(result.startLine, 10);
-    assert.strictEqual(result.endLine, 15);
+    expect(result.startLine).toBe(10);
+    expect(result.endLine).toBe(15);
   });
 
   test('parses dot format 10..15', () => {
     const result = parseLineRange('10..15');
-    assert.strictEqual(result.startLine, 10);
-    assert.strictEqual(result.endLine, 15);
+    expect(result.startLine).toBe(10);
+    expect(result.endLine).toBe(15);
   });
 
   test('returns error for invalid format', () => {
     const result = parseLineRange('invalid');
-    assert.strictEqual(result.startLine, null);
-    assert.strictEqual(result.endLine, null);
-    assert.ok(result.error.includes('Invalid line range format'));
+    expect(result.startLine).toBe(null);
+    expect(result.endLine).toBe(null);
+    expect(result.error.includes('Invalid line range format')).toBe(true);
   });
 
   test('returns error when start line < 1', () => {
     const result = parseLineRange('0-5');
-    assert.strictEqual(result.startLine, null);
-    assert.ok(result.error.includes('Start line must be >= 1'));
+    expect(result.startLine).toBe(null);
+    expect(result.error.includes('Start line must be >= 1')).toBe(true);
   });
 
   test('returns error when start > end', () => {
     const result = parseLineRange('15-10');
-    assert.strictEqual(result.startLine, null);
-    assert.ok(result.error.includes('cannot exceed'));
+    expect(result.startLine).toBe(null);
+    expect(result.error.includes('cannot exceed')).toBe(true);
   });
 
   test('handles single line range 5-5', () => {
     const result = parseLineRange('5-5');
-    assert.strictEqual(result.startLine, 5);
-    assert.strictEqual(result.endLine, 5);
+    expect(result.startLine).toBe(5);
+    expect(result.endLine).toBe(5);
   });
 
   test('handles large line numbers', () => {
     const result = parseLineRange('1000-1500');
-    assert.strictEqual(result.startLine, 1000);
-    assert.strictEqual(result.endLine, 1500);
+    expect(result.startLine).toBe(1000);
+    expect(result.endLine).toBe(1500);
   });
 });
 
@@ -77,11 +76,11 @@ describe('explain.js - buildExplainPrompt', () => {
     };
     const result = buildExplainPrompt('src/test.js', scopeResult, 5, 7, 10000);
     
-    assert.ok(result.prompt.includes('<surrounding_scope>'), 'should include surrounding_scope tag');
-    assert.ok(result.prompt.includes('<target_lines>5-7</target_lines>'), 'should include target_lines tag with range');
-    assert.ok(result.prompt.includes('<code>'), 'should include code tag');
-    assert.ok(result.prompt.includes('function test()'), 'should include code content');
-    assert.strictEqual(result.truncated, false);
+    expect(result.prompt).toContain('<surrounding_scope>');
+    expect(result.prompt).toContain('<target_lines>5-7</target_lines>');
+    expect(result.prompt).toContain('<code>');
+    expect(result.prompt).toContain('function test()');
+    expect(result.truncated).toBe(false);
   });
 
   test('includes target_lines and code tags', () => {
@@ -91,9 +90,9 @@ describe('explain.js - buildExplainPrompt', () => {
     };
     const result = buildExplainPrompt('app.js', scopeResult, 1, 1, 10000);
     
-    assert.ok(result.prompt.includes('<target_lines>1-1</target_lines>'));
-    assert.ok(result.prompt.includes('<code>'));
-    assert.ok(result.prompt.includes('const x = 1;'));
+    expect(result.prompt).toContain('<target_lines>1-1</target_lines>');
+    expect(result.prompt).toContain('<code>');
+    expect(result.prompt).toContain('const x = 1;');
   });
 
   test('respects maxChars and truncates', () => {
@@ -104,8 +103,8 @@ describe('explain.js - buildExplainPrompt', () => {
     };
     const result = buildExplainPrompt('app.js', scopeResult, 1, 1, 100);
     
-    assert.ok(result.truncated, true);
-    assert.ok(result.prompt.includes('[truncated'));
+    expect(result.truncated).toBe(true);
+    expect(result.prompt).toContain('[truncated');
   });
 
   test('includes target line range in target_lines tag', () => {
@@ -115,15 +114,15 @@ describe('explain.js - buildExplainPrompt', () => {
     };
     const result = buildExplainPrompt('app.js', scopeResult, 10, 10, 10000);
     
-    assert.ok(result.prompt.includes('<target_lines>10-10</target_lines>'));
+    expect(result.prompt).toContain('<target_lines>10-10</target_lines>');
   });
 
   test('handles legacy array format for backward compatibility', () => {
     const lines = ['function test() {', '  return true;', '}'];
     const result = buildExplainPrompt('src/test.js', lines, 5, 7, 10000);
     
-    assert.ok(result.prompt.includes('function test()'));
-    assert.strictEqual(result.truncated, false);
+    expect(result.prompt).toContain('function test()');
+    expect(result.truncated).toBe(false);
   });
 });
 
@@ -157,10 +156,10 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, [], mockDeps);
 
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error, 'No line range provided');
-    assert.ok(commentPosted);
-    assert.ok(reactionPosted);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No line range provided');
+    expect(commentPosted).toBeTruthy();
+    expect(reactionPosted).toBeTruthy();
   });
 
   test('returns error when parseLineRange fails', async () => {
@@ -191,9 +190,9 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, ['invalid'], mockDeps);
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('Invalid line range format'));
-    assert.ok(commentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('Invalid line range format')).toBe(true);
+    expect(commentPosted).toBeTruthy();
   });
 
   test('returns error when no target file specified', async () => {
@@ -224,9 +223,9 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, ['10-15'], mockDeps);
 
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error, 'No target file specified');
-    assert.ok(commentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No target file specified');
+    expect(commentPosted).toBeTruthy();
   });
 
   test('returns error when file fetch fails', async () => {
@@ -257,9 +256,9 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, ['10-15'], mockDeps);
 
-    assert.strictEqual(result.success, false);
-    assert.strictEqual(result.error, 'File not found');
-    assert.ok(commentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('File not found');
+    expect(commentPosted).toBeTruthy();
   });
 
   test('returns error when line range validation fails', async () => {
@@ -294,9 +293,9 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, ['10-15'], mockDeps);
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('exceeds'));
-    assert.ok(commentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('exceeds')).toBe(true);
+    expect(commentPosted).toBeTruthy();
   });
 
   test('calls API and posts explanation on success', async () => {
@@ -343,10 +342,10 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
 
-    assert.strictEqual(result.success, true);
-    assert.ok(apiCalled);
-    assert.ok(commentPosted);
-    assert.ok(reactionPosted);
+    expect(result.success).toBe(true);
+    expect(apiCalled).toBeTruthy();
+    expect(commentPosted).toBeTruthy();
+    expect(reactionPosted).toBeTruthy();
   });
 
   test('handles API failure gracefully', async () => {
@@ -388,10 +387,10 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('API rate limit exceeded'));
-    assert.ok(commentPosted);
-    assert.ok(reactionPosted);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('API rate limit exceeded')).toBe(true);
+    expect(commentPosted).toBeTruthy();
+    expect(reactionPosted).toBeTruthy();
   });
 
   test('handles exception in try/catch block', async () => {
@@ -429,9 +428,9 @@ describe('explain.js - handleExplainCommand', () => {
 
     const result = await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
 
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error.includes('Unexpected network error'));
-    assert.ok(commentPosted);
+    expect(result.success).toBe(false);
+    expect(result.error.includes('Unexpected network error')).toBe(true);
+    expect(commentPosted).toBeTruthy();
   });
 
   test('uses commentPath from context when available', async () => {
@@ -471,7 +470,7 @@ describe('explain.js - handleExplainCommand', () => {
 
     await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
 
-    assert.strictEqual(fetchCalledWith, 'src/specific/file.js');
+    expect(fetchCalledWith).toBe('src/specific/file.js');
   });
 
   test('falls back to first changed file when no path specified', async () => {
@@ -514,6 +513,6 @@ describe('explain.js - handleExplainCommand', () => {
 
     await explainModule.handleExplainCommand(mockContext, ['1-2'], mockDeps);
 
-    assert.strictEqual(fetchCalledWith, 'first/changed/file.js');
+    expect(fetchCalledWith).toBe('first/changed/file.js');
   });
 });

@@ -1,5 +1,4 @@
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe, expect } from 'vitest';
 const askHandler = require('../src/lib/handlers/ask.js');
 const helpHandler = require('../src/lib/handlers/help.js');
 const handlers = require('../src/lib/handlers/index.js');
@@ -7,26 +6,26 @@ const handlers = require('../src/lib/handlers/index.js');
 describe('ask handler', () => {
   test('validateArgs returns error for empty args', () => {
     const result = askHandler.validateArgs([]);
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.error.includes('Please provide a question'));
+    expect(result.valid).toBe(false);
+    expect(result.error.includes('Please provide a question')).toBe(true);
   });
 
   test('validateArgs returns error for whitespace-only args', () => {
     const result = askHandler.validateArgs(['   ', '']);
-    assert.strictEqual(result.valid, false);
-    assert.ok(result.error.includes('Please provide a question'));
+    expect(result.valid).toBe(false);
+    expect(result.error.includes('Please provide a question')).toBe(true);
   });
 
   test('validateArgs returns valid for non-empty args', () => {
     const result = askHandler.validateArgs(['what', 'is', 'this']);
-    assert.strictEqual(result.valid, true);
+    expect(result.valid).toBe(true);
   });
 
   test('buildPrompt builds correct prompt', () => {
     const prompt = askHandler.buildPrompt('What is this?', 'PR context here');
-    assert.ok(prompt.includes('What is this?'));
-    assert.ok(prompt.includes('PR context here'));
-    assert.ok(prompt.includes('Question:'));
+    expect(prompt.includes('What is this?')).toBe(true);
+    expect(prompt.includes('PR context here')).toBe(true);
+    expect(prompt.includes('Question:')).toBe(true);
   });
 
   test('buildPrompt builds structured contextual prompt', () => {
@@ -36,11 +35,11 @@ describe('ask handler', () => {
       conversationHistory: 'thread transcript',
     });
 
-    assert.ok(prompt.includes('<pr_context>'));
-    assert.ok(prompt.includes('<file_context>'));
-    assert.ok(prompt.includes('<conversation_history>'));
-    assert.ok(prompt.includes('<user_query>'));
-    assert.ok(prompt.includes('What changed?'));
+    expect(prompt.includes('<pr_context>')).toBe(true);
+    expect(prompt.includes('<file_context>')).toBe(true);
+    expect(prompt.includes('<conversation_history>')).toBe(true);
+    expect(prompt.includes('<user_query>')).toBe(true);
+    expect(prompt.includes('What changed?')).toBe(true);
   });
 
   test('getThreadTranscript returns chronologically sorted last comments', async () => {
@@ -71,9 +70,9 @@ describe('ask handler', () => {
     };
 
     const transcript = await askHandler.getThreadTranscript(octokit, githubContext, { limit: 20 });
-    assert.ok(transcript.includes('earlier comment'));
-    assert.ok(transcript.includes('later comment'));
-    assert.ok(transcript.indexOf('earlier comment') < transcript.indexOf('later comment'));
+    expect(transcript).toContain('earlier comment');
+    expect(transcript).toContain('later comment');
+    expect(transcript.indexOf('earlier comment')).toBeLessThan(transcript.indexOf('later comment'));
   });
 
   test('getThreadTranscript handles rate limit errors safely', async () => {
@@ -95,7 +94,7 @@ describe('ask handler', () => {
     };
 
     const transcript = await askHandler.getThreadTranscript(octokit, githubContext);
-    assert.ok(transcript.includes('rate limits'));
+    expect(transcript.includes('rate limits')).toBe(true);
   });
 
   test('resolveRepoRef falls back to payload.repository when githubContext.repo is missing', () => {
@@ -109,8 +108,8 @@ describe('ask handler', () => {
     };
 
     const resolved = askHandler.resolveRepoRef(githubContext);
-    assert.strictEqual(resolved.owner, 'AndreiDrang');
-    assert.strictEqual(resolved.repo, 'zai-code-bot');
+    expect(resolved.owner).toBe('AndreiDrang');
+    expect(resolved.repo).toBe('zai-code-bot');
   });
 
   test('getThreadTranscript returns safe fallback when repo context is missing', async () => {
@@ -127,7 +126,7 @@ describe('ask handler', () => {
     };
 
     const transcript = await askHandler.getThreadTranscript(octokit, githubContext);
-    assert.strictEqual(transcript, 'No conversation history available.');
+    expect(transcript).toBe('No conversation history available.');
   });
 
   test('getRelevantFileContent includes focused file and diff context', async () => {
@@ -167,93 +166,93 @@ describe('ask handler', () => {
     };
 
     const fileContext = await askHandler.getRelevantFileContent(octokit, githubContext);
-    assert.ok(fileContext.includes('Focused file from thread'));
-    assert.ok(fileContext.includes('PR diff context'));
-    assert.ok(fileContext.includes('Raw file snapshot'));
+    expect(fileContext.includes('Focused file from thread')).toBe(true);
+    expect(fileContext.includes('PR diff context')).toBe(true);
+    expect(fileContext.includes('Raw file snapshot')).toBe(true);
   });
 
   test('formatResponse formats correctly', () => {
     const response = askHandler.formatResponse('This is the answer.', 'What is this?');
-    assert.ok(response.includes('This is the answer.'));
-    assert.ok(response.includes('What is this?'));
-    assert.ok(response.includes('Answer to:'));
+    expect(response.includes('This is the answer.')).toBe(true);
+    expect(response.includes('What is this?')).toBe(true);
+    expect(response.includes('Answer to:')).toBe(true);
   });
 });
 
 describe('help handler', () => {
   test('HELP_TEXT contains all commands', () => {
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai ask'));
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai review'));
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai explain'));
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai help'));
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai describe'));
-    assert.ok(helpHandler.HELP_TEXT.includes('/zai impact'));
+    expect(helpHandler.HELP_TEXT.includes('/zai ask')).toBe(true);
+    expect(helpHandler.HELP_TEXT.includes('/zai review')).toBe(true);
+    expect(helpHandler.HELP_TEXT.includes('/zai explain')).toBe(true);
+    expect(helpHandler.HELP_TEXT.includes('/zai help')).toBe(true);
+    expect(helpHandler.HELP_TEXT.includes('/zai describe')).toBe(true);
+    expect(helpHandler.HELP_TEXT.includes('/zai impact')).toBe(true);
   });
 
   test('HELP_TEXT does not contain removed commands', () => {
-    assert.ok(!helpHandler.HELP_TEXT.includes('/zai suggest'));
-    assert.ok(!helpHandler.HELP_TEXT.includes('/zai compare'));
+    expect(helpHandler.HELP_TEXT.includes('/zai suggest')).toBeFalsy();
+    expect(helpHandler.HELP_TEXT.includes('/zai compare')).toBeFalsy();
   });
 
   test('HELP_MARKER is defined', () => {
-    assert.strictEqual(typeof helpHandler.HELP_MARKER, 'string');
-    assert.ok(helpHandler.HELP_MARKER.length > 0);
+    expect(typeof helpHandler.HELP_MARKER).toBe('string');
+    expect(helpHandler.HELP_MARKER.length > 0).toBeTruthy();
   });
 });
 
 describe('handler registry', () => {
   test('getHandler returns ask handler', () => {
     const handler = handlers.getHandler('ask');
-    assert.strictEqual(typeof handler, 'function');
+    expect(typeof handler).toBe('function');
   });
 
   test('getHandler returns help handler', () => {
     const handler = handlers.getHandler('help');
-    assert.strictEqual(typeof handler, 'function');
+    expect(typeof handler).toBe('function');
   });
 
   test('getHandler returns null for unknown command', () => {
     const handler = handlers.getHandler('unknown');
-    assert.strictEqual(handler, null);
+    expect(handler).toBe(null);
   });
 
   test('getHandler returns null for removed commands', () => {
-    assert.strictEqual(handlers.getHandler('suggest'), null);
-    assert.strictEqual(handlers.getHandler('compare'), null);
+    expect(handlers.getHandler('suggest')).toBe(null);
+    expect(handlers.getHandler('compare')).toBe(null);
   });
 
   test('hasHandler returns true for known commands', () => {
-    assert.strictEqual(handlers.hasHandler('ask'), true);
-    assert.strictEqual(handlers.hasHandler('help'), true);
-    assert.strictEqual(handlers.hasHandler('review'), true);
-    assert.strictEqual(handlers.hasHandler('explain'), true);
-    assert.strictEqual(handlers.hasHandler('describe'), true);
-    assert.strictEqual(handlers.hasHandler('impact'), true);
+    expect(handlers.hasHandler('ask')).toBe(true);
+    expect(handlers.hasHandler('help')).toBe(true);
+    expect(handlers.hasHandler('review')).toBe(true);
+    expect(handlers.hasHandler('explain')).toBe(true);
+    expect(handlers.hasHandler('describe')).toBe(true);
+    expect(handlers.hasHandler('impact')).toBe(true);
   });
 
   test('hasHandler returns false for unknown commands', () => {
-    assert.strictEqual(handlers.hasHandler('unknown'), false);
+    expect(handlers.hasHandler('unknown')).toBe(false);
   });
 
   test('hasHandler returns false for removed commands', () => {
-    assert.strictEqual(handlers.hasHandler('suggest'), false);
-    assert.strictEqual(handlers.hasHandler('compare'), false);
+    expect(handlers.hasHandler('suggest')).toBe(false);
+    expect(handlers.hasHandler('compare')).toBe(false);
   });
 
   test('getAllCommands returns all commands', () => {
     const commands = handlers.getAllCommands();
-    assert.ok(commands.includes('ask'));
-    assert.ok(commands.includes('help'));
-    assert.ok(commands.includes('review'));
-    assert.ok(commands.includes('explain'));
-    assert.ok(commands.includes('describe'));
-    assert.ok(commands.includes('impact'));
-    assert.strictEqual(commands.length, 6);
+    expect(commands.includes('ask')).toBe(true);
+    expect(commands.includes('help')).toBe(true);
+    expect(commands.includes('review')).toBe(true);
+    expect(commands.includes('explain')).toBe(true);
+    expect(commands.includes('describe')).toBe(true);
+    expect(commands.includes('impact')).toBe(true);
+    expect(commands.length).toBe(6);
   });
 
   test('getAllCommands does not include removed commands', () => {
     const commands = handlers.getAllCommands();
-    assert.ok(!commands.includes('suggest'));
-    assert.ok(!commands.includes('compare'));
+    expect(commands.includes('suggest')).toBe(false);
+    expect(commands.includes('compare')).toBeFalsy();
   });
 });
