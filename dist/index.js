@@ -32110,6 +32110,10 @@ module.exports = {
   AUTH_MARKER
 };
 
+run().catch(error => {
+  core.setFailed(error.message);
+});
+
 
 /***/ }),
 
