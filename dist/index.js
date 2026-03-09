@@ -31245,6 +31245,874 @@ module.exports = {
 
 /***/ }),
 
+/***/ 5105:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const core = __nccwpck_require__(7484);
+const github = __nccwpck_require__(3228);
+const https = __nccwpck_require__(5692);
+
+const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = __nccwpck_require__(2500);
+const { parseCommand, isValid } = __nccwpck_require__(5055);
+const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = __nccwpck_require__(6495);
+const { handleAskCommand } = __nccwpck_require__(6630);
+const { handleDescribeCommand } = __nccwpck_require__(4334);
+const { handleImpactCommand } = __nccwpck_require__(7265);
+const reviewHandler = __nccwpck_require__(903);
+const explainHandler = __nccwpck_require__(1248);
+
+const { truncateContext, DEFAULT_MAX_CHARS, fetchChangedFiles } = __nccwpck_require__(9990);
+const { loadContinuityState, mergeState, createCommentWithState } = __nccwpck_require__(4575);
+const { REACTIONS, setReaction, upsertComment } = __nccwpck_require__(6819);
+const { createApiClient } = __nccwpck_require__(9729);
+const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
+const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
+const COMMENT_MARKER = '<!-- zai-code-review -->';
+const CONTINUITY_MARKER = '<!-- zai-continuity:';
+const PROGRESS_MARKER = '<!-- zai-progress -->';
+const GUIDANCE_MARKER = '<!-- zai-guidance -->';
+const AUTH_MARKER = '<!-- zai-auth -->';
+
+// Safe guidance messages for error cases
+const GUIDANCE_MESSAGES = {
+  unknown_command: `## Z.ai Help
+
+Unknown command. Available commands:
+- \`/zai ask <question>\` - Ask a question about the code
+- \`/zai review\` - Request a full code review
+- \`/zai explain <lines>\` - Explain specific lines
+- \`/zai describe\` - Generate PR description from commits
+- \`/zai impact\` - Analyze the potential impact of changes
+- \`/zai help\` - Show this help message
+
+You can also use @zai-bot instead of /zai.
+
+${COMMENT_MARKER}`,
+
+  malformed_input: `## Z.ai Help
+
+I couldn't understand that command. Commands should start with \`/zai\` or @zai-bot.
+
+Examples:
+- \`/zai ask what does this function do?\`
+- \`/zai review\`
+- \`/zai explain 10-20\`
+
+${COMMENT_MARKER}`,
+
+  empty_input: `## Z.ai Help
+
+No command detected. Use \`/zai help\` to see available commands.
+
+${COMMENT_MARKER}`,
+};
+
+async function getChangedFiles(octokit, owner, repo, pullNumber) {
+  const { data: files } = await octokit.rest.pulls.listFiles({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  });
+  return files;
+}
+
+function buildPrompt(files) {
+  const formattedFiles = files
+    .filter(f => f.patch)
+    .map(f => `<file name="${f.filename}">\n<diff>\n${f.patch}\n</diff>\n</file>`)
+    .join('\n\n');
+
+  return `Please review the following Pull Request changes based on your system instructions.
+
+<pull_request_changes>
+${formattedFiles}
+</pull_request_changes>`;
+}
+
+function callZaiApi(apiKey, model, prompt) {
+  return new Promise((resolve, reject) => {
+    const systemPrompt = `You are an Elite Staff Engineer and meticulous Code Reviewer. Your objective is to thoroughly analyze Pull Request diffs, identify potential bugs, security vulnerabilities, and architectural flaws, and provide constructive, actionable feedback.
+
+### Core Instructions:
+1. **Focus on Impact:** Prioritize logic errors, security risks (e.g., injections, unvalidated input), performance bottlenecks, and bad practices.
+2. **Ignore Trivialities:** Do not comment on minor styling or formatting issues that a linter should catch (e.g., trailing spaces, missing semicolons) unless they affect readability significantly.
+3. **Be Actionable:** If you point out a problem, briefly explain *why* it is a problem and provide a short code snippet demonstrating the fix.
+4. **Tone:** Maintain a professional, objective, and encouraging tone.
+
+### Required Output Format:
+You MUST format your response strictly using the Markdown structure below. If a section has no issues, write "None detected."
+
+**## 🔍 Review Summary**
+[1-2 sentences summarizing the overall quality and purpose of the changes.]
+
+**## 🚨 Critical Issues & Bugs**
+* [File Name]: [Description of the critical issue and potential impact]
+
+**## 💡 Suggestions & Best Practices**
+* [File Name]: [Suggestions for refactoring, performance improvements, or readability]
+
+**## 📊 Final Assessment**
+[You MUST conclude your review with exactly one of the following ratings in bold, followed by a brief justification: **Good**, **Normal**, or **Very Bad**]
+* **Rating:** [Insert Rating]
+* **Reason:** [1-2 sentences explaining why this rating was given]`;
+
+    const body = JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: systemPrompt,
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+    });
+
+    const url = new URL(ZAI_API_URL);
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(body),
+      },
+    };
+
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => (data += chunk));
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.message?.content;
+          if (!content) {
+            reject(new Error(`Z.ai API returned an empty response: ${data}`));
+          } else {
+            resolve(content);
+          }
+        } else {
+          reject(new Error(`Z.ai API error ${res.statusCode}: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function enforceCommandAuthorization(context, octokit, owner, repo, options = {}, deps = {}) {
+  const {
+    issueNumber,
+    pullNumber,
+    replyToId,
+    isReviewComment = false,
+  } = options;
+  const {
+    core: _core = core,
+    getCommenter: _getCommenter = getCommenter,
+    checkForkAuthorization: _checkForkAuthorization = checkForkAuthorization,
+    getUnauthorizedMessage: _getUnauthorizedMessage = getUnauthorizedMessage,
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+  } = deps;
+
+  const commenter = _getCommenter(context);
+  const authResult = await _checkForkAuthorization(octokit, context, commenter);
+
+  if (authResult.authorized) {
+    return { authorized: true, commenter };
+  }
+
+  if (authResult.reason === null) {
+    _core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
+    return { authorized: false, commenter, silent: true };
+  }
+
+  const authMessage = _getUnauthorizedMessage(authResult.reason);
+  _core.info(`Command authorization failed for ${commenter?.login || 'unknown'}: ${authResult.reason}`);
+
+  await _upsertComment(
+    octokit,
+    owner,
+    repo,
+    issueNumber,
+    authMessage,
+    AUTH_MARKER,
+    { replyToId, updateExisting: false, isReviewComment, pullNumber }
+  );
+
+  if (replyToId) {
+    try {
+      await _setReaction(octokit, owner, repo, replyToId, REACTIONS.X);
+    } catch (error) {
+      _core.warning(`Failed to set auth-failure reaction: ${error.message}`);
+    }
+  }
+
+  return { authorized: false, commenter, silent: false };
+}
+
+async function run() {
+  const apiKey = core.getInput('ZAI_API_KEY', { required: true });
+  const model = core.getInput('ZAI_MODEL') || 'glm-4.7';
+  const zaiTimeout = parseInt(core.getInput('ZAI_TIMEOUT') || '30000', 10);
+
+  const { context } = github;
+  const { owner, repo } = context.repo;
+
+  // Event routing and filtering
+  const { process, reason } = shouldProcessEvent(context);
+  if (!process) {
+    core.info(`Skipping event: ${reason}`);
+    return;
+  }
+
+  const eventType = getEventType(context);
+  core.info(`Processing event type: ${eventType}`);
+
+  // Route to appropriate handler
+  if (eventType === 'pull_request') {
+    await handlePullRequestEvent(context, apiKey, model, owner, repo);
+  } else if (eventType === 'issue_comment_pr') {
+    await handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
+  } else if (eventType === 'pull_request_review_comment') {
+    await handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
+  }
+}
+
+async function handlePullRequestEvent(context, apiKey, model, owner, repo, deps = {}) {
+  const {
+    core: _core = core,
+    github: _github = github,
+    getChangedFiles: _getChangedFiles = getChangedFiles,
+    buildPrompt: _buildPrompt = buildPrompt,
+    callZaiApi: _callZaiApi = callZaiApi,
+    COMMENT_MARKER: _MARKER = COMMENT_MARKER,
+  } = deps;
+
+  const pullNumber = context.payload.pull_request?.number;
+
+  if (!pullNumber) {
+    _core.setFailed('No pull request number found.');
+    return { success: false, error: 'No pull request number found.' };
+  }
+
+  const token = process.env.GITHUB_TOKEN || _core.getInput('GITHUB_TOKEN');
+  const octokit = _github.getOctokit(token);
+
+  _core.info(`Fetching changed files for PR #${pullNumber}...`);
+  const files = await _getChangedFiles(octokit, owner, repo, pullNumber);
+
+  if (!files.some(f => f.patch)) {
+    _core.info('No patchable changes found. Skipping review.');
+    return { success: true, skipped: true, reason: 'No patchable changes' };
+  }
+
+  const prompt = _buildPrompt(files);
+
+  _core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
+  const review = await _callZaiApi(apiKey, model, prompt);
+  const body = `## Z.ai Code Review\n\n${review}\n\n${_MARKER}`;
+
+  const { data: comments } = await octokit.rest.issues.listComments({
+    owner,
+    repo,
+    issue_number: pullNumber,
+  });
+  const existing = comments.find(c => c.body.includes(_MARKER));
+
+  if (existing) {
+    await octokit.rest.issues.updateComment({
+      owner,
+      repo,
+      comment_id: existing.id,
+      body,
+    });
+    _core.info('Review comment updated.');
+    return { success: true, action: 'updated', commentId: existing.id };
+  } else {
+    const result = await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: pullNumber,
+      body,
+    });
+    _core.info('Review comment posted.');
+    return { success: true, action: 'created', commentId: result.data.id };
+  }
+}
+
+async function handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout) {
+  const comment = context.payload.comment;
+  const commentBody = comment?.body || '';
+  const commentId = comment?.id;
+  const pullNumber = context.payload.issue?.number;
+
+  core.info(`Processing issue_comment on PR: ${commentBody.substring(0, 50)}...`);
+
+  // Parse the command from comment body
+  const parseResult = parseCommand(commentBody);
+
+  // If parsing failed, post safe guidance message
+  if (!isValid(parseResult)) {
+    const errorType = parseResult.error.type;
+    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
+
+    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+    if (!pullNumber) {
+      core.setFailed('No issue/PR number found.');
+      return;
+    }
+
+    await upsertComment(
+      octokit,
+      owner,
+      repo,
+      pullNumber,
+      guidance,
+      GUIDANCE_MARKER,
+      { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
+    );
+    core.info(`Posted guidance comment for error: ${errorType}`);
+
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  // Valid command - check authorization before dispatching
+  core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
+
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
+    issueNumber: pullNumber,
+    pullNumber,
+    replyToId: commentId,
+    isReviewComment: false,
+  });
+  if (!authState.authorized) {
+    return;
+  }
+  const { commenter } = authState;
+
+  let continuityState = null;
+  try {
+    continuityState = await loadContinuityState(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    core.warning(`Failed to load continuity state: ${error.message}`);
+  }
+
+  if (commentId && parseResult.command !== 'ask') {
+    try {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
+    } catch (error) {
+      core.warning(`Failed to set acknowledgment reaction: ${error.message}`);
+    }
+  }
+
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
+    PROGRESS_MARKER,
+    { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
+  );
+
+  core.info(`Authorized command from collaborator: ${commenter.login}`);
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, {
+    commentId,
+    continuityState,
+    commenter,
+  });
+}
+
+async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo, zaiTimeout) {
+  const comment = context.payload.comment;
+  const commentBody = comment?.body || '';
+  const commentId = comment?.id;
+  
+  // Get PR number from pull_request in the payload
+  const pullNumber = context.payload.pull_request?.number;
+
+  if (!pullNumber) {
+    core.setFailed('No pull request number found in review comment event.');
+    return;
+  }
+
+  core.info(`Processing pull_request_review_comment on PR #${pullNumber}: ${commentBody.substring(0, 50)}...`);
+
+  // Parse the command from comment body
+  const parseResult = parseCommand(commentBody);
+
+  // If parsing failed, post safe guidance message
+  if (!isValid(parseResult)) {
+    const errorType = parseResult.error.type;
+    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
+
+    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+
+    await upsertComment(
+      octokit,
+      owner,
+      repo,
+      pullNumber,
+      guidance,
+      GUIDANCE_MARKER,
+      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
+    );
+    core.info(`Posted guidance comment for error: ${errorType}`);
+
+    if (commentId) {
+      try {
+        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      } catch (error) {
+        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  // Valid command - check authorization before dispatching
+  core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
+
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
+    issueNumber: pullNumber,
+    pullNumber,
+    replyToId: commentId,
+    isReviewComment: true,
+  });
+  if (!authState.authorized) {
+    return;
+  }
+  const { commenter } = authState;
+
+  // Load continuity state
+  let continuityState = null;
+  try {
+    continuityState = await loadContinuityState(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    core.warning(`Failed to load continuity state: ${error.message}`);
+  }
+
+  // Set acknowledgment reaction
+  if (commentId && parseResult.command !== 'ask') {
+    try {
+      await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
+    } catch (error) {
+      core.warning(`Failed to set acknowledgment reaction: ${error.message}`);
+    }
+  }
+
+  // Post progress message
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
+    PROGRESS_MARKER,
+    { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
+  );
+
+  // Extract anchor metadata from review comment
+  const anchorMetadata = extractReviewCommentAnchor(context.payload);
+  
+  // Get base and head refs from PR
+  const baseRef = context.payload.pull_request?.base?.ref || null;
+  const headRef = context.payload.pull_request?.head?.ref || null;
+
+  core.info(`Authorized command from collaborator: ${commenter.login}`);
+  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, {
+    commentId,
+    continuityState,
+    commenter,
+    baseRef,
+    headRef,
+    isReviewComment: true,
+    eventName: 'pull_request_review_comment',
+    ...anchorMetadata,
+  });
+}
+
+async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, options = {}, deps = {}) {
+  const {
+    core: _core = core,
+    github: _github = github,
+    generateCorrelationId: _generateCorrelationId = generateCorrelationId,
+    createLogger: _createLogger = createLogger,
+    fetchChangedFiles: _fetchChangedFiles = fetchChangedFiles,
+    createApiClient: _createApiClient = createApiClient,
+    reviewHandler: _reviewHandler = reviewHandler,
+    explainHandler: _explainHandler = explainHandler,
+    handleDescribeCommand: _handleDescribeCommand = handleDescribeCommand,
+    handleAskCommand: _handleAskCommand = handleAskCommand,
+    handleImpactCommand: _handleImpactCommand = handleImpactCommand,
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    mergeState: _mergeState = mergeState,
+    createCommentWithState: _createCommentWithState = createCommentWithState,
+    COMMENT_MARKER: _COMMENT_MARKER = COMMENT_MARKER,
+    REACTIONS: _REACTIONS = REACTIONS,
+  } = deps;
+
+  const { command, args } = parseResult;
+  const pullNumber = context.payload.issue?.number || context.payload.pull_request?.number;
+  const { 
+    commentId = null, 
+    continuityState = null, 
+    commenter = null,
+    baseRef = null,
+    headRef = null,
+    commentPath = null,
+    commentLine = null,
+    commentStartLine = null,
+    commentDiffHunk = null,
+    isReviewComment = false,
+    eventName = context.eventName || 'issue_comment',
+  } = options;
+
+  const octokit = _github.getOctokit(process.env.GITHUB_TOKEN || _core.getInput('GITHUB_TOKEN'));
+
+  let responseMessage = '';
+  let terminalReaction = _REACTIONS.ROCKET;
+
+  const correlationId = _generateCorrelationId();
+  const logger = _createLogger(correlationId, { 
+    eventName,
+    prNumber: pullNumber,
+    command 
+  });
+
+  let changedFiles = [];
+  try {
+    changedFiles = await _fetchChangedFiles(octokit, owner, repo, pullNumber);
+  } catch (error) {
+    logger.warn({ error: error.message }, 'Failed to fetch changed files');
+  }
+
+  const handlerContext = {
+    octokit,
+    owner,
+    repo,
+    issueNumber: pullNumber,
+    commentId,
+    changedFiles,
+    apiClient: _createApiClient({ timeout: zaiTimeout }),
+    apiKey,
+    model,
+    logger,
+    maxChars: DEFAULT_MAX_CHARS,
+    continuityState,
+    baseRef,
+    headRef,
+    commentPath,
+    commentLine,
+    commentStartLine,
+    commentDiffHunk,
+    isReviewComment,
+    pullNumber,
+  };
+
+  switch (command) {
+    case 'help':
+      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai impact\` - Analyze the potential impact of changes\n- \`/zai help\` - Show this help message\n\n${_COMMENT_MARKER}`;
+      break;
+
+    case 'review':
+      logger.info({ args }, 'Dispatching to review handler');
+      
+      try {
+        const result = await _reviewHandler.handleReviewCommand(handlerContext, args);
+        if (result.success) {
+          logger.info({ success: true }, 'Review command completed');
+          return { success: true };
+        } else {
+          logger.warn({ error: result.error }, 'Review command failed');
+          return { success: false, error: result.error };
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Review handler threw error');
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Code Review
+
+**Error:** Failed to complete review. Please try again later.
+
+${_COMMENT_MARKER}`;
+      }
+      break;
+
+    case 'explain': {
+      logger.info({ args }, 'Dispatching to explain handler');
+      
+      let explainArgs = args;
+      if (explainArgs.length === 0 && Number.isInteger(commentLine)) {
+        const anchorStart = Number.isInteger(commentStartLine) ? commentStartLine : commentLine;
+        const start = Math.min(anchorStart, commentLine);
+        const end = Math.max(anchorStart, commentLine);
+        explainArgs = [`${start}-${end}`];
+        logger.info({ start, end, commentPath }, 'Inferred explain range from review-comment anchor');
+      }
+
+      if (explainArgs.length === 0) {
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${_COMMENT_MARKER}`;
+        break;
+      }
+
+      let filename = null;
+      let fileContent = null;
+
+      if (handlerContext.commentPath) {
+        filename = handlerContext.commentPath;
+        fileContent = handlerContext.commentDiffHunk || null;
+      } else {
+        const firstChangedFile = changedFiles.find(f => f.patch);
+        if (!firstChangedFile) {
+          terminalReaction = _REACTIONS.X;
+          responseMessage = `## Z.ai Explanation
+
+No files with changes found in this PR to explain.
+
+${_COMMENT_MARKER}`;
+          break;
+        }
+        filename = firstChangedFile.filename;
+        fileContent = firstChangedFile.patch || '';
+      }
+
+      const explainContext = {
+        ...handlerContext,
+        filename,
+        fileContent,
+      };
+
+      try {
+        const result = await _explainHandler.handleExplainCommand(explainContext, explainArgs);
+        if (result.success) {
+          logger.info({ success: true }, 'Explain command completed');
+          return { success: true };
+        } else {
+          logger.warn({ error: result.error }, 'Explain command failed');
+          return { success: false, error: result.error };
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Explain handler threw error');
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Explanation
+
+**Error:** Failed to complete explanation. Please try again later.
+
+${_COMMENT_MARKER}`;
+      }
+      break;
+    }
+    case 'describe': {
+      logger.info({ args }, 'Dispatching to describe handler');
+      
+      try {
+        const result = await _handleDescribeCommand(handlerContext, args);
+        if (result.success) {
+          logger.info({ success: true }, 'Describe command completed');
+          return { success: true };
+        } else {
+          logger.warn({ error: result.error }, 'Describe command failed');
+          return { success: false, error: result.error };
+        }
+      } catch (error) {
+        logger.error({ error: error.message }, 'Describe handler threw error');
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Describe\n\n**Error:** Failed to generate description. Please try again later.\n\n${_COMMENT_MARKER}`;
+      }
+      break;
+    }
+
+    case 'ask': {
+      if (args.length === 0) {
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\nPlease provide a question. Usage: \`/zai ask <question>\`\n\n${_COMMENT_MARKER}`;
+        break;
+      }
+
+      try {
+        const normalizedAskContext = {
+          ...context,
+          payload: {
+            ...context.payload,
+            pull_request: {
+              number: pullNumber,
+              title: context.payload.issue?.title || context.payload.pull_request?.title || '',
+              body: context.payload.issue?.body || context.payload.pull_request?.body || '',
+            },
+          },
+        };
+
+        const askContext = {
+          octokit,
+          context: normalizedAskContext,
+          commenter,
+          args,
+          continuityState,
+          config: {
+            apiKey,
+            model,
+            timeout: 30000,
+            maxRetries: 3,
+          },
+          logger,
+        };
+
+        const result = await _handleAskCommand(askContext);
+        if (result.success) {
+          logger.info({ success: true }, 'Ask command completed');
+          return { success: true };
+        }
+
+        if (!result.error) {
+          logger.info('Ask command silently blocked by fork policy');
+          return { success: true, silent: true };
+        }
+
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\n**Error:** ${result.error}\n\n${_COMMENT_MARKER}`;
+      } catch (error) {
+        logger.error({ error: error.message }, 'Ask handler threw error');
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Ask\n\n**Error:** Failed to complete request. Please try again later.\n\n${_COMMENT_MARKER}`;
+      }
+      break;
+    }
+
+    case 'impact': {
+      const impactContext = {
+        octokit,
+        owner,
+        repo,
+        issueNumber: pullNumber,
+        commentId,
+        changedFiles,
+        apiClient: createApiClient({ timeout: zaiTimeout }),
+        apiKey,
+        model,
+        logger,
+        maxChars: DEFAULT_MAX_CHARS,
+        continuityState,
+        baseRef,
+        headRef,
+        pullNumber,
+      };
+
+      core.info('Processing impact command');
+
+      const result = await handleImpactCommand(impactContext, args);
+
+      // Impact handler manages its own comment posting via upsertComment
+      // So we return early and don't post a duplicate comment
+      if (result.success) {
+        terminalReaction = REACTIONS.ROCKET;
+      } else {
+        terminalReaction = REACTIONS.X;
+      }
+      return;
+    }
+
+    default:
+      responseMessage = GUIDANCE_MESSAGES.unknown_command;
+  }
+
+  // Post or update comment (only for cases that didn't return early)
+  if (!responseMessage) {
+    return;
+  }
+
+  const nextState = mergeState(continuityState, {
+    lastCommand: command,
+    lastArgs: args.join(' '),
+    lastUser: commenter?.login || 'unknown',
+    turnCount: (continuityState?.turnCount || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  });
+  const responseWithState = createCommentWithState(responseMessage, nextState);
+
+  await upsertComment(
+    octokit,
+    owner,
+    repo,
+    pullNumber,
+    responseWithState,
+    COMMENT_MARKER,
+    {
+      replyToId: commentId,
+      updateExisting: false,
+      isReviewComment,
+      pullNumber,
+    }
+  );
+  core.info(`Posted response for command: ${command}`);
+
+  if (commentId) {
+    try {
+      await setReaction(octokit, owner, repo, commentId, terminalReaction);
+    } catch (error) {
+      core.warning(`Failed to set terminal reaction: ${error.message}`);
+    }
+  }
+}
+
+async function performReview(octokit, owner, repo, pullNumber, apiKey, model) {
+  core.info(`Fetching changed files for PR #${pullNumber}...`);
+  const files = await getChangedFiles(octokit, owner, repo, pullNumber);
+
+  if (!files.some(f => f.patch)) {
+    return `## Z.ai Code Review
+
+No patchable changes found.${COMMENT_MARKER}`;
+  }
+
+  const prompt = buildPrompt(files);
+
+  core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
+  const review = await callZaiApi(apiKey, model, prompt);
+
+  return `## Z.ai Code Review
+
+${review}
+
+${COMMENT_MARKER}`;
+}
+
+// Export dispatchCommand for testing
+module.exports = {
+  buildPrompt,
+  getChangedFiles,
+  enforceCommandAuthorization,
+  handlePullRequestEvent,
+  dispatchCommand,
+  GUIDANCE_MESSAGES,
+  COMMENT_MARKER,
+  GUIDANCE_MARKER,
+  PROGRESS_MARKER,
+  AUTH_MARKER
+};
+
+
+/***/ }),
+
 /***/ 9729:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -31695,6 +32563,7 @@ module.exports = {
   callWithRetry,
   categorizeError,
   sanitizeErrorMessage,
+  makeApiRequest,
   ZAI_API_URL,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_MAX_RETRIES,
@@ -32009,10 +32878,6 @@ function clampLine(line, maxLines) {
  * @returns {Object} Result with target, surrounding, bounds, and metadata
  */
 function extractWindow(content, startLine, endLine, windowSize = DEFAULT_WINDOW_SIZE) {
-  const lines = content.split('\n');
-  const maxLines = lines.length;
-
-  // Handle invalid input gracefully
   if (!content || typeof content !== 'string') {
     return {
       target: [],
@@ -32023,10 +32888,11 @@ function extractWindow(content, startLine, endLine, windowSize = DEFAULT_WINDOW_
     };
   }
 
-  // Validate and clamp target range
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
   const validTarget = validateRange(startLine, endLine, maxLines);
   if (!validTarget.valid) {
-    // Return full file as fallback
     return {
       target: lines,
       surrounding: null,
@@ -32069,10 +32935,6 @@ function extractWindow(content, startLine, endLine, windowSize = DEFAULT_WINDOW_
  * @returns {Object} Result with target, bounds, and metadata
  */
 function extractTargetBlock(content, startLine, endLine) {
-  const lines = content.split('\n');
-  const maxLines = lines.length;
-
-  // Handle invalid input gracefully
   if (!content || typeof content !== 'string') {
     return {
       target: [],
@@ -32082,7 +32944,9 @@ function extractTargetBlock(content, startLine, endLine) {
     };
   }
 
-  // Validate range
+  const lines = content.split('\n');
+  const maxLines = lines.length;
+
   const validation = validateRange(startLine, endLine, maxLines);
   if (!validation.valid) {
     return {
@@ -32123,11 +32987,6 @@ function extractTargetBlock(content, startLine, endLine) {
  * @returns {Object} Result with target, bounds, and metadata
  */
 function extractEnclosingBlock(content, anchorLine, options = {}) {
-  const { maxSearchLines = 100, windowSize = DEFAULT_WINDOW_SIZE } = options;
-  const lines = content.split('\n');
-  const maxLines = lines.length;
-
-  // Handle invalid input gracefully
   if (!content || typeof content !== 'string') {
     return {
       target: [],
@@ -32136,8 +32995,11 @@ function extractEnclosingBlock(content, anchorLine, options = {}) {
       note: 'Invalid content provided'
     };
   }
+  
+  const { maxSearchLines = 100, windowSize = DEFAULT_WINDOW_SIZE } = options;
+  const lines = content.split('\n');
+  const maxLines = lines.length;
 
-  // Validate anchor line
   if (anchorLine < 1 || anchorLine > maxLines) {
     return extractWindow(content, Math.max(1, anchorLine - windowSize), Math.min(maxLines, anchorLine + windowSize), windowSize);
   }
@@ -33435,7 +34297,17 @@ function validateArgs(args) {
  * @param {Object} params.logger - Logger instance
  * @returns {Promise<{ success: boolean, message?: string, error?: string }>}
  */
-async function handleAskCommand({ octokit, context: githubContext, commenter, args, continuityState = null, config, logger }) {
+async function handleAskCommand({ octokit, context: githubContext, commenter, args, continuityState = null, config, logger }, deps = {}) {
+  const {
+    checkForkAuthorization: _checkForkAuthorization = auth.checkForkAuthorization,
+    setReaction: _setReaction = setReaction,
+    upsertComment: _upsertComment = comments.upsertComment,
+    createApiClient: _createApiClient = api.createApiClient,
+    getUserMessage: _getUserMessage = logging.getUserMessage,
+    buildContext: _buildContext = buildContext,
+    mergeState: _mergeState = continuity.mergeState,
+    createCommentWithState: _createCommentWithState = continuity.createCommentWithState,
+  } = deps;
   // Validate arguments
   const validation = validateArgs(args);
   if (!validation.valid) {
@@ -33443,7 +34315,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   }
 
   // Check authorization
-  const authResult = await auth.checkForkAuthorization(octokit, githubContext, commenter);
+  const authResult = await _checkForkAuthorization(octokit, githubContext, commenter);
   if (!authResult.authorized) {
     // Silent block for fork PRs, otherwise return error message
     if (authResult.reason) {
@@ -33474,7 +34346,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   // Get the comment ID for threading
   const commentId = githubContext.payload.comment?.id;
 
-  const contextualData = await buildContext({
+  const contextualData = await _buildContext({
     octokit,
     githubContext,
     logger,
@@ -33486,11 +34358,11 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
 
   // Add reaction to show we're processing (acknowledgment)
   if (commentId) {
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
   }
 
   // Call the API
-  const apiClient = api.createApiClient({ timeout: config.timeout, maxRetries: config.maxRetries });
+  const apiClient = _createApiClient({ timeout: config.timeout, maxRetries: config.maxRetries });
   const result = await apiClient.call({
     apiKey: config.apiKey,
     model: config.model,
@@ -33502,11 +34374,11 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
       { command: 'ask', errorCategory: result.error.category },
       `API call failed: ${result.error.message}`
     );
-    const userMessage = logging.getUserMessage(result.error.category, new Error(result.error.message));
+    const userMessage = _getUserMessage(result.error.category, new Error(result.error.message));
     
     // Add error reaction
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     
     return { success: false, error: userMessage };
@@ -33514,17 +34386,17 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
 
   // Post the response as a threaded reply
   const responseBody = formatResponse(result.data, question);
-  const nextState = continuity.mergeState(continuityState, {
+  const nextState = _mergeState(continuityState, {
     lastCommand: 'ask',
     lastArgs: question,
     lastUser: commenter?.login || 'unknown',
     turnCount: (continuityState?.turnCount || 0) + 1,
     updatedAt: new Date().toISOString(),
   });
-  const responseWithState = continuity.createCommentWithState(responseBody, nextState);
+  const responseWithState = _createCommentWithState(responseBody, nextState);
   
   const marker = '<!-- ZAI-ASK-RESPONSE -->';
-  const commentResult = await comments.upsertComment(
+  const commentResult = await _upsertComment(
     octokit,
     owner,
     repo,
@@ -33537,7 +34409,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
   if (commentResult.action === 'created' || commentResult.action === 'updated') {
     // Add success reaction
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
     
     logger.info({ command: 'ask', question: question.substring(0, 50) }, 'Ask command completed successfully');
@@ -33546,7 +34418,7 @@ async function handleAskCommand({ octokit, context: githubContext, commenter, ar
 
   // Add error reaction for failed comment post
   if (commentId) {
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
   }
   
   return { success: false, error: 'Failed to post response' };
@@ -34117,9 +34989,19 @@ function buildExplainPrompt(filename, scopeResult, startLine, endLine, maxChars 
  * @param {string[]} args - Command arguments (line range)
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function handleExplainCommand(context, args) {
+async function handleExplainCommand(context, args, deps = {}) {
+  const {
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    fetchFileAtPrHead: _fetchFileAtPrHead = fetchFileAtPrHead,
+    extractWindow: _extractWindow = extractWindow,
+    createLogger: _createLogger = createLogger,
+    generateCorrelationId: _generateCorrelationId = generateCorrelationId,
+    validateRange: _validateRange = validateRange,
+  } = deps;
+  
   const { octokit, owner, repo, issueNumber, commentPath, filename, changedFiles, apiClient, apiKey, model, commentId } = context;
-  const logger = context.logger || createLogger(generateCorrelationId(), { command: 'explain' });
+  const logger = context.logger || _createLogger(_generateCorrelationId(), { command: 'explain' });
   const commentOptions = {
     replyToId: commentId,
     updateExisting: false,
@@ -34128,7 +35010,7 @@ async function handleExplainCommand(context, args) {
   };
 
   if (!args || args.length === 0) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No line range provided. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
@@ -34136,7 +35018,7 @@ async function handleExplainCommand(context, args) {
     );
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: 'No line range provided' };
   }
@@ -34144,7 +35026,7 @@ async function handleExplainCommand(context, args) {
   // Step 1: Parse line range
   const parsed = parseLineRange(args[0]);
   if (parsed.error) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       EXPLAIN_MARKER,
@@ -34152,7 +35034,7 @@ async function handleExplainCommand(context, args) {
     );
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: parsed.error };
   }
@@ -34170,14 +35052,14 @@ async function handleExplainCommand(context, args) {
   }
 
   if (!resolvedPath) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** No target file specified. Usage: /zai explain 10-15`,
       EXPLAIN_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: 'No target file specified' };
   }
@@ -34185,7 +35067,7 @@ async function handleExplainCommand(context, args) {
   logger.info({ startLine, endLine, path: resolvedPath }, 'Parsed line range, fetching file at PR head');
 
   // Step 3: Fetch file content at PR head
-  const fileResult = await fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber, {
+  const fileResult = await _fetchFileAtPrHead(octokit, owner, repo, resolvedPath, issueNumber, {
     maxFileLines: 10000,
     changedRanges: [{ start: startLine, end: endLine }],
     windowSize: 20,
@@ -34194,14 +35076,14 @@ async function handleExplainCommand(context, args) {
   
   if (!fileResult.success) {
     const errorMsg = fileResult.fallback || `Failed to fetch ${resolvedPath}`;
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${errorMsg}`,
       EXPLAIN_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: errorMsg };
   }
@@ -34212,9 +35094,9 @@ async function handleExplainCommand(context, args) {
     : fileContent.split('\n').length;
 
   // Step 4: Validate line range against actual file line count
-  const validation = validateRange(startLine, endLine, maxLines);
+  const validation = _validateRange(startLine, endLine, maxLines);
   if (!validation.valid) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}. File has ${maxLines} lines.`,
       EXPLAIN_MARKER,
@@ -34222,7 +35104,7 @@ async function handleExplainCommand(context, args) {
     );
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: validation.error };
   }
@@ -34236,7 +35118,7 @@ async function handleExplainCommand(context, args) {
     scopedEnd = endLine - fileResult.scopeStartLine + 1;
   }
 
-  const scopeResult = extractWindow(fileContent, scopedStart, scopedEnd);
+  const scopeResult = _extractWindow(fileContent, scopedStart, scopedEnd);
   
   if (scopeResult.fallback) {
     logger.warn({ note: scopeResult.note }, 'Using fallback for scope extraction');
@@ -34291,14 +35173,14 @@ async function handleExplainCommand(context, args) {
       const duration = result.error?.totalDuration || 0;
       logger.error({ error: errorMsg, attempts, totalDuration: duration }, 'Explain API call failed after all retries');
 
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}${result.usedFallback ? ' (tried compact prompt)' : ''}`,
         EXPLAIN_MARKER,
         commentOptions
       );
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
       return { success: false, error: errorMsg };
     }
@@ -34311,7 +35193,7 @@ async function handleExplainCommand(context, args) {
 
     const formattedResponse = `## 📖 Explanation: ${resolvedPath}:${startLine}-${endLine}\n\n${response}`;
 
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
       EXPLAIN_MARKER,
@@ -34320,7 +35202,7 @@ async function handleExplainCommand(context, args) {
 
     // Add success reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
 
     logger.info({ path: resolvedPath, startLine, endLine }, 'Explanation posted successfully');
@@ -34328,7 +35210,7 @@ async function handleExplainCommand(context, args) {
   } catch (error) {
     logger.error({ error: error.message }, 'Explain command failed');
 
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete explanation. Please try again later.`,
       EXPLAIN_MARKER,
@@ -34337,7 +35219,7 @@ async function handleExplainCommand(context, args) {
 
     // Add error reaction if commentId available
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
 
     return { success: false, error: error.message };
@@ -34349,6 +35231,11 @@ module.exports = {
   parseLineRange,
   buildExplainPrompt,
   EXPLAIN_MARKER,
+  upsertComment,
+  setReaction,
+  fetchFileAtPrHead,
+  validateRange,
+  extractWindow,
 };
 
 
@@ -34490,14 +35377,15 @@ function extractSuggestedLabels(response) {
   // Extract all backticked labels
   const backtickRegex = /`([^`]+)`/g;
   const labels = [];
-  let match;
+  let match = backtickRegex.exec(labelsSection);
   
-  while ((match = backtickRegex.exec(labelsSection)) !== null) {
+  while (match !== null) {
     const label = match[1].trim();
     // Filter out empty, too long, or punctuation-only labels
     if (label && label.length > 0 && label.length <= 50 && !/^[,.\s]+$/.test(label)) {
       labels.push(label);
     }
+    match = backtickRegex.exec(labelsSection);
   }
 
   // Fallback: try comma-separated if no backticks found
@@ -34524,13 +35412,17 @@ function extractSuggestedLabels(response) {
  * @param {Object} logger - Logger instance
  * @returns {Promise<boolean>} Success status
  */
-async function applySuggestedLabels(octokit, owner, repo, issueNumber, labels, logger) {
+async function applySuggestedLabels(octokit, owner, repo, issueNumber, labels, logger, deps = {}) {
+  const {
+    addLabels: _addLabels = (params) => octokit.rest.issues.addLabels(params),
+  } = deps;
+  
   if (!labels || labels.length === 0) {
     return true;
   }
 
   try {
-    await octokit.rest.issues.addLabels({
+    await _addLabels({
       owner,
       repo,
       issue_number: issueNumber,
@@ -34557,7 +35449,13 @@ async function applySuggestedLabels(octokit, owner, repo, issueNumber, labels, l
  * @param {Array} args - Command arguments (unused for impact)
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function handleImpactCommand(context, args) {
+async function handleImpactCommand(context, args, deps = {}) {
+  const {
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    applySuggestedLabels: _applySuggestedLabels = applySuggestedLabels,
+  } = deps;
+  
   const { 
     octokit, 
     owner, 
@@ -34574,7 +35472,7 @@ async function handleImpactCommand(context, args) {
 
   try {
     // 1. Set thinking reaction to show command is processing
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.THINKING);
 
     // 2. Fetch PR metadata (title, description)
     let prData;
@@ -34590,13 +35488,13 @@ async function handleImpactCommand(context, args) {
       };
     } catch (error) {
       logger.error({ error: error.message }, 'Failed to fetch PR metadata');
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `## Z.ai Impact Analysis\n\n❌ Failed to fetch PR metadata: ${error.message}\n\n${IMPACT_MARKER}`,
         IMPACT_MARKER,
         { replyToId: commentId }
       );
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       return { success: false, error: 'Failed to fetch PR metadata' };
     }
 
@@ -34618,13 +35516,13 @@ async function handleImpactCommand(context, args) {
 
     if (!llmResult.success) {
       logger.error({ error: llmResult.error }, 'LLM call failed for impact command');
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `## Z.ai Impact Analysis\n\n❌ Failed to analyze PR. Please try again later.\n\n${IMPACT_MARKER}`,
         IMPACT_MARKER,
         { replyToId: commentId }
       );
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       return { success: false, error: llmResult.error };
     }
 
@@ -34633,7 +35531,7 @@ async function handleImpactCommand(context, args) {
     // 5. Post analysis as comment
     const commentBody = `## Z.ai Impact & Risk Analysis\n\n${analysis}\n\n${IMPACT_MARKER}`;
     
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       commentBody,
       IMPACT_MARKER,
@@ -34645,13 +35543,13 @@ async function handleImpactCommand(context, args) {
     
     if (suggestedLabels.length > 0) {
       logger.info({ suggestedLabels, issueNumber }, 'Extracted suggested labels');
-      await applySuggestedLabels(octokit, owner, repo, issueNumber, suggestedLabels, logger);
+      await _applySuggestedLabels(octokit, owner, repo, issueNumber, suggestedLabels, logger);
     } else {
       logger.info({ issueNumber }, 'No suggested labels found in analysis');
     }
 
     // 7. Set success reaction
-    await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+    await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
 
     return { success: true };
 
@@ -34659,13 +35557,13 @@ async function handleImpactCommand(context, args) {
     logger.error({ error: error.message, stack: error.stack }, 'Impact command failed unexpectedly');
     
     try {
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `## Z.ai Impact Analysis\n\n❌ An unexpected error occurred: ${error.message}\n\n${IMPACT_MARKER}`,
         IMPACT_MARKER,
         { replyToId: commentId }
       );
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     } catch (commentError) {
       logger.error({ error: commentError.message }, 'Failed to post error comment');
     }
@@ -34763,9 +35661,17 @@ function buildReviewPrompt(filePath, fullContent, patch, maxChars = DEFAULT_MAX_
   return { prompt: truncated.content, truncated: truncated.truncated };
 }
 
-async function handleReviewCommand(context, args) {
+async function handleReviewCommand(context, args, deps = {}) {
+  const {
+    upsertComment: _upsertComment = upsertComment,
+    setReaction: _setReaction = setReaction,
+    fetchFileAtPrHead: _fetchFileAtPrHead = fetchFileAtPrHead,
+    createLogger: _createLogger = createLogger,
+    generateCorrelationId: _generateCorrelationId = generateCorrelationId,
+  } = deps;
+  
   const { octokit, owner, repo, issueNumber, changedFiles, apiClient, apiKey, model, commentId } = context;
-  const logger = context.logger || createLogger(generateCorrelationId(), { command: 'review' });
+  const logger = context.logger || _createLogger(_generateCorrelationId(), { command: 'review' });
   const commentOptions = {
     replyToId: commentId,
     updateExisting: false,
@@ -34775,14 +35681,14 @@ async function handleReviewCommand(context, args) {
   
   const parsed = parseFilePath(args);
   if (parsed.error) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${parsed.error}`,
       REVIEW_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: parsed.error };
   }
@@ -34792,14 +35698,14 @@ async function handleReviewCommand(context, args) {
   
   const validation = validateFileInPr(filePath, changedFiles);
   if (!validation.valid) {
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** ${validation.error}`,
       REVIEW_MARKER,
       commentOptions
     );
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     return { success: false, error: validation.error };
   }
@@ -34809,7 +35715,7 @@ async function handleReviewCommand(context, args) {
   logger.info({ filePath, status: targetFile.status }, 'File validated, fetching full content at PR head');
 
   const pullNumber = context.pullNumber || context.issueNumber;
-  const fullContentResult = await fetchFileAtPrHead(
+  const fullContentResult = await _fetchFileAtPrHead(
     context.octokit,
     context.owner,
     context.repo,
@@ -34840,14 +35746,14 @@ async function handleReviewCommand(context, args) {
     if (!result.success) {
       const errorMsg = result.error?.message || 'Failed to get review';
       logger.error({ error: errorMsg }, 'API call failed');
-      await upsertComment(
+      await _upsertComment(
         octokit, owner, repo, issueNumber,
         `**Error:** ${errorMsg}`,
         REVIEW_MARKER,
         commentOptions
       );
       if (commentId) {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
       }
       return { success: false, error: errorMsg };
     }
@@ -34860,7 +35766,7 @@ async function handleReviewCommand(context, args) {
     
     const formattedResponse = `## 📝 Code Review: ${targetFile.filename}\n\n${response}`;
     
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       formattedResponse,
       REVIEW_MARKER,
@@ -34868,7 +35774,7 @@ async function handleReviewCommand(context, args) {
     );
     
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.ROCKET);
     }
     
     logger.info({ filePath }, 'Review posted successfully');
@@ -34877,7 +35783,7 @@ async function handleReviewCommand(context, args) {
   } catch (error) {
     logger.error({ error: error.message }, 'Review command failed');
     
-    await upsertComment(
+    await _upsertComment(
       octokit, owner, repo, issueNumber,
       `**Error:** Failed to complete review. Please try again later.`,
       REVIEW_MARKER,
@@ -34885,7 +35791,7 @@ async function handleReviewCommand(context, args) {
     );
     
     if (commentId) {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+      await _setReaction(octokit, owner, repo, commentId, REACTIONS.X);
     }
     
     return { success: false, error: error.message };
@@ -40286,802 +41192,12 @@ legacyRestEndpointMethods.VERSION = VERSION;
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
 /******/ 	
 /************************************************************************/
-var __webpack_exports__ = {};
-const core = __nccwpck_require__(7484);
-const github = __nccwpck_require__(3228);
-const https = __nccwpck_require__(5692);
-
-const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = __nccwpck_require__(2500);
-const { parseCommand, isValid } = __nccwpck_require__(5055);
-const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = __nccwpck_require__(6495);
-const { handleAskCommand } = __nccwpck_require__(6630);
-const { handleDescribeCommand } = __nccwpck_require__(4334);
-const { handleImpactCommand } = __nccwpck_require__(7265);
-const reviewHandler = __nccwpck_require__(903);
-const explainHandler = __nccwpck_require__(1248);
-
-const { truncateContext, DEFAULT_MAX_CHARS, fetchChangedFiles } = __nccwpck_require__(9990);
-const { loadContinuityState, mergeState, createCommentWithState } = __nccwpck_require__(4575);
-const { REACTIONS, setReaction, upsertComment } = __nccwpck_require__(6819);
-const { createApiClient } = __nccwpck_require__(9729);
-const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
-const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
-const COMMENT_MARKER = '<!-- zai-code-review -->';
-const CONTINUITY_MARKER = '<!-- zai-continuity:';
-const PROGRESS_MARKER = '<!-- zai-progress -->';
-const GUIDANCE_MARKER = '<!-- zai-guidance -->';
-const AUTH_MARKER = '<!-- zai-auth -->';
-
-// Safe guidance messages for error cases
-const GUIDANCE_MESSAGES = {
-  unknown_command: `## Z.ai Help
-
-Unknown command. Available commands:
-- \`/zai ask <question>\` - Ask a question about the code
-- \`/zai review\` - Request a full code review
-- \`/zai explain <lines>\` - Explain specific lines
-- \`/zai describe\` - Generate PR description from commits
-- \`/zai impact\` - Analyze the potential impact of changes
-- \`/zai help\` - Show this help message
-
-You can also use @zai-bot instead of /zai.
-
-${COMMENT_MARKER}`,
-
-  malformed_input: `## Z.ai Help
-
-I couldn't understand that command. Commands should start with \`/zai\` or @zai-bot.
-
-Examples:
-- \`/zai ask what does this function do?\`
-- \`/zai review\`
-- \`/zai explain 10-20\`
-
-${COMMENT_MARKER}`,
-
-  empty_input: `## Z.ai Help
-
-No command detected. Use \`/zai help\` to see available commands.
-
-${COMMENT_MARKER}`,
-};
-
-async function getChangedFiles(octokit, owner, repo, pullNumber) {
-  const { data: files } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    per_page: 100,
-  });
-  return files;
-}
-
-function buildPrompt(files) {
-  const diffs = files
-    .filter(f => f.patch)
-    .map(f => `### ${f.filename} (${f.status})\n\`\`\`diff\n${f.patch}\n\`\`\`\n`)
-    .join('\n\n');
-
-  return `Please review the following pull request changes and provide concise, constructive feedback. Focus on bugs, logic errors, security issues, and meaningful improvements. Skip trivial style comments.\n\n${diffs}`;
-}
-
-function callZaiApi(apiKey, model, prompt) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert code reviewer. Review the provided code changes and give clear, actionable feedback.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    });
-
-    const url = new URL(ZAI_API_URL);
-    const options = {
-      hostname: url.hostname,
-      path: url.pathname,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Length': Buffer.byteLength(body),
-      },
-    };
-
-    const req = https.request(options, res => {
-      let data = '';
-      res.on('data', chunk => (data += chunk));
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.message?.content;
-          if (!content) {
-            reject(new Error(`Z.ai API returned an empty response: ${data}`));
-          } else {
-            resolve(content);
-          }
-        } else {
-          reject(new Error(`Z.ai API error ${res.statusCode}: ${data}`));
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-async function enforceCommandAuthorization(context, octokit, owner, repo, options = {}) {
-  const {
-    issueNumber,
-    pullNumber,
-    replyToId,
-    isReviewComment = false,
-  } = options;
-
-  const commenter = getCommenter(context);
-  const authResult = await checkForkAuthorization(octokit, context, commenter);
-
-  if (authResult.authorized) {
-    return { authorized: true, commenter };
-  }
-
-  if (authResult.reason === null) {
-    core.info(`Silently blocking command from non-collaborator on fork PR: ${commenter?.login || 'unknown'}`);
-    return { authorized: false, commenter, silent: true };
-  }
-
-  const authMessage = getUnauthorizedMessage(authResult.reason);
-  core.info(`Command authorization failed for ${commenter?.login || 'unknown'}: ${authResult.reason}`);
-
-  await upsertComment(
-    octokit,
-    owner,
-    repo,
-    issueNumber,
-    authMessage,
-    AUTH_MARKER,
-    { replyToId, updateExisting: false, isReviewComment, pullNumber }
-  );
-
-  if (replyToId) {
-    try {
-      await setReaction(octokit, owner, repo, replyToId, REACTIONS.X);
-    } catch (error) {
-      core.warning(`Failed to set auth-failure reaction: ${error.message}`);
-    }
-  }
-
-  return { authorized: false, commenter, silent: false };
-}
-
-async function run() {
-  const apiKey = core.getInput('ZAI_API_KEY', { required: true });
-  const model = core.getInput('ZAI_MODEL') || 'glm-4.7';
-  const zaiTimeout = parseInt(core.getInput('ZAI_TIMEOUT') || '30000', 10);
-
-  const { context } = github;
-  const { owner, repo } = context.repo;
-
-  // Event routing and filtering
-  const { process, reason } = shouldProcessEvent(context);
-  if (!process) {
-    core.info(`Skipping event: ${reason}`);
-    return;
-  }
-
-  const eventType = getEventType(context);
-  core.info(`Processing event type: ${eventType}`);
-
-  // Route to appropriate handler
-  if (eventType === 'pull_request') {
-    await handlePullRequestEvent(context, apiKey, model, owner, repo);
-  } else if (eventType === 'issue_comment_pr') {
-    await handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
-  } else if (eventType === 'pull_request_review_comment') {
-    await handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
-  }
-}
-
-async function handlePullRequestEvent(context, apiKey, model, owner, repo) {
-  const pullNumber = context.payload.pull_request?.number;
-
-  if (!pullNumber) {
-    core.setFailed('No pull request number found.');
-    return;
-  }
-
-  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-  core.info(`Fetching changed files for PR #${pullNumber}...`);
-  const files = await getChangedFiles(octokit, owner, repo, pullNumber);
-
-  if (!files.some(f => f.patch)) {
-    core.info('No patchable changes found. Skipping review.');
-    return;
-  }
-
-  const prompt = buildPrompt(files);
-
-  core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
-  const review = await callZaiApi(apiKey, model, prompt);
-  const body = `## Z.ai Code Review\n\n${review}\n\n${COMMENT_MARKER}`;
-
-  const { data: comments } = await octokit.rest.issues.listComments({
-    owner,
-    repo,
-    issue_number: pullNumber,
-  });
-  const existing = comments.find(c => c.body.includes(COMMENT_MARKER));
-
-  if (existing) {
-    await octokit.rest.issues.updateComment({
-      owner,
-      repo,
-      comment_id: existing.id,
-      body,
-    });
-    core.info('Review comment updated.');
-  } else {
-    await octokit.rest.issues.createComment({
-      owner,
-      repo,
-      issue_number: pullNumber,
-      body,
-    });
-    core.info('Review comment posted.');
-  }
-}
-
-async function handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout) {
-  const comment = context.payload.comment;
-  const commentBody = comment?.body || '';
-  const commentId = comment?.id;
-  const pullNumber = context.payload.issue?.number;
-
-  core.info(`Processing issue_comment on PR: ${commentBody.substring(0, 50)}...`);
-
-  // Parse the command from comment body
-  const parseResult = parseCommand(commentBody);
-
-  // If parsing failed, post safe guidance message
-  if (!isValid(parseResult)) {
-    const errorType = parseResult.error.type;
-    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
-
-    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-    if (!pullNumber) {
-      core.setFailed('No issue/PR number found.');
-      return;
-    }
-
-    await upsertComment(
-      octokit,
-      owner,
-      repo,
-      pullNumber,
-      guidance,
-      GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
-    );
-    core.info(`Posted guidance comment for error: ${errorType}`);
-
-    if (commentId) {
-      try {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      } catch (error) {
-        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
-      }
-    }
-    return;
-  }
-
-  // Valid command - check authorization before dispatching
-  core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
-
-  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
-    issueNumber: pullNumber,
-    pullNumber,
-    replyToId: commentId,
-    isReviewComment: false,
-  });
-  if (!authState.authorized) {
-    return;
-  }
-  const { commenter } = authState;
-
-  let continuityState = null;
-  try {
-    continuityState = await loadContinuityState(octokit, owner, repo, pullNumber);
-  } catch (error) {
-    core.warning(`Failed to load continuity state: ${error.message}`);
-  }
-
-  if (commentId && parseResult.command !== 'ask') {
-    try {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
-    } catch (error) {
-      core.warning(`Failed to set acknowledgment reaction: ${error.message}`);
-    }
-  }
-
-  await upsertComment(
-    octokit,
-    owner,
-    repo,
-    pullNumber,
-    `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
-    PROGRESS_MARKER,
-    { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
-  );
-
-  core.info(`Authorized command from collaborator: ${commenter.login}`);
-  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, {
-    commentId,
-    continuityState,
-    commenter,
-  });
-}
-
-async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo, zaiTimeout) {
-  const comment = context.payload.comment;
-  const commentBody = comment?.body || '';
-  const commentId = comment?.id;
-  
-  // Get PR number from pull_request in the payload
-  const pullNumber = context.payload.pull_request?.number;
-
-  if (!pullNumber) {
-    core.setFailed('No pull request number found in review comment event.');
-    return;
-  }
-
-  core.info(`Processing pull_request_review_comment on PR #${pullNumber}: ${commentBody.substring(0, 50)}...`);
-
-  // Parse the command from comment body
-  const parseResult = parseCommand(commentBody);
-
-  // If parsing failed, post safe guidance message
-  if (!isValid(parseResult)) {
-    const errorType = parseResult.error.type;
-    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
-
-    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-    await upsertComment(
-      octokit,
-      owner,
-      repo,
-      pullNumber,
-      guidance,
-      GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
-    );
-    core.info(`Posted guidance comment for error: ${errorType}`);
-
-    if (commentId) {
-      try {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      } catch (error) {
-        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
-      }
-    }
-    return;
-  }
-
-  // Valid command - check authorization before dispatching
-  core.info(`Valid command parsed: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
-
-  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-  const authState = await enforceCommandAuthorization(context, octokit, owner, repo, {
-    issueNumber: pullNumber,
-    pullNumber,
-    replyToId: commentId,
-    isReviewComment: true,
-  });
-  if (!authState.authorized) {
-    return;
-  }
-  const { commenter } = authState;
-
-  // Load continuity state
-  let continuityState = null;
-  try {
-    continuityState = await loadContinuityState(octokit, owner, repo, pullNumber);
-  } catch (error) {
-    core.warning(`Failed to load continuity state: ${error.message}`);
-  }
-
-  // Set acknowledgment reaction
-  if (commentId && parseResult.command !== 'ask') {
-    try {
-      await setReaction(octokit, owner, repo, commentId, REACTIONS.EYES);
-    } catch (error) {
-      core.warning(`Failed to set acknowledgment reaction: ${error.message}`);
-    }
-  }
-
-  // Post progress message
-  await upsertComment(
-    octokit,
-    owner,
-    repo,
-    pullNumber,
-    `🤖 Reviewing \`/zai ${parseResult.command}\`...\n\n${PROGRESS_MARKER}`,
-    PROGRESS_MARKER,
-    { replyToId: commentId, updateExisting: false, isReviewComment: true, pullNumber }
-  );
-
-  // Extract anchor metadata from review comment
-  const anchorMetadata = extractReviewCommentAnchor(context.payload);
-  
-  // Get base and head refs from PR
-  const baseRef = context.payload.pull_request?.base?.ref || null;
-  const headRef = context.payload.pull_request?.head?.ref || null;
-
-  core.info(`Authorized command from collaborator: ${commenter.login}`);
-  await dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, {
-    commentId,
-    continuityState,
-    commenter,
-    baseRef,
-    headRef,
-    isReviewComment: true,
-    eventName: 'pull_request_review_comment',
-    ...anchorMetadata,
-  });
-}
-
-async function dispatchCommand(context, parseResult, apiKey, model, owner, repo, zaiTimeout, options = {}) {
-  const { command, args } = parseResult;
-  const pullNumber = context.payload.issue?.number || context.payload.pull_request?.number;
-  const { 
-    commentId = null, 
-    continuityState = null, 
-    commenter = null,
-    baseRef = null,
-    headRef = null,
-    commentPath = null,
-    commentLine = null,
-    commentStartLine = null,
-    commentDiffHunk = null,
-    isReviewComment = false,
-    eventName = context.eventName || 'issue_comment',
-  } = options;
-
-  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
-
-  let responseMessage = '';
-  let terminalReaction = REACTIONS.ROCKET;
-
-  // Build handler context with required fields
-  const correlationId = generateCorrelationId();
-  const logger = createLogger(correlationId, { 
-    eventName,
-    prNumber: pullNumber,
-    command 
-  });
-
-  // Fetch changed files for handlers that need them
-  let changedFiles = [];
-  try {
-    changedFiles = await fetchChangedFiles(octokit, owner, repo, pullNumber);
-  } catch (error) {
-    logger.warn({ error: error.message }, 'Failed to fetch changed files');
-  }
-
-  // Build base handler context with normalized context inputs
-  const handlerContext = {
-    octokit,
-    owner,
-    repo,
-    issueNumber: pullNumber,
-    commentId,
-    changedFiles,
-    apiClient: createApiClient({ timeout: zaiTimeout }),
-    apiKey,
-    model,
-    logger,
-    maxChars: DEFAULT_MAX_CHARS,
-    continuityState,
-    // Normalized context inputs for explain handler
-    baseRef,
-    headRef,
-    commentPath,
-    commentLine,
-    commentStartLine,
-    commentDiffHunk,
-    isReviewComment,
-    pullNumber,
-  };
-
-  switch (command) {
-    case 'help':
-      responseMessage = `## Z.ai Help\n\nAvailable commands:\n- \`/zai ask <question>\` - Ask a question about the code\n- \`/zai review <path>\` - Request a code review for a specific file\n- \`/zai explain <lines>\` - Explain specific lines (e.g., 10-15)\n- \`/zai describe\` - Generate PR description from commits\n- \`/zai impact\` - Analyze the potential impact of changes\n- \`/zai help\` - Show this help message\n\n${COMMENT_MARKER}`;
-      break;
-
-    case 'review':
-      // Route to review handler with file path from args
-      logger.info({ args }, 'Dispatching to review handler');
-      
-      try {
-        const result = await reviewHandler.handleReviewCommand(handlerContext, args);
-        if (result.success) {
-          // Handler already posted the comment, no need to post again
-          logger.info({ success: true }, 'Review command completed');
-          return;
-        } else {
-          // Handler already posted error, log and return
-          logger.warn({ error: result.error }, 'Review command failed');
-          return;
-        }
-      } catch (error) {
-        logger.error({ error: error.message }, 'Review handler threw error');
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Code Review
-
-**Error:** Failed to complete review. Please try again later.
-
-${COMMENT_MARKER}`;
-      }
-      break;
-
-    case 'explain': {
-      // Route to explain handler with line range from args
-      logger.info({ args }, 'Dispatching to explain handler');
-      
-      let explainArgs = args;
-      if (explainArgs.length === 0 && Number.isInteger(commentLine)) {
-        const anchorStart = Number.isInteger(commentStartLine) ? commentStartLine : commentLine;
-        const start = Math.min(anchorStart, commentLine);
-        const end = Math.max(anchorStart, commentLine);
-        explainArgs = [`${start}-${end}`];
-        logger.info({ start, end, commentPath }, 'Inferred explain range from review-comment anchor');
-      }
-
-      if (explainArgs.length === 0) {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Help\n\nFor \`/zai explain\`, please specify a line range.\n\nUsage: \`/zai explain 10-15\` (lines 10 to 15)\n\nYou can also use: \`/zai explain 10:15\` or \`/zai explain 10..15\`\n\n${COMMENT_MARKER}`;
-        break;
-      }
-
-      // For explain, use anchor metadata if available (from review comment)
-      // Otherwise, try to get it from changed files
-      let filename = null;
-      let fileContent = null;
-
-      if (handlerContext.commentPath) {
-        // Use anchor metadata from review comment
-        filename = handlerContext.commentPath;
-        // Don't use first-changed-file patch - let handler fetch content based on path
-        fileContent = handlerContext.commentDiffHunk || null;
-      } else {
-        // Fall back to first changed file for issue_comment
-        const firstChangedFile = changedFiles.find(f => f.patch);
-        if (!firstChangedFile) {
-          terminalReaction = REACTIONS.X;
-          responseMessage = `## Z.ai Explanation
-
-No files with changes found in this PR to explain.
-
-${COMMENT_MARKER}`;
-          break;
-        }
-        filename = firstChangedFile.filename;
-        fileContent = firstChangedFile.patch || '';
-      }
-
-      // Add file-specific context for explain handler
-      const explainContext = {
-        ...handlerContext,
-        filename,
-        fileContent,
-      };
-
-      try {
-        const result = await explainHandler.handleExplainCommand(explainContext, explainArgs);
-        if (result.success) {
-          logger.info({ success: true }, 'Explain command completed');
-          return;
-        } else {
-          logger.warn({ error: result.error }, 'Explain command failed');
-          return;
-        }
-      } catch (error) {
-        logger.error({ error: error.message }, 'Explain handler threw error');
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Explanation
-
-**Error:** Failed to complete explanation. Please try again later.
-
-${COMMENT_MARKER}`;
-      }
-      break;
-    }
-    case 'describe': {
-      logger.info({ args }, 'Dispatching to describe handler');
-      
-      try {
-        const result = await handleDescribeCommand(handlerContext, args);
-        if (result.success) {
-          logger.info({ success: true }, 'Describe command completed');
-          return;  // Handler posts its own comment and reaction
-        } else {
-          logger.warn({ error: result.error }, 'Describe command failed');
-          return;
-        }
-      } catch (error) {
-        logger.error({ error: error.message }, 'Describe handler threw error');
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Describe\n\n**Error:** Failed to generate description. Please try again later.\n\n${COMMENT_MARKER}`;
-      }
-      break;
-    }
-
-    case 'ask': {
-      if (args.length === 0) {
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Ask\n\nPlease provide a question. Usage: \`/zai ask <question>\`\n\n${COMMENT_MARKER}`;
-        break;
-      }
-
-      try {
-        const normalizedAskContext = {
-          ...context,
-          payload: {
-            ...context.payload,
-            pull_request: {
-              number: pullNumber,
-              title: context.payload.issue?.title || context.payload.pull_request?.title || '',
-              body: context.payload.issue?.body || context.payload.pull_request?.body || '',
-            },
-          },
-        };
-
-        const askContext = {
-          octokit,
-          context: normalizedAskContext,
-          commenter,
-          args,
-          continuityState,
-          config: {
-            apiKey,
-            model,
-            timeout: 30000,
-            maxRetries: 3,
-          },
-          logger,
-        };
-
-        const result = await handleAskCommand(askContext);
-        if (result.success) {
-          logger.info({ success: true }, 'Ask command completed');
-          return;
-        }
-
-        if (!result.error) {
-          logger.info('Ask command silently blocked by fork policy');
-          return;
-        }
-
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Ask\n\n**Error:** ${result.error}\n\n${COMMENT_MARKER}`;
-      } catch (error) {
-        logger.error({ error: error.message }, 'Ask handler threw error');
-        terminalReaction = REACTIONS.X;
-        responseMessage = `## Z.ai Ask\n\n**Error:** Failed to complete request. Please try again later.\n\n${COMMENT_MARKER}`;
-      }
-      break;
-    }
-
-    case 'impact': {
-      const impactContext = {
-        octokit,
-        owner,
-        repo,
-        issueNumber: pullNumber,
-        commentId,
-        changedFiles,
-        apiClient: createApiClient({ timeout: zaiTimeout }),
-        apiKey,
-        model,
-        logger,
-        maxChars: DEFAULT_MAX_CHARS,
-        continuityState,
-        baseRef,
-        headRef,
-        pullNumber,
-      };
-
-      core.info('Processing impact command');
-
-      const result = await handleImpactCommand(impactContext, args);
-
-      // Impact handler manages its own comment posting via upsertComment
-      // So we return early and don't post a duplicate comment
-      if (result.success) {
-        terminalReaction = REACTIONS.ROCKET;
-      } else {
-        terminalReaction = REACTIONS.X;
-      }
-      return;
-    }
-
-    default:
-      responseMessage = GUIDANCE_MESSAGES.unknown_command;
-  }
-
-  // Post or update comment (only for cases that didn't return early)
-  if (!responseMessage) {
-    return;
-  }
-
-  const nextState = mergeState(continuityState, {
-    lastCommand: command,
-    lastArgs: args.join(' '),
-    lastUser: commenter?.login || 'unknown',
-    turnCount: (continuityState?.turnCount || 0) + 1,
-    updatedAt: new Date().toISOString(),
-  });
-  const responseWithState = createCommentWithState(responseMessage, nextState);
-
-  await upsertComment(
-    octokit,
-    owner,
-    repo,
-    pullNumber,
-    responseWithState,
-    COMMENT_MARKER,
-    {
-      replyToId: commentId,
-      updateExisting: false,
-      isReviewComment,
-      pullNumber,
-    }
-  );
-  core.info(`Posted response for command: ${command}`);
-
-  if (commentId) {
-    try {
-      await setReaction(octokit, owner, repo, commentId, terminalReaction);
-    } catch (error) {
-      core.warning(`Failed to set terminal reaction: ${error.message}`);
-    }
-  }
-}
-
-async function performReview(octokit, owner, repo, pullNumber, apiKey, model) {
-  core.info(`Fetching changed files for PR #${pullNumber}...`);
-  const files = await getChangedFiles(octokit, owner, repo, pullNumber);
-
-  if (!files.some(f => f.patch)) {
-    return `## Z.ai Code Review
-
-No patchable changes found.${COMMENT_MARKER}`;
-  }
-
-  const prompt = buildPrompt(files);
-
-  core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
-  const review = await callZaiApi(apiKey, model, prompt);
-
-  return `## Z.ai Code Review
-
-${review}
-
-${COMMENT_MARKER}`;
-}
-
-run().catch(err => core.setFailed(err.message));
-
-module.exports = __webpack_exports__;
+/******/ 	
+/******/ 	// startup
+/******/ 	// Load entry module and return exports
+/******/ 	// This entry module is referenced by other modules so it can't be inlined
+/******/ 	var __webpack_exports__ = __nccwpck_require__(5105);
+/******/ 	module.exports = __webpack_exports__;
+/******/ 	
 /******/ })()
 ;
