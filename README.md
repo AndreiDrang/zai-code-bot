@@ -1,5 +1,7 @@
 # Zai Code Bot
 
+[![codecov](https://codecov.io/gh/AndreiDrang/zai-code-bot/graph/badge.svg?token=OZYcalMMXv)](https://codecov.io/gh/AndreiDrang/zai-code-bot)
+
 GitHub Action for automatic PR reviews and context-rich `/zai` commands powered by Z.ai models.
 
 ## Features
