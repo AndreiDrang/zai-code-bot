@@ -353,7 +353,7 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiT
     replyToId: commentId,
     isReviewComment: false,
   });
-  if (!authState.authorized) {
+  if (!authState.authorized && !authState.silent) {
     return;
   }
   const { commenter } = authState;
@@ -447,7 +447,7 @@ async function handlePullRequestReviewCommentEvent(context, apiKey, model, owner
     replyToId: commentId,
     isReviewComment: true,
   });
-  if (!authState.authorized) {
+  if (!authState.authorized && !authState.silent) {
     return;
   }
   const { commenter } = authState;
