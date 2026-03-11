@@ -7,6 +7,7 @@
 const context = require('./context');
 const logging = require('./logging');
 const { extractEnclosingBlock } = require('./code-scope');
+const { fetchAllChangedFiles } = require('./changed-files');
 
 // Default size limits
 const DEFAULT_MAX_FILE_SIZE = 100000;
@@ -220,17 +221,11 @@ async function fetchPrFiles(octokit, owner, repo, pullNumber, options = {}) {
   const perPage = options.perPage || DEFAULT_PER_PAGE;
 
   try {
-    const { data } = await octokit.rest.pulls.listFiles({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      per_page: perPage,
-    });
-
-    const files = Array.isArray(data) ? data : [];
+    const result = await fetchAllChangedFiles(octokit, owner, repo, pullNumber, { perPage });
+    const files = Array.isArray(result.files) ? result.files : [];
     return { success: true, data: files };
   } catch (error) {
-    const { fallback, category } = mapErrorToFallback(error, `files for PR #${pullNumber}`);
+    const { fallback } = mapErrorToFallback(error, `files for PR #${pullNumber}`);
 
     // Log internal error details
     const internalLogger = logging.createLogger(logging.generateCorrelationId());
@@ -322,7 +317,7 @@ async function fetchFileAtRef(octokit, owner, repo, path, ref, options = {}) {
       scopeNote: scopedResult.note,
     };
   } catch (error) {
-    const { fallback, category } = mapErrorToFallback(error, path);
+    const { fallback } = mapErrorToFallback(error, path);
 
     // Log internal error details
     const internalLogger = logging.createLogger(logging.generateCorrelationId());
@@ -380,7 +375,7 @@ async function resolvePrRefs(octokit, owner, repo, pullNumber) {
       }
     };
   } catch (error) {
-    const { fallback, category } = mapErrorToFallback(error, `PR #${pullNumber} metadata`);
+    const { fallback } = mapErrorToFallback(error, `PR #${pullNumber} metadata`);
 
     // Log internal error details
     const internalLogger = logging.createLogger(logging.generateCorrelationId());

@@ -5,6 +5,7 @@
 
 const DEFAULT_MAX_CHARS = 8000;
 const TRUNCATION_MARKER = '...[truncated, N chars omitted]';
+const { fetchChangedFiles: fetchAllChangedFiles } = require('./changed-files');
 
 /**
  * Truncates content to maxChars with explicit truncation marker.
@@ -155,13 +156,7 @@ class ContextError extends Error {
  * @returns {Promise<Array>} Array of changed file objects
  */
 async function fetchChangedFiles(octokit, owner, repo, pullNumber) {
-  const { data: files } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    per_page: 100,
-  });
-  return files;
+  return fetchAllChangedFiles(octokit, owner, repo, pullNumber);
 }
 
 /**
