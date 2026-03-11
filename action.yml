@@ -20,6 +20,22 @@ inputs:
     description: "Z.ai API request timeout in milliseconds"
     required: false
     default: "30000"
+  ZAI_AUTO_REVIEW_LARGE_PR_FILE_THRESHOLD:
+    description: "Patchable file count that switches PR auto-review into batched mode"
+    required: false
+    default: "50"
+  ZAI_AUTO_REVIEW_MAX_BATCH_CHARS:
+    description: "Approximate character budget per batched PR auto-review request"
+    required: false
+    default: "120000"
+  ZAI_AUTO_REVIEW_MAX_FILES_PER_BATCH:
+    description: "Maximum distinct files included in each batched PR auto-review request"
+    required: false
+    default: "40"
+  ZAI_AUTO_REVIEW_MAX_PATCH_CHARS:
+    description: "Maximum diff characters per file chunk before splitting a large patch across review parts"
+    required: false
+    default: "18000"
 runs:
   using: "node20"
   main: "dist/index.js"

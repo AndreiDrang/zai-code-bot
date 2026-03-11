@@ -12,6 +12,7 @@ GitHub Action for automatic PR reviews and context-rich `/zai` commands powered 
 - Inline review-comment support (`pull_request_review_comment`) with file/line anchors
 - `/zai explain` auto-detects selected line range from review comments
 - Large-file token protection using scoped windows/enclosing blocks instead of full-file dumps
+- Large-PR auto-review batching with final synthesis for PRs that exceed single-request context limits
 - Prefix normalization: use either `/zai ...` or `@zai-bot ...`
 - Threaded command replies with progress feedback and lifecycle reactions
 - Marker-based idempotent comments to avoid duplicate review spam
@@ -60,6 +61,11 @@ jobs:
 | `ZAI_API_KEY` | Yes | - | Z.ai API key |
 | `ZAI_MODEL` | No | `glm-5` | Z.ai model for review and commands |
 | `GITHUB_TOKEN` | No | `${{ github.token }}` | Token used for GitHub API calls |
+| `ZAI_TIMEOUT` | No | `30000` | Z.ai API request timeout in milliseconds |
+| `ZAI_AUTO_REVIEW_LARGE_PR_FILE_THRESHOLD` | No | `50` | Patchable file count that switches PR auto-review into batched mode |
+| `ZAI_AUTO_REVIEW_MAX_BATCH_CHARS` | No | `120000` | Approximate character budget per batched PR auto-review request |
+| `ZAI_AUTO_REVIEW_MAX_FILES_PER_BATCH` | No | `40` | Maximum distinct files included in each batched PR auto-review request |
+| `ZAI_AUTO_REVIEW_MAX_PATCH_CHARS` | No | `18000` | Maximum diff characters per file chunk before a large patch is split across review parts |
 
 ## Commands
 
@@ -79,11 +85,13 @@ Commands are processed from PR issue comments and PR review comments. Supported 
 ## Behavior
 
 - PR auto-review comments are idempotent and updated via hidden markers
+- Large PRs are reviewed in multiple batches and then synthesized into one final review comment
 - Command replies are posted in-thread to the invoking comment
 - Reactions indicate status (`eyes`, `thinking`, `rocket`, `x`)
 - `/zai explain` can infer the target range from a selected line review comment when no explicit range is provided
 - `/zai review` uses base/head or full-file context, not patch-only prompts
 - Command execution is authorization-gated; fork PR authors can run commands on their own PR
+- If GitHub's changed-files API limit is reached, the final review notes that coverage is incomplete beyond the platform ceiling
 
 ## Setup
 
