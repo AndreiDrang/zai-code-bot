@@ -31250,25 +31250,42 @@ module.exports = {
 
 const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
-const https = __nccwpck_require__(5692);
+const https = __nccwpck_require__(4708);
 
 const { getEventType, shouldProcessEvent, extractReviewCommentAnchor } = __nccwpck_require__(2500);
 const { parseCommand, isValid } = __nccwpck_require__(5055);
 const { checkForkAuthorization, getUnauthorizedMessage, getCommenter } = __nccwpck_require__(6495);
+const {
+  DEFAULT_LARGE_PR_FILE_THRESHOLD,
+  DEFAULT_REVIEW_BATCH_CHARS,
+  DEFAULT_MAX_FILES_PER_BATCH,
+  DEFAULT_MAX_PATCH_CHARS,
+  buildCoverageNotes,
+  buildFallbackReview,
+  buildPrompt: buildBatchedReviewPrompt,
+  buildSynthesisPrompt,
+  createReviewBatches,
+  isContextLimitError,
+  isLargePr,
+} = __nccwpck_require__(4619);
+const {
+  fetchAllChangedFiles,
+  fetchChangedFiles: fetchChangedFilesPaginated,
+  MAX_PR_FILES_API_LIMIT,
+} = __nccwpck_require__(4723);
 const { handleAskCommand } = __nccwpck_require__(6630);
 const { handleDescribeCommand } = __nccwpck_require__(4334);
 const { handleImpactCommand } = __nccwpck_require__(7265);
 const reviewHandler = __nccwpck_require__(903);
 const explainHandler = __nccwpck_require__(1248);
 
-const { truncateContext, DEFAULT_MAX_CHARS, fetchChangedFiles } = __nccwpck_require__(9990);
+const { DEFAULT_MAX_CHARS, fetchChangedFiles } = __nccwpck_require__(9990);
 const { loadContinuityState, mergeState, createCommentWithState } = __nccwpck_require__(4575);
 const { REACTIONS, setReaction, upsertComment } = __nccwpck_require__(6819);
 const { createApiClient } = __nccwpck_require__(9729);
 const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
 const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
 const COMMENT_MARKER = '<!-- zai-code-review -->';
-const CONTINUITY_MARKER = '<!-- zai-continuity:';
 const PROGRESS_MARKER = '<!-- zai-progress -->';
 const GUIDANCE_MARKER = '<!-- zai-guidance -->';
 const AUTH_MARKER = '<!-- zai-auth -->';
@@ -31308,13 +31325,7 @@ ${COMMENT_MARKER}`,
 };
 
 async function getChangedFiles(octokit, owner, repo, pullNumber) {
-  const { data: files } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    per_page: 100,
-  });
-  return files;
+  return fetchChangedFilesPaginated(octokit, owner, repo, pullNumber);
 }
 
 function buildPrompt(files) {
@@ -31407,6 +31418,133 @@ You MUST format your response strictly using the Markdown structure below. If a 
   });
 }
 
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getReviewConfig(_core = core, overrides = {}) {
+  const input = (name, fallback) => {
+    const overrideValue = overrides[name];
+    if (overrideValue !== undefined && overrideValue !== null && overrideValue !== '') {
+      return overrideValue;
+    }
+
+    const inputValue = _core.getInput(name);
+    return inputValue || fallback;
+  };
+
+  return {
+    largePrFileThreshold: parsePositiveInteger(
+      input('ZAI_AUTO_REVIEW_LARGE_PR_FILE_THRESHOLD', String(DEFAULT_LARGE_PR_FILE_THRESHOLD)),
+      DEFAULT_LARGE_PR_FILE_THRESHOLD
+    ),
+    maxBatchChars: parsePositiveInteger(
+      input('ZAI_AUTO_REVIEW_MAX_BATCH_CHARS', String(DEFAULT_REVIEW_BATCH_CHARS)),
+      DEFAULT_REVIEW_BATCH_CHARS
+    ),
+    maxFilesPerBatch: parsePositiveInteger(
+      input('ZAI_AUTO_REVIEW_MAX_FILES_PER_BATCH', String(DEFAULT_MAX_FILES_PER_BATCH)),
+      DEFAULT_MAX_FILES_PER_BATCH
+    ),
+    maxPatchChars: parsePositiveInteger(
+      input('ZAI_AUTO_REVIEW_MAX_PATCH_CHARS', String(DEFAULT_MAX_PATCH_CHARS)),
+      DEFAULT_MAX_PATCH_CHARS
+    ),
+  };
+}
+
+async function executeReviewBatch(entries, state, deps = {}) {
+  const {
+    callZaiApi: _callZaiApi = callZaiApi,
+    buildPrompt: _buildPrompt = buildBatchedReviewPrompt,
+    core: _core = core,
+  } = deps;
+
+  const prompt = _buildPrompt(entries, {
+    batchNumber: state.batchNumber,
+    totalBatches: state.totalBatches,
+  });
+
+  try {
+    const review = await _callZaiApi(state.apiKey, state.model, prompt);
+    return [{
+      review,
+      coverage: {
+        batchNumber: state.batchNumber,
+        entryCount: entries.length,
+        fileCount: new Set(entries.map(entry => entry.filename)).size,
+      },
+    }];
+  } catch (error) {
+    if (!isContextLimitError(error) || entries.length === 0) {
+      throw error;
+    }
+
+    if (entries.length === 1) {
+      throw error;
+    }
+
+    const midpoint = Math.ceil(entries.length / 2);
+    _core.info(`Batch ${state.batchNumber}/${state.totalBatches} exceeded context budget, retrying as two smaller sub-batches.`);
+    const left = await executeReviewBatch(entries.slice(0, midpoint), state, deps);
+    const right = await executeReviewBatch(entries.slice(midpoint), state, deps);
+    return [...left, ...right];
+  }
+}
+
+async function runLargePrReview(files, state, deps = {}) {
+  const {
+    callZaiApi: _callZaiApi = callZaiApi,
+    createReviewBatches: _createReviewBatches = createReviewBatches,
+    buildSynthesisPrompt: _buildSynthesisPrompt = buildSynthesisPrompt,
+    buildFallbackReview: _buildFallbackReview = buildFallbackReview,
+    buildCoverageNotes: _buildCoverageNotes = buildCoverageNotes,
+    core: _core = core,
+  } = deps;
+
+  const { batches, metadata } = _createReviewBatches(files, state.reviewConfig);
+  const collectedReviews = [];
+
+  for (let index = 0; index < batches.length; index += 1) {
+    const batchNumber = index + 1;
+    const batchEntries = batches[index];
+    _core.info(`Reviewing large PR batch ${batchNumber}/${batches.length} with ${batchEntries.length} chunk(s).`);
+    const batchResults = await executeReviewBatch(batchEntries, {
+      apiKey: state.apiKey,
+      model: state.model,
+      batchNumber,
+      totalBatches: batches.length,
+    }, deps);
+    collectedReviews.push(...batchResults);
+  }
+
+  const reviewedFiles = new Set(files.filter(file => file.patch).map(file => file.filename)).size;
+  const synthesisMetadata = {
+    reviewedFiles,
+    totalBatches: collectedReviews.length,
+    splitFileCount: metadata.splitFileCount,
+    limitReached: state.limitReached,
+  };
+
+  const coverageNotes = _buildCoverageNotes(synthesisMetadata);
+  const synthesisPrompt = _buildSynthesisPrompt(collectedReviews, synthesisMetadata);
+
+  try {
+    const synthesizedReview = await _callZaiApi(state.apiKey, state.model, synthesisPrompt);
+    const coverageBlock = coverageNotes.map(note => `* ${note}`).join('\n');
+
+    if (synthesizedReview.includes('## Coverage Notes')) {
+      return `${synthesizedReview}\n${coverageBlock ? `\n${coverageBlock}` : ''}`;
+    }
+
+    return `${synthesizedReview}\n\n## Coverage Notes\n${coverageBlock}`;
+  } catch (error) {
+    _core.warning(`Final review synthesis failed, falling back to concatenated batch output: ${error.message}`);
+    return _buildFallbackReview(collectedReviews, synthesisMetadata);
+  }
+}
+
 async function enforceCommandAuthorization(context, octokit, owner, repo, options = {}, deps = {}) {
   const {
     issueNumber,
@@ -31463,6 +31601,7 @@ async function run() {
   const apiKey = core.getInput('ZAI_API_KEY', { required: true });
   const model = core.getInput('ZAI_MODEL') || 'glm-4.7';
   const zaiTimeout = parseInt(core.getInput('ZAI_TIMEOUT') || '30000', 10);
+  const reviewConfig = getReviewConfig(core);
 
   const { context } = github;
   const { owner, repo } = context.repo;
@@ -31479,7 +31618,7 @@ async function run() {
 
   // Route to appropriate handler
   if (eventType === 'pull_request') {
-    await handlePullRequestEvent(context, apiKey, model, owner, repo);
+    await handlePullRequestEvent(context, apiKey, model, owner, repo, { reviewConfig });
   } else if (eventType === 'issue_comment_pr') {
     await handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
   } else if (eventType === 'pull_request_review_comment') {
@@ -31495,6 +31634,9 @@ async function handlePullRequestEvent(context, apiKey, model, owner, repo, deps 
     buildPrompt: _buildPrompt = buildPrompt,
     callZaiApi: _callZaiApi = callZaiApi,
     COMMENT_MARKER: _MARKER = COMMENT_MARKER,
+    reviewConfig = getReviewConfig(_core),
+    fetchAllChangedFiles: _fetchAllChangedFiles = fetchAllChangedFiles,
+    runLargePrReview: _runLargePrReview = runLargePrReview,
   } = deps;
 
   const pullNumber = context.payload.pull_request?.number;
@@ -31508,17 +31650,46 @@ async function handlePullRequestEvent(context, apiKey, model, owner, repo, deps 
   const octokit = _github.getOctokit(token);
 
   _core.info(`Fetching changed files for PR #${pullNumber}...`);
-  const files = await _getChangedFiles(octokit, owner, repo, pullNumber);
+  let filesResult;
+  if (_fetchAllChangedFiles) {
+    const fetched = await _fetchAllChangedFiles(octokit, owner, repo, pullNumber);
+    filesResult = Array.isArray(fetched)
+      ? { files: fetched, limitReached: false }
+      : { files: fetched.files || [], limitReached: Boolean(fetched.limitReached) };
+  } else {
+    filesResult = { files: await _getChangedFiles(octokit, owner, repo, pullNumber), limitReached: false };
+  }
+  const files = filesResult.files;
 
   if (!files.some(f => f.patch)) {
     _core.info('No patchable changes found. Skipping review.');
     return { success: true, skipped: true, reason: 'No patchable changes' };
   }
 
-  const prompt = _buildPrompt(files);
+  const patchableFiles = files.filter(file => file.patch);
+  let review;
 
-  _core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
-  const review = await _callZaiApi(apiKey, model, prompt);
+  if (isLargePr(patchableFiles, reviewConfig)) {
+    _core.info(`Large PR detected (${patchableFiles.length} patchable file(s)); switching to batched review mode.`);
+    review = await _runLargePrReview(patchableFiles, {
+      apiKey,
+      model,
+      reviewConfig,
+      limitReached: Boolean(filesResult.limitReached),
+    }, {
+      callZaiApi: _callZaiApi,
+      core: _core,
+    });
+  } else {
+    const prompt = _buildPrompt(files);
+    _core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
+    review = await _callZaiApi(apiKey, model, prompt);
+  }
+
+  if (filesResult.limitReached) {
+    _core.warning(`GitHub changed-files API limit (${MAX_PR_FILES_API_LIMIT}) reached for PR #${pullNumber}. Review coverage may be incomplete beyond that platform limit.`);
+  }
+
   const body = `## Z.ai Code Review\n\n${review}\n\n${_MARKER}`;
 
   const { data: comments } = await octokit.rest.issues.listComments({
@@ -32074,32 +32245,12 @@ ${_COMMENT_MARKER}`;
   }
 }
 
-async function performReview(octokit, owner, repo, pullNumber, apiKey, model) {
-  core.info(`Fetching changed files for PR #${pullNumber}...`);
-  const files = await getChangedFiles(octokit, owner, repo, pullNumber);
-
-  if (!files.some(f => f.patch)) {
-    return `## Z.ai Code Review
-
-No patchable changes found.${COMMENT_MARKER}`;
-  }
-
-  const prompt = buildPrompt(files);
-
-  core.info(`Sending ${files.length} file(s) to Z.ai for review...`);
-  const review = await callZaiApi(apiKey, model, prompt);
-
-  return `## Z.ai Code Review
-
-${review}
-
-${COMMENT_MARKER}`;
-}
-
 // Export dispatchCommand for testing
 module.exports = {
   buildPrompt,
   getChangedFiles,
+  getReviewConfig,
+  runLargePrReview,
   enforceCommandAuthorization,
   handlePullRequestEvent,
   dispatchCommand,
@@ -32847,6 +32998,336 @@ module.exports = {
 
 /***/ }),
 
+/***/ 4619:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const {
+  MAX_PR_FILES_API_LIMIT,
+} = __nccwpck_require__(4723);
+
+const DEFAULT_LARGE_PR_FILE_THRESHOLD = 50;
+const DEFAULT_REVIEW_BATCH_CHARS = 120000;
+const DEFAULT_MAX_FILES_PER_BATCH = 40;
+const DEFAULT_MAX_PATCH_CHARS = 18000;
+const DEFAULT_SYNTHESIS_MAX_CHARS = 120000;
+
+const HIGH_RISK_PATTERNS = [
+  /(^|\/)(auth|security|permissions?|policy|policies)(\/|\.|$)/i,
+  /(^|\/)(api|server|backend|worker|workers|db|database|migration|migrations)(\/|\.|$)/i,
+  /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|action\.yml|dockerfile|docker-compose|\.github\/workflows\/)/i,
+  /\.(js|cjs|mjs|ts|tsx|jsx|py|go|rs|java|cs|sql|yml|yaml)$/i,
+];
+
+function getPatchLength(file) {
+  return typeof file?.patch === 'string' ? file.patch.length : 0;
+}
+
+function scoreFile(file) {
+  let score = 0;
+  const filename = file?.filename || '';
+  const patchLength = getPatchLength(file);
+
+  score += Math.min(40, Math.ceil(patchLength / 800));
+
+  if (file?.status === 'added' || file?.status === 'renamed') {
+    score += 8;
+  }
+
+  if (HIGH_RISK_PATTERNS.some(pattern => pattern.test(filename))) {
+    score += 24;
+  }
+
+  return score;
+}
+
+function compareByPriority(a, b) {
+  if (b.priority !== a.priority) {
+    return b.priority - a.priority;
+  }
+
+  if (b.patchLength !== a.patchLength) {
+    return b.patchLength - a.patchLength;
+  }
+
+  return a.filename.localeCompare(b.filename);
+}
+
+function splitTextByLines(text, maxChars) {
+  const source = typeof text === 'string' ? text : '';
+  if (!source || source.length <= maxChars) {
+    return [source];
+  }
+
+  const lines = source.split('\n');
+  const chunks = [];
+  let current = [];
+  let currentLength = 0;
+
+  for (const line of lines) {
+    const nextLength = currentLength + line.length + 1;
+    if (current.length > 0 && nextLength > maxChars) {
+      chunks.push(current.join('\n'));
+      current = [line];
+      currentLength = line.length;
+      continue;
+    }
+
+    if (line.length > maxChars) {
+      if (current.length > 0) {
+        chunks.push(current.join('\n'));
+        current = [];
+        currentLength = 0;
+      }
+
+      let offset = 0;
+      while (offset < line.length) {
+        chunks.push(line.slice(offset, offset + maxChars));
+        offset += maxChars;
+      }
+      continue;
+    }
+
+    current.push(line);
+    currentLength = nextLength;
+  }
+
+  if (current.length > 0) {
+    chunks.push(current.join('\n'));
+  }
+
+  return chunks.filter(Boolean);
+}
+
+function createReviewEntries(files, options = {}) {
+  const maxPatchChars = options.maxPatchChars || DEFAULT_MAX_PATCH_CHARS;
+
+  return (files || [])
+    .filter(file => typeof file?.patch === 'string' && file.patch.length > 0)
+    .flatMap((file) => {
+      const chunks = splitTextByLines(file.patch, maxPatchChars);
+      const priority = scoreFile(file);
+      const patchLength = getPatchLength(file);
+
+      return chunks.map((chunk, index) => ({
+        filename: file.filename,
+        status: file.status || 'modified',
+        patch: chunk,
+        chunkIndex: index + 1,
+        chunkCount: chunks.length,
+        priority,
+        patchLength,
+      }));
+    })
+    .sort(compareByPriority);
+}
+
+function formatEntry(entry) {
+  const chunkLabel = entry.chunkCount > 1
+    ? ` part="${entry.chunkIndex}/${entry.chunkCount}"`
+    : '';
+
+  return `<file name="${entry.filename}" status="${entry.status}"${chunkLabel}>\n<diff>\n${entry.patch}\n</diff>\n</file>`;
+}
+
+function createReviewBatches(files, options = {}) {
+  const maxBatchChars = options.maxBatchChars || DEFAULT_REVIEW_BATCH_CHARS;
+  const maxFilesPerBatch = options.maxFilesPerBatch || DEFAULT_MAX_FILES_PER_BATCH;
+  const entries = createReviewEntries(files, options);
+  const batches = [];
+  let currentEntries = [];
+  let currentChars = 0;
+  let currentFiles = new Set();
+
+  for (const entry of entries) {
+    const formatted = formatEntry(entry);
+    const nextDistinctFiles = currentFiles.has(entry.filename)
+      ? currentFiles.size
+      : currentFiles.size + 1;
+    const exceedsChars = currentEntries.length > 0 && currentChars + formatted.length > maxBatchChars;
+    const exceedsFiles = currentEntries.length > 0 && nextDistinctFiles > maxFilesPerBatch;
+
+    if (exceedsChars || exceedsFiles) {
+      batches.push(currentEntries);
+      currentEntries = [];
+      currentChars = 0;
+      currentFiles = new Set();
+    }
+
+    currentEntries.push(entry);
+    currentChars += formatted.length;
+    currentFiles.add(entry.filename);
+  }
+
+  if (currentEntries.length > 0) {
+    batches.push(currentEntries);
+  }
+
+  const splitFileCount = new Set(entries.filter(entry => entry.chunkCount > 1).map(entry => entry.filename)).size;
+
+  return {
+    entries,
+    batches,
+    metadata: {
+      totalPatchableFiles: (files || []).filter(file => typeof file?.patch === 'string' && file.patch.length > 0).length,
+      totalEntries: entries.length,
+      splitFileCount,
+      totalBatches: batches.length,
+    },
+  };
+}
+
+function buildPrompt(entries, options = {}) {
+  const batchNumber = options.batchNumber || 1;
+  const totalBatches = options.totalBatches || 1;
+  const totalFiles = new Set(entries.map(entry => entry.filename)).size;
+  const formattedFiles = entries.map(formatEntry).join('\n\n');
+
+  return `Please review the following Pull Request changes based on your system instructions.\n\nThis is batch ${batchNumber} of ${totalBatches}. Review all files in this batch thoroughly, but do not assume the rest of the PR is included here. Focus on concrete bugs, security issues, risky logic, and architecture mismatches visible in these diffs.\n\n<review_batch file_count="${totalFiles}" chunk_count="${entries.length}" batch_number="${batchNumber}" total_batches="${totalBatches}">\n${formattedFiles}\n</review_batch>`;
+}
+
+function buildSynthesisPrompt(batchReviews, metadata = {}, options = {}) {
+  const maxChars = options.maxChars || DEFAULT_SYNTHESIS_MAX_CHARS;
+  const sections = batchReviews.map((review, index) => {
+    const coverage = review.coverage || {};
+    const header = `## Batch ${index + 1}\nFiles: ${coverage.fileCount || 0}\nChunks: ${coverage.entryCount || 0}`;
+    return `${header}\n\n${review.review}`;
+  }).join('\n\n---\n\n');
+
+  const basePrompt = `You are consolidating partial code reviews from multiple batches of the same Pull Request into one final review.\n\nCoverage summary:\n- Patchable files reviewed: ${metadata.reviewedFiles || 0}\n- Review batches: ${metadata.totalBatches || batchReviews.length}\n- Split files: ${metadata.splitFileCount || 0}\n- GitHub PR file limit reached: ${metadata.limitReached ? 'yes' : 'no'}\n\nRequirements:\n1. Deduplicate overlapping findings from different batches.\n2. Preserve serious issues and concrete file references when available.\n3. Be explicit if coverage is incomplete because the GitHub API file listing limit was reached.\n4. Use the exact markdown structure below.\n\n**## Review Summary**\n[1-2 sentences]\n\n**## Critical Issues & Bugs**\n* [File Name]: [Issue]\n\n**## Suggestions & Best Practices**\n* [File Name]: [Suggestion]\n\n**## Coverage Notes**\n* [Coverage note]\n\n**## Final Assessment**\n* **Rating:** [Good|Normal|Very Bad]\n* **Reason:** [1-2 sentences]\n\nSource batch reviews:\n\n${sections}`;
+
+  if (basePrompt.length <= maxChars) {
+    return basePrompt;
+  }
+
+  return `${basePrompt.slice(0, maxChars)}\n\n...[truncated batch review synthesis input]`;
+}
+
+function buildCoverageNotes(metadata = {}) {
+  const notes = [];
+  notes.push(`Reviewed ${metadata.reviewedFiles || 0} patchable file(s) across ${metadata.totalBatches || 0} batch(es).`);
+
+  if (metadata.splitFileCount) {
+    notes.push(`${metadata.splitFileCount} large file(s) were split across multiple review chunks to stay within model limits.`);
+  }
+
+  if (metadata.limitReached) {
+    notes.push(`GitHub's changed-files API limit of ${MAX_PR_FILES_API_LIMIT} files was reached, so files beyond that platform limit could not be reviewed.`);
+  }
+
+  return notes;
+}
+
+function buildFallbackReview(batchReviews, metadata = {}) {
+  const coverageNotes = buildCoverageNotes(metadata)
+    .map(note => `* ${note}`)
+    .join('\n');
+  const sections = batchReviews.map((review, index) => `### Batch ${index + 1}\n\n${review.review}`).join('\n\n');
+
+  return `## Review Summary\nBatched auto-review completed for a large pull request. The review below merges batch-level findings when final synthesis is unavailable.\n\n## Critical Issues & Bugs\nNone detected.\n\n## Suggestions & Best Practices\nNone detected.\n\n## Coverage Notes\n${coverageNotes}\n\n## Final Assessment\n* **Rating:** Normal\n* **Reason:** The PR required batched review due to size. See per-batch findings below for detailed analysis.\n\n${sections}`;
+}
+
+function isLargePr(files, options = {}) {
+  const threshold = options.largePrFileThreshold || DEFAULT_LARGE_PR_FILE_THRESHOLD;
+  const patchableFiles = (files || []).filter(file => typeof file?.patch === 'string' && file.patch.length > 0);
+  return patchableFiles.length > threshold;
+}
+
+function isContextLimitError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('maximum context length')
+    || message.includes('input tokens exceeds')
+    || message.includes('code":413')
+    || message.includes('type":"413');
+}
+
+module.exports = {
+  DEFAULT_LARGE_PR_FILE_THRESHOLD,
+  DEFAULT_REVIEW_BATCH_CHARS,
+  DEFAULT_MAX_FILES_PER_BATCH,
+  DEFAULT_MAX_PATCH_CHARS,
+  DEFAULT_SYNTHESIS_MAX_CHARS,
+  buildCoverageNotes,
+  buildFallbackReview,
+  buildPrompt,
+  buildSynthesisPrompt,
+  compareByPriority,
+  createReviewBatches,
+  createReviewEntries,
+  formatEntry,
+  isContextLimitError,
+  isLargePr,
+  scoreFile,
+  splitTextByLines,
+};
+
+
+/***/ }),
+
+/***/ 4723:
+/***/ ((module) => {
+
+const DEFAULT_PER_PAGE = 100;
+const MAX_PR_FILES_API_LIMIT = 3000;
+
+async function fetchAllChangedFiles(octokit, owner, repo, pullNumber, options = {}) {
+  const perPage = options.perPage || DEFAULT_PER_PAGE;
+  const maxFiles = options.maxFiles || MAX_PR_FILES_API_LIMIT;
+  const files = [];
+  let page = 1;
+  let limitReached = false;
+
+  while (files.length < maxFiles) {
+    const remaining = maxFiles - files.length;
+    const currentPerPage = Math.min(perPage, remaining);
+    const { data } = await octokit.rest.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: currentPerPage,
+      page,
+    });
+
+    const batch = Array.isArray(data) ? data : [];
+    files.push(...batch);
+
+    if (batch.length < currentPerPage) {
+      return {
+        files,
+        pageCount: page,
+        limitReached,
+      };
+    }
+
+    if (files.length >= maxFiles) {
+      limitReached = true;
+      break;
+    }
+
+    page += 1;
+  }
+
+  return {
+    files,
+    pageCount: page,
+    limitReached,
+  };
+}
+
+async function fetchChangedFiles(octokit, owner, repo, pullNumber, options = {}) {
+  const result = await fetchAllChangedFiles(octokit, owner, repo, pullNumber, options);
+  return result.files;
+}
+
+module.exports = {
+  fetchAllChangedFiles,
+  fetchChangedFiles,
+  DEFAULT_PER_PAGE,
+  MAX_PR_FILES_API_LIMIT,
+};
+
+
+/***/ }),
+
 /***/ 7437:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -33482,7 +33963,7 @@ module.exports = {
 /***/ }),
 
 /***/ 9990:
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 /**
  * Context budget and truncation utilities for prompt construction.
@@ -33491,6 +33972,7 @@ module.exports = {
 
 const DEFAULT_MAX_CHARS = 8000;
 const TRUNCATION_MARKER = '...[truncated, N chars omitted]';
+const { fetchChangedFiles: fetchAllChangedFiles } = __nccwpck_require__(4723);
 
 /**
  * Truncates content to maxChars with explicit truncation marker.
@@ -33641,13 +34123,7 @@ class ContextError extends Error {
  * @returns {Promise<Array>} Array of changed file objects
  */
 async function fetchChangedFiles(octokit, owner, repo, pullNumber) {
-  const { data: files } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    per_page: 100,
-  });
-  return files;
+  return fetchAllChangedFiles(octokit, owner, repo, pullNumber);
 }
 
 /**
@@ -36125,6 +36601,7 @@ module.exports = {
 const context = __nccwpck_require__(9990);
 const logging = __nccwpck_require__(2120);
 const { extractEnclosingBlock } = __nccwpck_require__(7437);
+const { fetchAllChangedFiles } = __nccwpck_require__(4723);
 
 // Default size limits
 const DEFAULT_MAX_FILE_SIZE = 100000;
@@ -36338,17 +36815,11 @@ async function fetchPrFiles(octokit, owner, repo, pullNumber, options = {}) {
   const perPage = options.perPage || DEFAULT_PER_PAGE;
 
   try {
-    const { data } = await octokit.rest.pulls.listFiles({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      per_page: perPage,
-    });
-
-    const files = Array.isArray(data) ? data : [];
+    const result = await fetchAllChangedFiles(octokit, owner, repo, pullNumber, { perPage });
+    const files = Array.isArray(result.files) ? result.files : [];
     return { success: true, data: files };
   } catch (error) {
-    const { fallback, category } = mapErrorToFallback(error, `files for PR #${pullNumber}`);
+    const { fallback } = mapErrorToFallback(error, `files for PR #${pullNumber}`);
 
     // Log internal error details
     const internalLogger = logging.createLogger(logging.generateCorrelationId());
@@ -36440,7 +36911,7 @@ async function fetchFileAtRef(octokit, owner, repo, path, ref, options = {}) {
       scopeNote: scopedResult.note,
     };
   } catch (error) {
-    const { fallback, category } = mapErrorToFallback(error, path);
+    const { fallback } = mapErrorToFallback(error, path);
 
     // Log internal error details
     const internalLogger = logging.createLogger(logging.generateCorrelationId());
@@ -36498,7 +36969,7 @@ async function resolvePrRefs(octokit, owner, repo, pullNumber) {
       }
     };
   } catch (error) {
-    const { fallback, category } = mapErrorToFallback(error, `PR #${pullNumber} metadata`);
+    const { fallback } = mapErrorToFallback(error, `PR #${pullNumber} metadata`);
 
     // Log internal error details
     const internalLogger = logging.createLogger(logging.generateCorrelationId());
@@ -36699,6 +37170,14 @@ module.exports = require("node:http");
 
 "use strict";
 module.exports = require("node:http2");
+
+/***/ }),
+
+/***/ 4708:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:https");
 
 /***/ }),
 
