@@ -7,6 +7,8 @@ const {
   PROGRESS_MARKER, 
   AUTH_MARKER,
   getChangedFiles,
+  getReviewConfig,
+  runLargePrReview,
   enforceCommandAuthorization,
   handlePullRequestEvent,
   dispatchCommand
@@ -179,6 +181,62 @@ describe('index.js - getChangedFiles', () => {
     expect(capturedParams.repo).toBe('myrepo');
     expect(capturedParams.pull_number).toBe(42);
     expect(capturedParams.per_page).toBe(100);
+  });
+
+  test('paginates beyond first page', async () => {
+    const calls = [];
+    const mockOctokit = {
+      rest: {
+        pulls: {
+          listFiles: async (params) => {
+            calls.push(params.page);
+            if (params.page === 1) {
+              return { data: Array.from({ length: 100 }, (_, index) => ({ filename: `src/${index}.js`, patch: '+x' })) };
+            }
+
+            return { data: [{ filename: 'src/final.js', patch: '+done' }] };
+          }
+        }
+      }
+    };
+
+    const files = await getChangedFiles(mockOctokit, 'owner', 'repo', 1);
+
+    expect(calls).toEqual([1, 2]);
+    expect(files.length).toBe(101);
+    expect(files[100].filename).toBe('src/final.js');
+  });
+});
+
+describe('index.js - getReviewConfig', () => {
+  test('uses defaults when inputs are missing', () => {
+    const mockCore = { getInput: () => '' };
+
+    const config = getReviewConfig(mockCore);
+
+    expect(config.largePrFileThreshold).toBe(50);
+    expect(config.maxBatchChars).toBe(120000);
+    expect(config.maxFilesPerBatch).toBe(40);
+    expect(config.maxPatchChars).toBe(18000);
+  });
+
+  test('uses provided inputs when valid', () => {
+    const values = {
+      ZAI_AUTO_REVIEW_LARGE_PR_FILE_THRESHOLD: '75',
+      ZAI_AUTO_REVIEW_MAX_BATCH_CHARS: '90000',
+      ZAI_AUTO_REVIEW_MAX_FILES_PER_BATCH: '22',
+      ZAI_AUTO_REVIEW_MAX_PATCH_CHARS: '11000',
+    };
+    const mockCore = { getInput: (name) => values[name] || '' };
+
+    const config = getReviewConfig(mockCore);
+
+    expect(config).toEqual({
+      largePrFileThreshold: 75,
+      maxBatchChars: 90000,
+      maxFilesPerBatch: 22,
+      maxPatchChars: 11000,
+    });
   });
 });
 
@@ -354,12 +412,16 @@ describe('index.js - enforceCommandAuthorization', () => {
 });
 
 describe('index.js - handlePullRequestEvent', () => {
-  const createMockCore = () => ({ 
-    setFailed: () => {}, 
-    info: () => {},
-    warning: () => {},
-    getInput: () => 'mock-token'
-  });
+  const createMockCore = () => {
+    const messages = [];
+    return {
+      setFailed: (message) => { messages.push({ level: 'failed', message }); },
+      info: (message) => { messages.push({ level: 'info', message }); },
+      warning: (message) => { messages.push({ level: 'warning', message }); },
+      getInput: () => 'mock-token',
+      messages,
+    };
+  };
   
   const createMockOctokit = (overrides = {}) => ({
     rest: {
@@ -405,7 +467,7 @@ describe('index.js - handlePullRequestEvent', () => {
       { 
         core: mockCore, 
         github: mockGithub,
-        getChangedFiles: async () => [],
+        fetchAllChangedFiles: async () => ({ files: [], limitReached: false }),
       }
     );
 
@@ -438,7 +500,7 @@ describe('index.js - handlePullRequestEvent', () => {
       { 
         core: mockCore, 
         github: mockGithub,
-        getChangedFiles: async () => [{ filename: 'test.js', patch: '+x' }],
+        fetchAllChangedFiles: async () => ({ files: [{ filename: 'test.js', patch: '+x' }], limitReached: false }),
         buildPrompt: () => 'prompt',
         callZaiApi: async () => 'Great code!',
       }
@@ -474,7 +536,7 @@ describe('index.js - handlePullRequestEvent', () => {
       { 
         core: mockCore, 
         github: mockGithub,
-        getChangedFiles: async () => [{ filename: 'test.js', patch: '+x' }],
+        fetchAllChangedFiles: async () => ({ files: [{ filename: 'test.js', patch: '+x' }], limitReached: false }),
         buildPrompt: () => 'prompt',
         callZaiApi: async () => 'Updated review!',
       }
@@ -512,7 +574,7 @@ describe('index.js - handlePullRequestEvent', () => {
       { 
         core: mockCore, 
         github: mockGithub,
-        getChangedFiles: async () => [{ filename: 'test.js', patch: '+x' }],
+        fetchAllChangedFiles: async () => ({ files: [{ filename: 'test.js', patch: '+x' }], limitReached: false }),
         buildPrompt: () => 'prompt',
         callZaiApi: async () => 'Review!',
         COMMENT_MARKER: customMarker,
@@ -520,6 +582,120 @@ describe('index.js - handlePullRequestEvent', () => {
     );
 
     expect(capturedBody.includes(customMarker)).toBe(true);
+  });
+
+  test('uses batched review mode for large PRs and preserves aggregated output', async () => {
+    const mockContext = { payload: { pull_request: { number: 1 } } };
+    let capturedBody = null;
+    const mockCore = createMockCore();
+    const mockOctokit = createMockOctokit({
+      issues: {
+        listComments: async () => ({ data: [] }),
+        createComment: async (params) => {
+          capturedBody = params.body;
+          return { data: { id: 321 } };
+        },
+        updateComment: async () => {}
+      }
+    });
+    const mockGithub = { getOctokit: () => mockOctokit };
+    let largeReviewCalled = false;
+
+    const result = await handlePullRequestEvent(
+      mockContext,
+      'api-key',
+      'model',
+      'owner',
+      'repo',
+      {
+        core: mockCore,
+        github: mockGithub,
+        reviewConfig: { largePrFileThreshold: 1 },
+        fetchAllChangedFiles: async () => ({
+          files: [
+            { filename: 'a.js', patch: '+a' },
+            { filename: 'b.js', patch: '+b' },
+          ],
+          limitReached: true,
+        }),
+        runLargePrReview: async (files, state) => {
+          largeReviewCalled = true;
+          expect(files.length).toBe(2);
+          expect(state.limitReached).toBe(true);
+          return '## Review Summary\nLarge review';
+        },
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(largeReviewCalled).toBe(true);
+    expect(capturedBody.includes('## Review Summary')).toBe(true);
+    expect(mockCore.messages.some(entry => entry.level === 'warning' && entry.message.includes('3000'))).toBe(true);
+  });
+});
+
+describe('index.js - runLargePrReview', () => {
+  test('splits oversized batch on context-limit error and synthesizes final review', async () => {
+    const calls = [];
+    const files = [
+      { filename: 'a.js', patch: '+a' },
+      { filename: 'b.js', patch: '+b' },
+    ];
+
+    const review = await runLargePrReview(files, {
+      apiKey: 'api-key',
+      model: 'model',
+      reviewConfig: {},
+      limitReached: false,
+    }, {
+      core: { info: () => {}, warning: () => {} },
+      createReviewBatches: () => ({
+        batches: [[
+          { filename: 'a.js', patch: '+a', chunkIndex: 1, chunkCount: 1 },
+          { filename: 'b.js', patch: '+b', chunkIndex: 1, chunkCount: 1 },
+        ]],
+        metadata: { splitFileCount: 0 },
+      }),
+      callZaiApi: async (apiKey, model, prompt) => {
+        calls.push(prompt);
+        if (prompt.includes('<review_batch') && prompt.includes('a.js') && prompt.includes('b.js')) {
+          throw new Error('Z.ai API error 400: {"error":{"message":"Request input tokens exceeds the model\'s maximum context length","code":413}}');
+        }
+        if (prompt.includes('<review_batch')) {
+          return 'Batch review';
+        }
+        return '## Review Summary\nSynthesized review\n\n## Coverage Notes\n* Existing note';
+      },
+    });
+
+    expect(review.includes('Synthesized review')).toBe(true);
+    expect(calls.length).toBe(4);
+  });
+
+  test('falls back to concatenated batch output when synthesis fails', async () => {
+    const files = [{ filename: 'a.js', patch: '+a' }];
+
+    const review = await runLargePrReview(files, {
+      apiKey: 'api-key',
+      model: 'model',
+      reviewConfig: {},
+      limitReached: true,
+    }, {
+      core: { info: () => {}, warning: () => {} },
+      createReviewBatches: () => ({
+        batches: [[{ filename: 'a.js', patch: '+a', chunkIndex: 1, chunkCount: 1 }]],
+        metadata: { splitFileCount: 1 },
+      }),
+      callZaiApi: async (apiKey, model, prompt) => {
+        if (prompt.includes('<review_batch')) {
+          return 'Batch review content';
+        }
+        throw new Error('synthesis failed');
+      },
+    });
+
+    expect(review.includes('### Batch 1')).toBe(true);
+    expect(review.includes('3000 files')).toBe(true);
   });
 });
 
