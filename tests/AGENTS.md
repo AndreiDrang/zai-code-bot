@@ -23,7 +23,7 @@ tests/
 | PR auto-review behavior | `tests/integration/pr-auto-review.test.js` | Marker upsert and PR event lifecycle |
 
 ## CONVENTIONS
-- Use Node's built-in `node:test` style used throughout the repository.
+- Test framework: Vitest v3 (uses vitest globals: describe/test/expect).
 - Keep tests deterministic with explicit mock payloads and marker assertions.
 - Prefer scenario names that encode trigger + expected visible outcome.
 - When changing comment markers or command UX, update integration snapshots/assertions immediately.
@@ -34,5 +34,7 @@ tests/
 - Duplicating large fixtures inline when reusable fixtures already exist.
 
 ## NOTES
-- The default CI command is `node --test`.
+- Test command: `npm test` → `vitest run --coverage`.
+- Coverage uploaded to Codecov.
 - Integration tests are the safety net for command threading and marker idempotency.
+- Large test files: tests/index.test.js (1057 lines), tests/integration/command-pipeline.test.js (664 lines).

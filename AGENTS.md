@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-09T00:00:00Z
-**Commit:** b6742d8
+**Generated:** 2026-03-12T00:00:00Z
+**Commit:** HEAD
 **Branch:** main
 
 ## OVERVIEW
@@ -10,8 +10,10 @@ JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/z
 ## STRUCTURE
 ```text
 zai-code-bot/
-├── src/index.js                      # Runtime orchestration and event dispatch
+├── src/index.js                      # Runtime orchestration and event dispatch (1016 lines)
 ├── src/lib/                          # Commands/auth/context/comments/api/services
+├── src/lib/auto-review.js            # Large PR batching and synthesis
+├── src/lib/changed-files.js          # Paginated changed-files fetch (3000 file limit)
 ├── src/lib/handlers/                 # Command handlers (ask/review/explain/describe/impact/help)
 ├── tests/                            # Unit and integration coverage
 ├── dist/index.js                     # Generated ncc bundle executed by GitHub
@@ -29,6 +31,8 @@ zai-code-bot/
 | Authorization and fork policy | `src/lib/auth.js` | Collaborator checks and fork-safe behavior |
 | Comment/reaction behavior | `src/lib/comments.js` | Marker-based upsert, threaded reply (`replyToId`), reactions |
 | API retry/error handling | `src/lib/api.js`, `src/lib/logging.js` | Retry policy, categorized safe errors |
+| Large PR batching and synthesis | `src/lib/auto-review.js` | Batch creation, context limit handling, synthesis prompt |
+| Paginated changed-files fetch | `src/lib/changed-files.js` | Handles GitHub's 3000 file API limit |
 | Command-specific behavior | `src/lib/handlers/AGENTS.md` | Local guide for each handler module |
 | Test strategy and fixtures | `tests/AGENTS.md` | Test map and suite conventions |
 | Action runtime contract | `action.yml` | Node runtime + dist entrypoint |
@@ -40,13 +44,18 @@ zai-code-bot/
 | `run` | function | `src/index.js` | high | Top-level event gate + dispatcher |
 | `handlePullRequestEvent` | function | `src/index.js` | medium | PR auto-review flow |
 | `handleIssueCommentEvent` | function | `src/index.js` | high | Command parse/auth/progress/dispatch flow |
+| `handlePullRequestReviewCommentEvent` | function | `src/index.js` | high | Inline review comment command flow |
 | `dispatchCommand` | function | `src/index.js` | high | Handler selection and response management |
+| `enforceCommandAuthorization` | function | `src/index.js` | medium | Auth gate before command dispatch |
 | `parseCommand` | function | `src/lib/commands.js` | high | Command extraction and validation |
 | `checkForkAuthorization` | function | `src/lib/auth.js` | medium | Fork-aware security policy |
 | `buildHandlerContext` | function | `src/lib/context.js` | medium | Shared context for handlers |
 | `upsertComment` | function | `src/lib/comments.js` | high | Marker idempotency + threaded reply support |
 | `callWithRetry` | function | `src/lib/api.js` | medium | API retry/backoff wrapper |
 | `saveContinuityState` | function | `src/lib/continuity.js` | medium | Hidden state persistence across turns |
+| `createReviewBatches` | function | `src/lib/auto-review.js` | medium | Large PR file chunking |
+| `fetchAllChangedFiles` | function | `src/lib/changed-files.js` | medium | Paginated file list (3000 limit) |
+| `MAX_PR_FILES_API_LIMIT` | constant | `src/lib/changed-files.js` | low | GitHub API ceiling (3000) |
 
 ## CONVENTIONS
 - Edit maintained code in `src/`; do not hand-edit generated `dist/index.js`.
@@ -77,4 +86,6 @@ npm run build
 ## NOTES
 - CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit.
 - No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 6 command handlers: ask, review, explain, describe, impact, help.
+- 6 command handlers: ask (521 lines), review (218 lines), explain (355 lines), describe (129 lines), impact (336 lines), help (95 lines).
+- Test framework: Vitest v3 (not Jest). Command: `npm test` → `vitest run --coverage`.
+- Large files: src/index.js (1016 lines), src/lib/handlers/ask.js (521 lines).

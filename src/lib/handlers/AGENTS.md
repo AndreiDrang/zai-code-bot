@@ -4,15 +4,16 @@
 Command handlers implement `/zai` behavior only after parsing + authorization; each module owns prompt construction, API call wiring, and response formatting.
 
 ## WHERE TO LOOK
-| Command | File | Notes |
-|---------|------|-------|
-| `/zai ask` | `src/lib/handlers/ask.js` | Uses continuity state and broad PR context (511 lines) |
-| `/zai review <path>` | `src/lib/handlers/review.js` | Targeted diff review, file-in-PR validation |
-| `/zai explain <path>#Lx-Ly` | `src/lib/handlers/explain.js` | Range parsing + snippet extraction |
-| `/zai describe` | `src/lib/handlers/describe.js` | File/directory description |
-| `/zai impact` | `src/lib/handlers/impact.js` | Change impact analysis |
-| `/zai help` | `src/lib/handlers/help.js` | Static help output with auth gate |
-| Handler registry | `src/lib/handlers/index.js` | Dispatcher map consumed by runtime |
+| Command | File | Lines | Notes |
+|---------|------|-------|-------|
+| `/zai ask` | `src/lib/handlers/ask.js` | 521 | Uses continuity state and broad PR context |
+| `/zai review <path>` | `src/lib/handlers/review.js` | 218 | Targeted diff review, file-in-PR validation |
+| `/zai explain <path>#Lx-Ly` | `src/lib/handlers/explain.js` | 355 | Range parsing + snippet extraction |
+| `/zai describe` | `src/lib/handlers/describe.js` | 129 | File/directory description |
+| `/zai impact` | `src/lib/handlers/impact.js` | 336 | Change impact analysis |
+| `/zai help` | `src/lib/handlers/help.js` | 95 | Static help output with auth gate |
+| Handler registry | `src/lib/handlers/index.js` | - | Dispatcher map consumed by runtime |
+
 ## CONVENTIONS
 - Keep command argument parsing explicit and reject invalid formats early.
 - Always use threaded replies (`replyToId`) for command results.

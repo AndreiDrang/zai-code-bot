@@ -15,7 +15,10 @@ src/lib/
 ├── logging.js      # Categorized safe errors and logger wrappers
 ├── continuity.js   # Hidden marker state persistence
 ├── code-scope.js   # Token budget calculation for prompt sizing
+├── auto-review.js  # Large PR batching and synthesis
+├── changed-files.js # Paginated changed-files fetch (3000 limit)
 └── handlers/       # Command-specific logic (see child AGENTS)
+```
 
 ## WHERE TO LOOK
 | Task | File | Notes |
@@ -26,6 +29,8 @@ src/lib/
 | Change comment lifecycle | `src/lib/comments.js` | Preserve marker idempotency |
 | Modify API retry/failure policy | `src/lib/api.js` | Keep safe retry classification |
 | Update user-safe error mapping | `src/lib/logging.js` | Do not leak internals/secrets |
+| Large PR batching logic | `src/lib/auto-review.js` | Batch creation, synthesis prompts |
+| Paginated file fetching | `src/lib/changed-files.js` | GitHub API 3000 file limit |
 
 ## CONVENTIONS
 - Prefer pure helpers for parsing/validation and exported command-safe wrappers.
