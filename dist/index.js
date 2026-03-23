@@ -31731,35 +31731,42 @@ async function handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiT
   // Parse the command from comment body
   const parseResult = parseCommand(commentBody);
 
-  // If parsing failed, post safe guidance message
+  // If parsing failed, post safe guidance message only for actual command attempts
   if (!isValid(parseResult)) {
     const errorType = parseResult.error.type;
-    const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
 
-    const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
+    // Only respond if user tried to use a command but got it wrong
+    // SILENTLY IGNORE comments that don't try to use /zai at all (MALFORMED_INPUT)
+    if (errorType !== 'malformed_input') {
+      const guidance = GUIDANCE_MESSAGES[errorType] || GUIDANCE_MESSAGES.malformed_input;
 
-    if (!pullNumber) {
-      core.setFailed('No issue/PR number found.');
-      return;
-    }
+      const octokit = github.getOctokit(process.env.GITHUB_TOKEN || core.getInput('GITHUB_TOKEN'));
 
-    await upsertComment(
-      octokit,
-      owner,
-      repo,
-      pullNumber,
-      guidance,
-      GUIDANCE_MARKER,
-      { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
-    );
-    core.info(`Posted guidance comment for error: ${errorType}`);
-
-    if (commentId) {
-      try {
-        await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
-      } catch (error) {
-        core.warning(`Failed to set parse-failure reaction: ${error.message}`);
+      if (!pullNumber) {
+        core.setFailed('No issue/PR number found.');
+        return;
       }
+
+      await upsertComment(
+        octokit,
+        owner,
+        repo,
+        pullNumber,
+        guidance,
+        GUIDANCE_MARKER,
+        { replyToId: commentId, updateExisting: false, isReviewComment: false, pullNumber }
+      );
+      core.info(`Posted guidance comment for error: ${errorType}`);
+
+      if (commentId) {
+        try {
+          await setReaction(octokit, owner, repo, commentId, REACTIONS.X);
+        } catch (error) {
+          core.warning(`Failed to set parse-failure reaction: ${error.message}`);
+        }
+      }
+    } else {
+      core.info(`Ignoring comment without /zai command intent`);
     }
     return;
   }
