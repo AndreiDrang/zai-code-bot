@@ -1,5 +1,9 @@
 name: Zai Code Bot
 
+concurrency:
+  group: zai-bot-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
