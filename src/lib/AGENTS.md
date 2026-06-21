@@ -17,6 +17,7 @@ src/lib/
 ├── code-scope.js   # Token budget calculation for prompt sizing
 ├── auto-review.js  # Large PR batching and synthesis
 ├── changed-files.js # Paginated changed-files fetch (3000 limit)
+├── pr-context.js   # Shared PR context fetch (files, content at ref, refs)
 └── handlers/       # Command-specific logic (see child AGENTS)
 ```
 
@@ -31,6 +32,7 @@ src/lib/
 | Update user-safe error mapping | `src/lib/logging.js` | Do not leak internals/secrets |
 | Large PR batching logic | `src/lib/auto-review.js` | Batch creation, synthesis prompts |
 | Paginated file fetching | `src/lib/changed-files.js` | GitHub API 3000 file limit |
+| Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
 
 ## CONVENTIONS
 - Prefer pure helpers for parsing/validation and exported command-safe wrappers.

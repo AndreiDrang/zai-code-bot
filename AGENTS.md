@@ -10,10 +10,11 @@ JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/z
 ## STRUCTURE
 ```text
 zai-code-bot/
-├── src/index.js                      # Runtime orchestration and event dispatch (1016 lines)
+├── src/index.js                      # Runtime orchestration and event dispatch (1023 lines)
 ├── src/lib/                          # Commands/auth/context/comments/api/services
 ├── src/lib/auto-review.js            # Large PR batching and synthesis
 ├── src/lib/changed-files.js          # Paginated changed-files fetch (3000 file limit)
+├── src/lib/pr-context.js             # Shared PR context fetch (files, content at ref, refs)
 ├── src/lib/handlers/                 # Command handlers (ask/review/explain/describe/impact/help)
 ├── tests/                            # Unit and integration coverage
 ├── dist/index.js                     # Generated ncc bundle executed by GitHub
@@ -33,6 +34,7 @@ zai-code-bot/
 | API retry/error handling | `src/lib/api.js`, `src/lib/logging.js` | Retry policy, categorized safe errors |
 | Large PR batching and synthesis | `src/lib/auto-review.js` | Batch creation, context limit handling, synthesis prompt |
 | Paginated changed-files fetch | `src/lib/changed-files.js` | Handles GitHub's 3000 file API limit |
+| Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
 | Command-specific behavior | `src/lib/handlers/AGENTS.md` | Local guide for each handler module |
 | Test strategy and fixtures | `tests/AGENTS.md` | Test map and suite conventions |
 | Action runtime contract | `action.yml` | Node runtime + dist entrypoint |
@@ -55,6 +57,9 @@ zai-code-bot/
 | `saveContinuityState` | function | `src/lib/continuity.js` | medium | Hidden state persistence across turns |
 | `createReviewBatches` | function | `src/lib/auto-review.js` | medium | Large PR file chunking |
 | `fetchAllChangedFiles` | function | `src/lib/changed-files.js` | medium | Paginated file list (3000 limit) |
+| `fetchPrFiles` | function | `src/lib/pr-context.js` | medium | PR file list with size limits + fallbacks |
+| `fetchFileAtRef` | function | `src/lib/pr-context.js` | medium | File content at base/head ref, sliding-window scoping |
+| `resolvePrRefs` | function | `src/lib/pr-context.js` | low | Resolves base/head refs for diff context |
 | `MAX_PR_FILES_API_LIMIT` | constant | `src/lib/changed-files.js` | low | GitHub API ceiling (3000) |
 
 ## CONVENTIONS
@@ -79,13 +84,15 @@ zai-code-bot/
 ## COMMANDS
 ```bash
 npm install
-node --test
-npm run build
+npm test            # vitest run --coverage
+npm run build       # ncc build src/index.js -o dist --license licenses.txt
+npm audit --audit-level=moderate   # security audit gate (CI)
 ```
+After source changes: run `npm run build` and commit `dist/index.js` + `dist/licenses.txt` (CI fails on dist drift).
 
 ## NOTES
-- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit.
+- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
 - No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
 - 6 command handlers: ask (521 lines), review (218 lines), explain (355 lines), describe (129 lines), impact (336 lines), help (95 lines).
 - Test framework: Vitest v3 (not Jest). Command: `npm test` → `vitest run --coverage`.
-- Large files: src/index.js (1016 lines), src/lib/handlers/ask.js (521 lines).
+- Large files: src/index.js (1023 lines), src/lib/handlers/ask.js (521 lines), src/lib/pr-context.js (433 lines).
