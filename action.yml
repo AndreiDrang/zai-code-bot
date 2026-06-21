@@ -11,7 +11,7 @@ inputs:
   ZAI_MODEL:
     description: "Z.ai AI model"
     required: false
-    default: "glm-5"
+    default: "glm-5.2"
   GITHUB_TOKEN:
     description: "GitHub token for API access"
     required: false

@@ -59,7 +59,7 @@ jobs:
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `ZAI_API_KEY` | Yes | - | Z.ai API key |
-| `ZAI_MODEL` | No | `glm-5` | Z.ai model for review and commands |
+| `ZAI_MODEL` | No | `glm-5.2` | Z.ai model for review and commands |
 | `GITHUB_TOKEN` | No | `${{ github.token }}` | Token used for GitHub API calls |
 | `ZAI_TIMEOUT` | No | `30000` | Z.ai API request timeout in milliseconds |
 | `ZAI_AUTO_REVIEW_LARGE_PR_FILE_THRESHOLD` | No | `50` | Patchable file count that switches PR auto-review into batched mode |
