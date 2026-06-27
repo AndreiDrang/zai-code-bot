@@ -4,8 +4,10 @@
 # For this repository (zai-code-bot), this configures:
 # - Weekly AGENTS.md file updates from a Gist URL
 #
-# The Gist URL is configured via ZAI_AGENTS_GIST_URL environment variable
-# Set it in: Settings > Secrets > Actions > New repository secret
+# Gist URL Configuration (priority order):
+# 1. ZAI_AGENTS_GIST_URL environment variable (secrets/vars)
+# 2. gist_url in task config (below)
+# 3. gist_url in defaults (below) - currently set to AndreiDrang's gist
 
 version: 1
 
@@ -18,6 +20,10 @@ defaults:
   # Format: minute hour day-of-month month day-of-week
   # "0 0 * * 1" = every Monday at midnight UTC
   schedule: "0 0 * * 1"
+  
+  # Default Gist URL for AGENTS.md content
+  # Can be overridden via ZAI_AGENTS_GIST_URL environment variable
+  gist_url: https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw
 
 # Individual scheduled tasks
 tasks:
@@ -32,7 +38,7 @@ tasks:
       branch: main
       
       # Files to update with content from Gist
-      # The Gist URL is provided via ZAI_AGENTS_GIST_URL environment variable
+      # Gist URL source (priority): env var > task.gist_url > defaults.gist_url
       files:
         - AGENTS.md
         - src/lib/AGENTS.md
