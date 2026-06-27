@@ -982,7 +982,6 @@ ${_COMMENT_MARKER}`;
             command: 'update-agents',
             config: {
               branch: targetBranch,
-              gist_url: 'https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw',
               files: ['AGENTS.md'],
               pr_title: 'chore: update AGENTS.md files',
               pr_body: 'Manual update of AGENTS.md files from gist',
@@ -992,7 +991,6 @@ ${_COMMENT_MARKER}`;
           config: { 
             defaults: { 
               branch: targetBranch,
-              gist_url: 'https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw',
             },
           },
           logger,

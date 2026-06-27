@@ -20,6 +20,20 @@ const DEFAULTS = {
 };
 
 /**
+ * Get the Gist URL for AGENTS.md updates
+ * Checks in order: task config, defaults, environment variable
+ * @param {Object} taskConfig - Task configuration
+ * @param {Object} defaults - Default configuration
+ * @returns {string|null} - Gist URL or null
+ */
+function getGistUrl(taskConfig, defaults) {
+  return taskConfig?.gist_url 
+    || defaults?.gist_url 
+    || process.env.ZAI_AGENTS_GIST_URL 
+    || null;
+}
+
+/**
  * Load scheduled configuration from repository
  * @param {Object} octokit - GitHub Octokit instance
  * @param {string} owner - Repository owner
@@ -219,6 +233,7 @@ module.exports = {
   getTasksToRun,
   getTaskById,
   areScheduledTasksEnabled,
+  getGistUrl,
   // Export for testing
   validateDefaults,
   validateAndNormalizeTask,

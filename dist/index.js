@@ -32232,7 +32232,6 @@ ${_COMMENT_MARKER}`;
             command: 'update-agents',
             config: {
               branch: targetBranch,
-              gist_url: 'https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw',
               files: ['AGENTS.md'],
               pr_title: 'chore: update AGENTS.md files',
               pr_body: 'Manual update of AGENTS.md files from gist',
@@ -32242,7 +32241,6 @@ ${_COMMENT_MARKER}`;
           config: { 
             defaults: { 
               branch: targetBranch,
-              gist_url: 'https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw',
             },
           },
           logger,
@@ -34072,6 +34070,20 @@ const DEFAULTS = {
 };
 
 /**
+ * Get the Gist URL for AGENTS.md updates
+ * Checks in order: task config, defaults, environment variable
+ * @param {Object} taskConfig - Task configuration
+ * @param {Object} defaults - Default configuration
+ * @returns {string|null} - Gist URL or null
+ */
+function getGistUrl(taskConfig, defaults) {
+  return taskConfig?.gist_url 
+    || defaults?.gist_url 
+    || process.env.ZAI_AGENTS_GIST_URL 
+    || null;
+}
+
+/**
  * Load scheduled configuration from repository
  * @param {Object} octokit - GitHub Octokit instance
  * @param {string} owner - Repository owner
@@ -34271,6 +34283,7 @@ module.exports = {
   getTasksToRun,
   getTaskById,
   areScheduledTasksEnabled,
+  getGistUrl,
   // Export for testing
   validateDefaults,
   validateAndNormalizeTask,
@@ -36628,7 +36641,7 @@ module.exports = {
 
 const https = __nccwpck_require__(4708);
 const { parseCommand, isValid } = __nccwpck_require__(5055);
-const { loadScheduledConfig, getTasksToRun } = __nccwpck_require__(4658);
+const { loadScheduledConfig, getTasksToRun, getGistUrl } = __nccwpck_require__(4658);
 const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
 const core = __nccwpck_require__(7484);
 
@@ -36897,18 +36910,18 @@ async function handleUpdateAgentsTask(context) {
     createPullRequest 
   } = context;
   
-  const gistUrl = task.config?.gist_url || config.defaults?.gist_url;
+  const gistUrl = getGistUrl(task.config, config.defaults);
   const files = task.config?.files || ['AGENTS.md'];
   const prTitle = task.config?.pr_title || 'chore: update AGENTS.md files';
   const prBody = task.config?.pr_body || 'Automated weekly update of AGENTS.md files from gist';
   const commitMessage = task.config?.commit_message || 'docs: update AGENTS.md from scheduled task';
   
   if (!gistUrl) {
-    logger.error('No gist_url configured for update-agents task');
+    logger.error('No gist_url configured for update-agents task. Set ZAI_AGENTS_GIST_URL environment variable or configure in .zai-scheduled.yml');
     return { 
       success: false, 
       error: 'Missing gist_url configuration',
-      message: 'update-agents task requires gist_url in configuration'
+      message: 'update-agents task requires gist_url. Set ZAI_AGENTS_GIST_URL environment variable or configure in .zai-scheduled.yml'
     };
   }
   
@@ -37211,8 +37224,13 @@ async function updateFileInRepo(octokit, owner, repo, path, content, ref, commit
  * @returns {Promise<Object>} - PR creation result
  */
 async function createPR(octokit, owner, repo, { title, body, base, files, commitMessage }) {
-  const timestamp = Date.now();
-  const branchName = `zai-scheduled/${timestamp}`;
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const branchName = `zai-scheduled/${year}.${month}.${day}_${hours}.${minutes}`;
   
   logger.info(`Creating branch ${branchName} from ${base}`);
   

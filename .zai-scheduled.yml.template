@@ -24,6 +24,7 @@ defaults:
   
   # Default Gist URL for commands
   # This is used by update-agents task to fetch content
+  # Can also be set via ZAI_AGENTS_GIST_URL environment variable
   gist_url: https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw
 
 # Individual scheduled tasks
@@ -102,14 +103,16 @@ tasks:
 #           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
 #           ZAI_MODEL: ${{ vars.ZAI_MODEL }}
 #           ZAI_SCHEDULED_ENABLED: "true"
+#           ZAI_AGENTS_GIST_URL: ${{ vars.ZAI_AGENTS_GIST_URL }}  # Or use secrets.ZAI_AGENTS_GIST_URL
 #
 # ============================================================================
 # AVAILABLE COMMANDS
 # ============================================================================
 #
 # update-agents: Fetches content from a Gist URL and updates specified files
-#   Required config: gist_url, files
-#   Optional config: branch, pr_title, pr_body, commit_message
+#   Gist URL can be configured via: gist_url (config) or ZAI_AGENTS_GIST_URL (env var)
+#   Required config: files
+#   Optional config: branch, gist_url, pr_title, pr_body, commit_message
 #
 # ============================================================================
 # CRON SCHEDULE REFERENCE

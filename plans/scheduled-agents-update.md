@@ -46,6 +46,7 @@ version: 1
 defaults:
   branch: main
   schedule: "0 0 * * 0"  # Weekly on Sunday
+  # Gist URL can also be set via ZAI_AGENTS_GIST_URL environment variable
   gist_url: https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw
 
 tasks:
@@ -56,7 +57,7 @@ tasks:
     command: update-agents
     config:
       branch: main
-      gist_url: https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw
+      # gist_url is optional - will use defaults.gist_url or ZAI_AGENTS_GIST_URL env var
       files:
         - AGENTS.md
         - src/lib/AGENTS.md
@@ -92,6 +93,7 @@ jobs:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           ZAI_MODEL: ${{ vars.ZAI_MODEL }}
           ZAI_SCHEDULED_ENABLED: "true"
+          ZAI_AGENTS_GIST_URL: ${{ vars.ZAI_AGENTS_GIST_URL }}  # Or use secrets
 ```
 
 ---
@@ -286,16 +288,47 @@ tasks:
 
 ---
 
-## Questions for Clarification
+## Questions for Clarification (ANSWERED)
 
 1. **Gist Content**: Does the gist contain a `/zai` command or raw AGENTS.md content?
-   - Current assumption: Contains a `/zai` command to be parsed and executed
+   - ✅ **ANSWER**: Use gist raw file URL, configurable via ZAI_AGENTS_GIST_URL environment variable
 
 2. **PR Strategy**: Should each task create its own PR, or batch all changes?
-   - Current assumption: Each task creates its own PR
+   - ✅ **ANSWER**: Each task creates its own PR
 
 3. **Branch Management**: Clean up old scheduled task branches?
-   - Current assumption: No (can be added later)
+   - ✅ **ANSWER**: Create new branch each time with format `zai-scheduled/yyyy.mm.dd_hh.mm`
+
+4. **Fork Support**: Should scheduled tasks work on forks too?
+   - ✅ **ANSWER**: Yes, everywhere - uses fork's ZAI API key
+
+---
+
+## Implementation Notes
+
+### Gist URL Configuration Priority
+The Gist URL is resolved in the following order:
+1. Task-level `gist_url` in configuration
+2. Default `gist_url` in configuration
+3. `ZAI_AGENTS_GIST_URL` environment variable
+
+This allows maximum flexibility for different deployment scenarios.
+
+### Branch Naming Format
+Branches are created with the format: `zai-scheduled/yyyy.mm.dd_hh.mm`
+
+Example: `zai-scheduled/2026.06.27_14.30`
+
+This ensures:
+- Unique branch names for each execution
+- Human-readable timestamps
+- Easy identification and cleanup if needed
+
+### Fork Support
+The implementation uses the provided `apiKey` parameter, which means:
+- On forks, it uses the fork's ZAI_API_KEY
+- Each repository can have its own Gist URL
+- No hardcoded URLs in the implementation
 
 ---
 

@@ -44,6 +44,10 @@ inputs:
     description: "Path to scheduled tasks configuration file"
     required: false
     default: ".zai-scheduled.yml"
+  ZAI_AGENTS_GIST_URL:
+    description: "URL to raw gist file for AGENTS.md updates"
+    required: false
+    default: ""
 runs:
   using: "node20"
   main: "dist/index.js"

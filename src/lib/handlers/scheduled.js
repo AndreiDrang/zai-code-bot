@@ -7,7 +7,7 @@
 
 const https = require('node:https');
 const { parseCommand, isValid } = require('../commands');
-const { loadScheduledConfig, getTasksToRun } = require('../config/scheduled-config');
+const { loadScheduledConfig, getTasksToRun, getGistUrl } = require('../config/scheduled-config');
 const { createLogger, generateCorrelationId } = require('../logging');
 const core = require('@actions/core');
 
@@ -276,18 +276,18 @@ async function handleUpdateAgentsTask(context) {
     createPullRequest 
   } = context;
   
-  const gistUrl = task.config?.gist_url || config.defaults?.gist_url;
+  const gistUrl = getGistUrl(task.config, config.defaults);
   const files = task.config?.files || ['AGENTS.md'];
   const prTitle = task.config?.pr_title || 'chore: update AGENTS.md files';
   const prBody = task.config?.pr_body || 'Automated weekly update of AGENTS.md files from gist';
   const commitMessage = task.config?.commit_message || 'docs: update AGENTS.md from scheduled task';
   
   if (!gistUrl) {
-    logger.error('No gist_url configured for update-agents task');
+    logger.error('No gist_url configured for update-agents task. Set ZAI_AGENTS_GIST_URL environment variable or configure in .zai-scheduled.yml');
     return { 
       success: false, 
       error: 'Missing gist_url configuration',
-      message: 'update-agents task requires gist_url in configuration'
+      message: 'update-agents task requires gist_url. Set ZAI_AGENTS_GIST_URL environment variable or configure in .zai-scheduled.yml'
     };
   }
   
@@ -590,8 +590,13 @@ async function updateFileInRepo(octokit, owner, repo, path, content, ref, commit
  * @returns {Promise<Object>} - PR creation result
  */
 async function createPR(octokit, owner, repo, { title, body, base, files, commitMessage }) {
-  const timestamp = Date.now();
-  const branchName = `zai-scheduled/${timestamp}`;
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const branchName = `zai-scheduled/${year}.${month}.${day}_${hours}.${minutes}`;
   
   logger.info(`Creating branch ${branchName} from ${base}`);
   
