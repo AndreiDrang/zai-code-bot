@@ -318,20 +318,33 @@ async function handleUpdateAgentsTask(context) {
     
     logger.info(`Fetched ${gistContent.length} characters from gist`);
     
-    // Step 2: Try to parse as /zai command
-    const parseResult = parseCommand(gistContent);
+    // Step 2: Execute the command from Gist to generate AGENTS.md content
+    // The Gist contains a command (e.g., /init-agentsmd) that generates the content
     let generatedContent;
     
-    if (isValid(parseResult)) {
-      // It's a valid /zai command - we need to execute it
-      logger.info(`Parsed as /zai command: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
+    try {
+      // Try to execute the command to generate content
+      generatedContent = await executeCommandAndGetContent({
+        commandText: gistContent,
+        octokit,
+        apiKey,
+        model,
+        owner,
+        repo,
+        targetBranch,
+        logger,
+      });
       
-      // For now, we'll use the gist content directly as the AGENTS.md content
-      // In the future, we could actually execute the command
+      logger.info(`Generated ${generatedContent?.length || 0} characters of AGENTS.md content`);
+    } catch (error) {
+      logger.warn({ error: error.message }, 'Failed to execute command from Gist, falling back to raw content');
+      // Fallback: use the Gist content directly as AGENTS.md content
       generatedContent = gistContent;
-    } else {
-      // Not a valid /zai command - use the content directly as AGENTS.md
-      logger.info('Gist content is not a /zai command, using as raw AGENTS.md content');
+    }
+    
+    // If execution returned empty or same as input, use raw content
+    if (!generatedContent || generatedContent === gistContent) {
+      logger.info('Using Gist content directly as AGENTS.md content (command may not have executed)');
       generatedContent = gistContent;
     }
     
@@ -445,6 +458,191 @@ function buildPrBody(baseBody, updatedFiles, taskId) {
          `**Files Updated:**\n${filesList}\n\n` +
          `---\n` +
          `*Generated automatically by zai-code-bot scheduled task*`;
+}
+
+// ============================================================================
+// COMMAND EXECUTION
+// ============================================================================
+
+/**
+ * Execute a command text to generate content
+ * Sends the command to Z.ai API and returns the generated content
+ * @param {Object} params - Execution parameters
+ * @param {string} params.commandText - The command text to execute
+ * @param {Object} params.octokit - GitHub Octokit instance
+ * @param {string} params.apiKey - Z.ai API key
+ * @param {string} params.model - Z.ai model
+ * @param {string} params.owner - Repository owner
+ * @param {string} params.repo - Repository name
+ * @param {string} params.targetBranch - Target branch
+ * @param {Object} params.logger - Logger instance
+ * @returns {Promise<string>} - Generated content
+ */
+async function executeCommandAndGetContent(params) {
+  const { commandText, apiKey, model, owner, repo, targetBranch, logger } = params;
+  
+  // If command text is empty, return empty
+  if (!commandText || commandText.trim() === '') {
+    logger.warn('Command text is empty, cannot execute');
+    return commandText;
+  }
+  
+  try {
+    // Check if it's a valid /zai command
+    const parseResult = parseCommand(commandText);
+    
+    if (isValid(parseResult)) {
+      logger.info(`Executing /zai command: ${parseResult.command} with args: ${parseResult.args.join(' ')}`);
+      
+      // For /zai commands, we need to execute them through the dispatch system
+      // But since we're not in a PR context, we'll use the Z.ai API directly
+      const prompt = buildCommandPrompt(commandText, owner, repo, targetBranch);
+      
+      // Call Z.ai API to execute the command
+      const response = await callZaiApiWithRetry(apiKey, model, prompt, logger);
+      
+      if (response && response.content) {
+        return response.content;
+      }
+      
+      logger.warn('Z.ai API returned empty content');
+      return commandText;
+    } else {
+      // Not a /zai command - try to execute as a direct prompt
+      logger.info('Command is not a /zai command, sending as direct prompt to Z.ai API');
+      
+      // Build a prompt that tells Z.ai to generate AGENTS.md content
+      const prompt = buildAgentsGenerationPrompt(commandText, owner, repo);
+      
+      // Call Z.ai API
+      const response = await callZaiApiWithRetry(apiKey, model, prompt, logger);
+      
+      if (response && response.content) {
+        return response.content;
+      }
+      
+      logger.warn('Z.ai API returned empty content for direct prompt');
+      return commandText;
+    }
+  } catch (error) {
+    logger.error({ error: error.message }, 'Failed to execute command for content generation');
+    throw error;
+  }
+}
+
+/**
+ * Build prompt for executing a /zai command
+ * @param {string} commandText - The command text
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} branch - Target branch
+ * @returns {string} - Formatted prompt
+ */
+function buildCommandPrompt(commandText, owner, repo, branch) {
+  return `Repository: ${owner}/${repo}
+Branch: ${branch}
+
+Execute the following command:
+${commandText}
+
+Return only the generated content (AGENTS.md file content), without any explanation or formatting.`;
+}
+
+/**
+ * Build prompt for generating AGENTS.md from a direct prompt
+ * @param {string} promptText - The prompt/command text
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @returns {string} - Formatted prompt
+ */
+function buildAgentsGenerationPrompt(promptText, owner, repo) {
+  return `You are an AI assistant helping to generate AGENTS.md files for a repository.
+
+Repository: ${owner}/${repo}
+
+Task: Generate comprehensive AGENTS.md content based on the following instructions:
+
+${promptText}
+
+Return ONLY the generated AGENTS.md file content. Do not include any explanation, formatting notes, or markdown headers. Start directly with the content that should be written to the AGENTS.md file.`;
+}
+
+/**
+ * Call Z.ai API with retry logic
+ * @param {string} apiKey - Z.ai API key
+ * @param {string} model - Model to use
+ * @param {string} prompt - Prompt to send
+ * @param {Object} logger - Logger instance
+ * @param {number} retries - Number of retries (default: 3)
+ * @returns {Promise<Object>} - API response
+ */
+async function callZaiApiWithRetry(apiKey, model, prompt, logger, retries = 3) {
+  const https = require('node:https');
+  const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
+  
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const body = JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+      });
+      
+      const parsedUrl = new URL(ZAI_API_URL);
+      const options = {
+        hostname: parsedUrl.hostname,
+        path: parsedUrl.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+      
+      const response = await new Promise((resolve, reject) => {
+        const req = https.request(options, res => {
+          let data = '';
+          res.on('data', chunk => (data += chunk));
+          res.on('end', () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              try {
+                const parsed = JSON.parse(data);
+                resolve(parsed);
+              } catch (e) {
+                reject(new Error(`Failed to parse response: ${e.message}`));
+              }
+            } else {
+              reject(new Error(`API error ${res.statusCode}: ${data.substring(0, 200)}`));
+            }
+          });
+        });
+        
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+      });
+      
+      return {
+        content: response.choices?.[0]?.message?.content || '',
+        fullResponse: response,
+      };
+    } catch (error) {
+      logger.warn({ error: error.message, attempt }, `Z.ai API call failed, attempt ${attempt} of ${retries}`);
+      
+      if (attempt === retries) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
 }
 
 // ============================================================================

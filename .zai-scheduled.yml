@@ -2,12 +2,22 @@
 # This file configures automated tasks that run on a schedule.
 #
 # For this repository (zai-code-bot), this configures:
-# - Weekly AGENTS.md file updates from a Gist URL
+# - Weekly AGENTS.md file updates by executing a command from a Gist URL
+#
+# IMPORTANT: The Gist URL must contain a command that generates AGENTS.md content.
+# The bot will:
+# 1. Fetch the command text from the Gist
+# 2. Execute the command to generate AGENTS.md content
+# 3. Write the generated content to the target files listed below
 #
 # Gist URL Configuration (priority order):
 # 1. ZAI_AGENTS_GIST_URL environment variable (secrets/vars)
 # 2. gist_url in task config (below)
 # 3. gist_url in defaults (below) - currently set to AndreiDrang's gist
+#
+# The Gist at the default URL should contain a prompt-command like:
+#   /init-agentsmd
+#   or a complete command that generates the AGENTS.md tree
 
 version: 1
 
@@ -21,7 +31,8 @@ defaults:
   # "0 0 * * 1" = every Monday at midnight UTC
   schedule: "0 0 * * 1"
   
-  # Default Gist URL for AGENTS.md content
+  # Default Gist URL containing the command to generate AGENTS.md files
+  # The command in this Gist will be executed to generate the content
   # Can be overridden via ZAI_AGENTS_GIST_URL environment variable
   gist_url: https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw
 
