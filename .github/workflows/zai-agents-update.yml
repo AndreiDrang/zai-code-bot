@@ -5,8 +5,8 @@ name: Zai AGENTS.md Auto-Update
 
 on:
   schedule:
-    # Run every Monday at 00:00 UTC
-    - cron: "0 0 * * 1"
+    # Run “At 06:00.”  UTC
+    - cron: "0 6 * * *"
   workflow_dispatch:
     # Allow manual triggering from GitHub UI
     inputs:
