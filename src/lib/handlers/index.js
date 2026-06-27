@@ -4,6 +4,7 @@ const reviewHandler = require('./review');
 const explainHandler = require('./explain');
 const impactHandler = require('./impact');
 const describeHandler = require('./describe');
+const scheduledHandler = require('./scheduled');
 
 const HANDLERS = {
   ask: askHandler.handleAskCommand,
@@ -37,4 +38,5 @@ module.exports = {
   explain: explainHandler,
   impact: impactHandler,
   describe: describeHandler,
+  scheduled: scheduledHandler,
 };

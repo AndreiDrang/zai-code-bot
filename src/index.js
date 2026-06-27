@@ -28,6 +28,7 @@ const { handleDescribeCommand } = require('./lib/handlers/describe');
 const { handleImpactCommand } = require('./lib/handlers/impact');
 const reviewHandler = require('./lib/handlers/review.js');
 const explainHandler = require('./lib/handlers/explain.js');
+const { handleScheduledEvent } = require('./lib/handlers/scheduled.js');
 
 const { DEFAULT_MAX_CHARS, fetchChangedFiles } = require('./lib/context.js');
 const { loadContinuityState, mergeState, createCommentWithState } = require('./lib/continuity.js');
@@ -373,6 +374,8 @@ async function run() {
     await handleIssueCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
   } else if (eventType === 'pull_request_review_comment') {
     await handlePullRequestReviewCommentEvent(context, apiKey, model, owner, repo, zaiTimeout);
+  } else if (eventType === 'schedule') {
+    await handleScheduledEvent(context, apiKey, model, owner, repo);
   }
 }
 
@@ -697,6 +700,7 @@ async function dispatchCommand(context, parseResult, apiKey, model, owner, repo,
     createCommentWithState: _createCommentWithState = createCommentWithState,
     COMMENT_MARKER: _COMMENT_MARKER = COMMENT_MARKER,
     REACTIONS: _REACTIONS = REACTIONS,
+    handleUpdateAgentsCommand: _handleUpdateAgentsCommand = null,
   } = deps;
 
   const { command, args } = parseResult;
@@ -957,6 +961,76 @@ ${_COMMENT_MARKER}`;
         terminalReaction = REACTIONS.X;
       }
       return;
+    }
+
+    case 'update-agents': {
+      logger.info({ args }, 'Dispatching to update-agents handler');
+      
+      const octokit = _github.getOctokit(process.env.GITHUB_TOKEN || _core.getInput('GITHUB_TOKEN'));
+      const targetBranch = baseRef || headRef || 'main';
+      
+      try {
+        // Execute the update-agents task directly
+        const { handleUpdateAgentsTask, fetchFromUrl, fetchFileContent, createPR } = require('./lib/handlers/scheduled');
+        
+        const result = await handleUpdateAgentsTask({
+          octokit,
+          owner,
+          repo,
+          task: {
+            id: 'manual-update-agents',
+            command: 'update-agents',
+            config: {
+              branch: targetBranch,
+              gist_url: 'https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw',
+              files: ['AGENTS.md'],
+              pr_title: 'chore: update AGENTS.md files',
+              pr_body: 'Manual update of AGENTS.md files from gist',
+              commit_message: 'docs: update AGENTS.md from manual command',
+            },
+          },
+          config: { 
+            defaults: { 
+              branch: targetBranch,
+              gist_url: 'https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw',
+            },
+          },
+          logger,
+          targetBranch,
+          fetchFromUrl,
+          fetchFile: async (path, ref) => fetchFileContent(octokit, owner, repo, path, ref || targetBranch),
+          createPullRequest: createPR,
+        });
+        
+        if (result.success) {
+          if (result.prCreated) {
+            logger.info({ prNumber: result.prNumber, prUrl: result.prUrl }, 'Update agents command completed with PR');
+            return { success: true };
+          } else {
+            logger.info({ message: result.message }, 'Update agents command completed - no changes needed');
+            return { success: true };
+          }
+        } else {
+          logger.warn({ error: result.error }, 'Update agents command failed');
+          terminalReaction = _REACTIONS.X;
+          responseMessage = `## Z.ai Update AGENTS.md
+
+**Error:** ${result.error}
+
+${_COMMENT_MARKER}`;
+        }
+      } catch (error) {
+        logger.error({ error: error.message, stack: error.stack }, 'Update agents handler threw error');
+        terminalReaction = _REACTIONS.X;
+        responseMessage = `## Z.ai Update AGENTS.md
+
+**Error:** Failed to complete update. Please try again later.
+
+Details: ${error.message}
+
+${_COMMENT_MARKER}`;
+      }
+      break;
     }
 
     default:

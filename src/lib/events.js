@@ -30,7 +30,7 @@ function extractReviewCommentAnchor(payload) {
 /**
  * Determines the type of GitHub event from the context
  * @param {Object} context - GitHub actions context object
- * @returns {string} Event type: 'pull_request', 'issue_comment_pr', 'pull_request_review_comment', or 'issue_comment_non_pr'
+ * @returns {string} Event type: 'pull_request', 'issue_comment_pr', 'pull_request_review_comment', 'schedule', or 'issue_comment_non_pr'
  */
 function getEventType(context) {
   const eventName = context.eventName;
@@ -50,6 +50,11 @@ function getEventType(context) {
       return 'issue_comment_pr';
     }
     return 'issue_comment_non_pr';
+  }
+
+  // Handle schedule events (cron-triggered)
+  if (eventName === 'schedule') {
+    return 'schedule';
   }
 
   // Unknown event type - return as non-processable
@@ -103,6 +108,11 @@ function shouldProcessEvent(context) {
     }
 
     return { process: true, reason: 'pull_request_review_comment event' };
+  }
+
+  // Handle schedule events - always process (cron-triggered tasks)
+  if (eventType === 'schedule') {
+    return { process: true, reason: 'schedule event' };
   }
 
   // Handle non-PR issue comments - reject
