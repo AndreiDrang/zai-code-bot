@@ -2,190 +2,163 @@
 
 ## 1. High-Level Overview
 
-**zai-code-bot** is a JavaScript GitHub Action that performs automatic pull-request code review and serves collaborator-gated `/zai` (or `@zai-bot`) comment commands backed by Z.ai chat-completion models (`Observed`: `action.yml`, `src/index.js`, `README.md`). It runs inside GitHub Actions workflows on the Node 20 runtime (`Observed`: `action.yml` — `runs.using: node20`, `main: dist/index.js`) and reacts to three webhook event classes: `pull_request`, `issue_comment`, and `pull_request_review_comment` (`Observed`: `src/lib/events.js`, dispatch in `src/index.js`).
+This repository is a GitHub Action, not a long-running service (`Observed`: `action.yml` declares `using: "node20"` with `main: "dist/index.js"`). The packaged bundle is executed by the GitHub Actions runner in response to webhook events; there is no standalone server process (`Observed`: `package.json` has no `start` script, only `build` and `test`).
 
-Business purpose (`Observed`): (1) automatic code review when a PR is opened or synchronized, and (2) an interactive assistant exposing six commands — `ask`, `review`, `explain`, `describe`, `impact`, `help` (`Observed`: `src/lib/commands.js` `ALLOWED_COMMANDS`, `README.md` Features).
+Its purpose, as declared by inputs and command surface, is twofold (`Observed`: `action.yml` inputs, `README.md` "Commands" section):
 
-Paradigm (`Observed`): an event-driven action with a single orchestrator (`src/index.js`) that gates, parses, authorizes, and dispatches GitHub events to a set of command handlers under `src/lib/handlers/`. External dependencies are exactly two API surfaces: the GitHub REST API via `@actions/github` octokit, and the Z.ai chat completions endpoint (`Observed`: `src/lib/api.js`, the `ZAI_API_URL` constant in `src/index.js`).
+- Automatic pull-request code review driven by the Z.ai API.
+- Collaborator-gated `/zai` PR comment commands (`ask`, `review`, `explain`, `describe`, `impact`, `help`) plus a scheduled-task execution mode.
 
-Evidence anchors: `action.yml`, `package.json`, `src/index.js`, `src/lib/commands.js`, `src/lib/api.js`, `README.md`.
+The overarching paradigm is an **event-driven webhook processor**: GitHub webhook events enter through a single `run()` entrypoint, are classified by event type, and are dispatched into either an auto-review flow or a parse → authorize → handler command pipeline (`Observed`: `src/index.js` functions `run`, `handlePullRequestEvent`, `handleIssueCommentEvent`, `handlePullRequestReviewCommentEvent`, `dispatchCommand`).
 
----
+Evidence anchors: `action.yml`, `package.json`, `src/index.js`, `src/lib/`, `.github/workflows/ci.yml`, `README.md`.
 
 ## 2. System Architecture (Logical)
 
-Four logical layers, strictly one-directional top-down:
+Three logical layers, with strictly downward dependency direction:
 
+1. **Orchestration layer** — `src/index.js`. Owns the GitHub Actions runtime binding, event-type classification, and the high-level auto-review vs. command pipelines. The only module that reads `github.context` directly and wires handlers to the GitHub event loop.
+2. **Services layer** — `src/lib/*.js`. Cross-cutting, command-agnostic infrastructure: command parsing, authorization/fork policy, PR context fetching, comment lifecycle (markers + threading + reactions), API client with retry, logging/error categorization, continuity-state persistence, and prompt token budgeting.
+3. **Handler layer** — `src/lib/handlers/*.js`. Per-command logic (prompt construction, API call, response formatting). Registered in `src/lib/handlers/index.js` and selected by `dispatchCommand`.
+
+Dependency direction:
+
+```text
+GitHub Actions runtime
+        │
+        ▼
+ src/index.js  (orchestration)
+        │
+        ▼
+ src/lib/*.js  (services)
+        │
+        ▼
+ src/lib/handlers/*.js  (commands)
+        │
+        ▼
+ src/lib/api.js + src/lib/pr-context.js  (external I/O: Z.ai, GitHub)
 ```
-GitHub webhook events
-        │
-        ▼
-Event router / orchestrator   ── src/index.js
-  (run, handle*Event, dispatchCommand, enforceCommandAuthorization)
-        │
-        ▼
-Cross-cutting services        ── src/lib/*
-  events · commands · auth · comments · api · context · pr-context
-  changed-files · auto-review · continuity · code-scope · logging
-        │
-        ▼
-Command handlers              ── src/lib/handlers/*
-  ask · describe · explain · help · impact · review (+ index.js registry)
-        │
-        ▼
-External services
-  GitHub REST (octokit) · Z.ai chat completions (https://api.z.ai/...)
-```
 
-Component responsibilities (`Observed`):
-- **Orchestrator** (`src/index.js`): the only runtime entrypoint. Detects event type, filters bots, parses commands, enforces authorization, and dispatches to handlers. Owns the large-PR review batching pipeline (`runLargePrReview`, `executeReviewBatch`).
-- **Cross-cutting services** (`src/lib/*`): stateless utilities consumed by both the orchestrator and handlers. No service depends on a handler or on the orchestrator.
-- **Command handlers** (`src/lib/handlers/*`): one module per command, aggregated by `handlers/index.js`. Each handler builds a prompt, calls Z.ai through `api.js`, and posts results through `comments.js`.
-- **External services**: GitHub octokit for PR/file/comment reads and writes; Z.ai for model inference.
+Key boundaries:
 
-**Dependency direction**: `src/index.js` → `src/lib/*` → handlers → external APIs.
-
-**Intentional non-dependencies** (`Observed`): services never depend on handlers; handlers never import sibling handlers (only the `handlers/index.js` registry imports handlers); `dist/` is never required by any source file; test code imports only from `src/`, never from `dist/`.
-
----
+- **Generated vs. source boundary.** `dist/index.js` is the only artifact GitHub executes; `src/` is the maintained source. This is enforced by CI (`Observed`: `.github/workflows/ci.yml` `dist-drift` job fails on uncommitted `dist/` changes).
+- **Authorization precedes execution.** Command handlers must not run before collaborator/fork authorization. The dedicated gate `enforceCommandAuthorization` sits between parsing and dispatch (`Observed`: `src/index.js`; reinforced by `src/lib/auth.js`, `AGENTS.md` anti-patterns).
+- **Handlers do not own GitHub I/O directly.** They receive a shared context structure and call into service modules (`api.js`, `pr-context.js`, `comments.js`) rather than touching Octokit ad hoc (`Inferred` from `buildHandlerContext` in `src/lib/context.js` and handler signatures in `src/lib/handlers/AGENTS.md`).
+- **Not a server, not a library.** There is no HTTP listener and no published package entrypoint for programmatic consumption (`Observed`: `package.json` `main` points at `dist/index.js` for the Action runtime only).
 
 ## 3. Code Map (Physical)
 
 ```text
-zai-code-bot/
-├── action.yml                 # Action inputs + Node 20 runtime contract (entry: dist/index.js)
-├── package.json               # Deps (@actions/core, @actions/github); scripts build/test
+.
+├── action.yml                 # Action manifest: inputs + node20 entrypoint contract
 ├── src/
-│   ├── index.js               # Runtime orchestrator: run(), event handlers, dispatch, auth gate
+│   ├── index.js               # Runtime entrypoint: event routing + pipelines
 │   └── lib/
-│       ├── events.js          # getEventType / shouldProcessEvent (bot + action filtering)
-│       ├── commands.js        # ALLOWED_COMMANDS, parseCommand, isValid
-│       ├── auth.js            # Collaborator + fork-aware authorization
-│       ├── comments.js        # REACTIONS, upsertComment (marker + replyToId), setReaction
-│       ├── api.js             # createApiClient, callWithRetry, error sanitize/categorize
-│       ├── context.js         # truncateContext, DEFAULT_MAX_CHARS, buildHandlerContext
-│       ├── pr-context.js      # Shared PR fetch: fetchPrFiles, fetchFileAtRef, large-file scoping
-│       ├── changed-files.js   # Paginated fetchAllChangedFiles (MAX_PR_FILES_API_LIMIT = 3000)
-│       ├── auto-review.js     # createReviewBatches, isLargePr, batch + synthesis prompt builders
-│       ├── continuity.js      # Hidden-marker state persistence across comment turns
-│       ├── code-scope.js      # Sliding-window + enclosing-block extraction for large files
-│       ├── logging.js         # Structured logging + correlation IDs
-│       └── handlers/          # One module per command + index.js registry
-├── tests/                     # Vitest unit + integration (see tests/AGENTS.md)
-├── dist/                      # GENERATED ncc bundle — never hand-edit
-└── .github/workflows/ci.yml   # test (Node 20+22) · build · dist-drift · npm audit
+│       ├── commands.js        # `/zai` parser + command allowlist
+│       ├── auth.js            # Collaborator + fork authorization policy
+│       ├── context.js         # Shared handler context (files, ranges, truncation)
+│       ├── pr-context.js      # PR files, file-at-ref, base/head ref resolution
+│       ├── changed-files.js   # Paginated changed-files fetch (3000-file API ceiling)
+│       ├── comments.js        # Marker upsert, threaded replies, reactions
+│       ├── api.js             # Z.ai HTTP client + retry wrapper
+│       ├── logging.js         # Categorized safe errors / logger wrappers
+│       ├── continuity.js      # Hidden-marker state persistence across turns
+│       ├── code-scope.js      # Token/character budgeting for prompts
+│       ├── auto-review.js     # Large-PR batching + synthesis
+│       ├── events.js          # Event-type detection for routing
+│       ├── config/
+│       │   └── scheduled-config.js   # Parses `.zai-scheduled.yml` task config
+│       └── handlers/          # Per-command modules; see `src/lib/handlers/AGENTS.md`
+├── tests/                     # Vitest suite: unit + `tests/integration/` e2e pipelines
+├── dist/                      # Generated ncc bundle (CI executes dist/index.js)
+└── .github/workflows/
+    ├── ci.yml                 # test / build / dist-drift / security-audit gates
+    └── code-review.yml        # Consumer usage example (not runtime logic)
 ```
 
-**Where is X?**
-- Event routing / lifecycle → `src/index.js`
-- Command parsing + allowlist → `src/lib/commands.js`
-- Authorization (collaborator + fork policy) → `src/lib/auth.js`
-- Comment posting / threading / reactions → `src/lib/comments.js`
-- Z.ai HTTP client + retry → `src/lib/api.js`
-- Large-PR batching + synthesis → `src/lib/auto-review.js` (driven by `src/index.js:runLargePrReview`)
-- PR file/content fetching for handlers → `src/lib/pr-context.js`
-- Adding a command → new module in `src/lib/handlers/`, register in `src/lib/commands.js` `ALLOWED_COMMANDS` and in the dispatch path
-
----
+Omitted as non-architectural: `node_modules/`, coverage output, editor config, lockfiles.
 
 ## 4. Life of a Request / Primary Data Flow
 
-Two entry paths share the orchestrator and the external-service layer.
+The runtime is triggered once per webhook event by the Actions runner (`Observed`: `action.yml` `node20` runtime; `src/index.js` `run()`).
 
-### Path A — PR auto-review (`pull_request` opened / synchronize)
-
-```text
-GitHub: pull_request
-  └─ src/index.js:run()
-       ├─ events.js:shouldProcessEvent()          → drop bots / unsupported actions
-       └─ handlePullRequestEvent()
-            ├─ changed-files.js:fetchAllChangedFiles()   → file list (cap 3000)
-            ├─ auto-review.js:isLargePr()
-            │     ├─ no  → single review prompt
-            │     └─ yes → runLargePrReview()
-            │              ├─ auto-review.js:createReviewBatches()  (char/file/patch caps)
-            │              ├─ executeReviewBatch() per batch → api.js
-            │              └─ buildSynthesisPrompt() → api.js
-            ├─ api.js:createApiClient()…call()           → Z.ai chat completions
-            └─ comments.js:upsertComment(marker=COMMENT_MARKER)  → idempotent review comment
-```
-
-### Path B — comment command (`issue_comment` / `pull_request_review_comment`)
+**Command path** (issue comment or review comment):
 
 ```text
-GitHub: *comment containing /zai or @zai-bot
-  └─ src/index.js:run()
-       ├─ events.js:shouldProcessEvent()          → PR-only, drop bots
-       └─ handleIssueCommentEvent() / handlePullRequestReviewCommentEvent()
-            ├─ commands.js:parseCommand()         → { command, args } against ALLOWED_COMMANDS
-            ├─ enforceCommandAuthorization()
-            │     └─ auth.js:checkForkAuthorization()   (collaborator OR fork-PR creator)
-            ├─ comments.js:setReaction(THINKING)
-            ├─ dispatchCommand()                  → handler in src/lib/handlers/
-            │     ├─ pr-context.js / context.js   → bounded PR context (truncateContext)
-            │     ├─ api.js                       → Z.ai
-            │     └─ comments.js:upsertComment({ replyToId })  → threaded reply
-            └─ comments.js:setReaction(ROCKET | X)
+GitHub webhook event
+  → src/index.js: run()
+  → handleIssueCommentEvent | handlePullRequestReviewCommentEvent
+  → src/lib/commands.js: parseCommand          (extract + validate `/zai` command)
+  → src/index.js: enforceCommandAuthorization  (collaborator + fork gate via src/lib/auth.js)
+  → src/index.js: dispatchCommand (switch on command)
+  → src/lib/handlers/<cmd>.js                  (prompt build, context via src/lib/context.js + pr-context.js)
+  → src/lib/api.js: callWithRetry → Z.ai       (external LLM call)
+  → src/lib/comments.js: upsertComment         (marker-idempotent, threaded reply, reaction)
 ```
 
-Continuity across turns is carried by hidden markers in prior bot comments (`src/lib/continuity.js`), not by external storage (`Observed`).
+The handler dispatch `switch` over `command` lives in `src/index.js` (`Observed`: `case 'help'`, `'review'`, `'explain'`, `'describe'`, `'ask'`, `'impact'`, `'update-agents'`).
 
----
+**Auto-review path** (pull_request events):
+
+```text
+GitHub pull_request event
+  → handlePullRequestEvent
+  → src/lib/changed-files.js: fetchAllChangedFiles   (pagination, 3000-file ceiling)
+  → src/lib/auto-review.js: createReviewBatches       (large-PR chunking, token budgeting)
+  → executeReviewBatch → src/lib/api.js → Z.ai
+  → src/lib/comments.js: upsertComment                (marker create/update)
+```
+
+**Scheduled-task path**: enabled by the `ZAI_SCHEDULED_*` inputs (`Observed`: `action.yml`); configuration is loaded by `src/lib/config/scheduled-config.js` and executed by `src/lib/handlers/scheduled.js`. The precise scheduling trigger source is `Inferred` to be the Action's scheduled workflow invocation from `README.md`/`action.yml`, not a self-contained scheduler.
 
 ## 5. Architectural Invariants & Constraints
 
-- **Rule**: The generated bundle `dist/index.js` is the only artifact GitHub executes at runtime; source under `src/` is never loaded at runtime.
-  - **Rationale**: `action.yml` points `main` at `dist/index.js`; ncc bundles all dependencies into it.
-  - **Enforcement / Signals (Observed)**: `action.yml`; CI `dist-drift` job in `.github/workflows/ci.yml` fails if `dist/` diverges from a fresh `npm run build`.
+- **Rule:** The GitHub runtime executes `dist/index.js` only; all maintained logic lives in `src/`.
+  - **Rationale:** Single deployable artifact, auditable source-of-truth.
+  - **Enforcement / Signals (Observed):** `action.yml` `main: "dist/index.js"`; `.github/workflows/ci.yml` `dist-drift` job fails on uncommitted `dist/` changes.
 
-- **Rule**: Every source change must be shipped together with a rebuilt `dist/`.
-  - **Rationale**: Otherwise the Action runs stale logic.
-  - **Enforcement / Signals (Observed)**: CI `dist-drift` gate; `npm run build` script in `package.json`.
+- **Rule:** Source changes must be rebuilt (`npm run build`) and `dist/index.js` + `dist/licenses.txt` committed together.
+  - **Rationale:** CI executes the bundle, not the source tree.
+  - **Enforcement / Signals (Observed):** `package.json` `build` script; `ci.yml` dist-drift gate.
 
-- **Rule**: Command handlers must run only after authorization succeeds.
-  - **Rationale**: Prevents unauthorized users from consuming Z.ai quota or injecting prompts.
-  - **Enforcement / Signals (Observed)**: `enforceCommandAuthorization()` calls `auth.js:checkForkAuthorization()` before `dispatchCommand()` in both comment handlers in `src/index.js`.
+- **Rule:** Command handlers run only after `enforceCommandAuthorization` succeeds (collaborator status + fork policy).
+  - **Rationale:** Prevents unauthorized or fork-secret-leaking execution.
+  - **Enforcement / Signals (Observed):** dedicated function in `src/index.js`; `src/lib/auth.js`; `AGENTS.md` anti-patterns.
 
-- **Rule**: Commands are restricted to `ALLOWED_COMMANDS`; unknown input returns help, never execution.
-  - **Rationale**: Predictable, bounded command surface.
-  - **Enforcement / Signals (Observed)**: allowlist + `parseCommand`/`isValid` in `src/lib/commands.js`.
+- **Rule:** Command execution is scoped to PR contexts — issue comments on non-PR issues must not dispatch handlers.
+  - **Rationale:** Commands are PR-contextual (`review`, `explain`, etc.).
+  - **Enforcement / Signals (Observed):** `handleIssueCommentEvent` uses `issue?.number` and PR presence checks.
 
-- **Rule**: All bot comments are idempotent via a unique HTML marker, and command replies are threaded to the invoking comment.
-  - **Rationale**: Prevents duplicate review spam; keeps command replies contextual.
-  - **Enforcement / Signals (Observed)**: marker constants (`COMMENT_MARKER`, `PROGRESS_MARKER`, `GUIDANCE_MARKER`, `AUTH_MARKER`) in `src/index.js`; `upsertComment(..., marker, { replyToId })` in `src/lib/comments.js`.
+- **Rule:** Handlers must not pass unbounded diffs/patches into prompts; sizing is bounded via `src/lib/code-scope.js` and `src/lib/context.js`.
+  - **Rationale:** Deterministic token budgets and prompt safety.
+  - **Enforcement / Signals (Observed + Inferred):** `code-scope.js`, `auto-review.js` batching; `AGENTS.md` anti-patterns.
 
-- **Rule**: Prompt context is always bounded — never pass unbounded file content to the model.
-  - **Rationale**: Avoids token overflow and API failures on large files and PRs.
-  - **Enforcement / Signals (Observed)**: `context.js:truncateContext` (`DEFAULT_MAX_CHARS = 8000`), `code-scope.js` windowing, `pr-context.js` large-file scoping, `auto-review.js` batch/char/patch caps plus the synthesis path, `changed-files.js` 3000-file API cap.
+- **Rule:** Automated comments are idempotent and threaded via marker constants and `replyToId`.
+  - **Rationale:** Avoids duplicate spam; ties responses to the invoking comment.
+  - **Enforcement / Signals (Observed):** `src/lib/comments.js` `upsertComment`; marker assertions in `tests/integration/`.
 
-- **Rule**: Errors surfaced to users must be sanitized; raw stack traces and secrets must never reach PR comments.
-  - **Rationale**: Comments are public; `ZAI_API_KEY` is a secret.
-  - **Enforcement / Signals (Observed)**: `sanitizeErrorMessage`, `categorizeError`, and `callWithRetry` in `src/lib/api.js`.
+- **Rule:** No raw exception internals or secrets are surfaced in PR comments.
+  - **Rationale:** User-safe failure reporting.
+  - **Enforcement / Signals (Observed + Inferred):** `src/lib/logging.js` categorized safe errors; handler conventions in `AGENTS.md`.
 
-- **Rule**: The bot must never process its own comments as commands.
-  - **Rationale**: Prevents feedback loops.
-  - **Enforcement / Signals (Observed)**: bot filtering in `events.js:shouldProcessEvent()`; marker-tagged comment bodies.
+- **Rule:** The services layer (`src/lib/*.js`) stays policy-centric; orchestration stays in `src/index.js`; command-specific logic stays in `src/lib/handlers/`.
+  - **Rationale:** Layered separation of concerns.
+  - **Enforcement / Signals (Observed + Inferred):** layout convention documented in `src/lib/AGENTS.md`; not machine-enforced.
 
-- **Rule**: Dependency direction is strictly orchestrator → services → handlers → externals; no back-edges.
-  - **Rationale**: Keeps the handler set swappable and services reusable.
-  - **Enforcement / Signals (Observed)**: require graph in `src/` — no handler imports a sibling handler or a service that imports a handler; `handlers/index.js` is the only module that imports handlers.
-
-- **Rule**: No linter/formatter configuration is present; correctness is enforced by tests and CI gates, not style tooling.
-  - **Rationale**: Repository convention.
-  - **Enforcement / Signals (Observed)**: absence of ESLint/Prettier configs; `npm test` (Vitest) and `npm audit --audit-level=moderate` in `.github/workflows/ci.yml`.
-
----
+- **Rule:** External I/O (Z.ai, GitHub) is funneled through `src/lib/api.js` and `src/lib/pr-context.js` rather than ad-hoc calls in handlers.
+  - **Rationale:** Centralized retry, size limits, and user-safe fallbacks.
+  - **Enforcement / Signals (Inferred):** handler signatures and shared-context pattern; documented in `src/lib/handlers/AGENTS.md`.
 
 ## 6. Documentation Strategy
 
-This `ARCHITECTURE.md` is the **global map + invariants** document: it describes the whole system's shape, boundaries, primary flows, and the rules every change must preserve. It intentionally avoids per-module implementation detail.
+`ARCHITECTURE.md` (this file) is the global map and invariant catalog: it describes layers, dependency direction, entrypoints, and hard rules that span the whole repository.
 
-Local, finer-grained guidance lives in the `AGENTS.md` tree, which complements this file:
-- `AGENTS.md` (root) — repo-wide contributor knowledge base.
-- `src/lib/AGENTS.md` — service-module map and conventions.
-- `src/lib/handlers/AGENTS.md` — per-handler responsibilities and change rules.
-- `tests/AGENTS.md` and `tests/integration/AGENTS.md` — test layout and conventions.
+Local, subtree-specific detail lives in the existing `AGENTS.md` tree:
 
-Operational and contributor docs by path (no links): `README.md` (user-facing usage and features), `RUNBOOK.md` (operations), `CONTRIBUTING.md` (contribution guide), `SECURITY.md` (security policy).
+- `AGENTS.md` — repository overview, code map, build/test commands, gotchas.
+- `src/lib/AGENTS.md` — services-layer module guide.
+- `src/lib/handlers/AGENTS.md` — per-command handler guide.
+- `tests/AGENTS.md` — test strategy and suite layout.
+- `tests/integration/AGENTS.md` — end-to-end pipeline test guide.
 
-What belongs where: global structural facts, boundaries, entrypoints, and invariants belong here; module-level "how this file works", local gotchas, and test conventions belong in the nearest `AGENTS.md`. When code and docs disagree, prefer observable code/config and update the docs.
+Global architecture concerns (boundaries, data flow, invariants) belong here. Local concerns (which function implements which command, which test covers which scenario, local conventions) belong in the corresponding `AGENTS.md`. `README.md` documents user-facing inputs, commands, and consumer usage; `.github/workflows/code-review.yml` is a consumer example, not runtime logic.
