@@ -1,8 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-12T00:00:00Z
-**Commit:** HEAD
+**Generated:** 2026-06-27T00:00:00Z
 **Branch:** main
+**Refresh:** reconciled line counts, added `scheduled` handler + `config/` + `code-scope.js`
 
 ## OVERVIEW
 JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/zai` PR comment commands. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
@@ -10,12 +10,14 @@ JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/z
 ## STRUCTURE
 ```text
 zai-code-bot/
-├── src/index.js                      # Runtime orchestration and event dispatch (1023 lines)
+├── src/index.js                      # Runtime orchestration and event dispatch (~1095 lines)
 ├── src/lib/                          # Commands/auth/context/comments/api/services
 ├── src/lib/auto-review.js            # Large PR batching and synthesis
 ├── src/lib/changed-files.js          # Paginated changed-files fetch (3000 file limit)
 ├── src/lib/pr-context.js             # Shared PR context fetch (files, content at ref, refs)
-├── src/lib/handlers/                 # Command handlers (ask/review/explain/describe/impact/help)
+├── src/lib/code-scope.js             # Token-budget calculation for prompt sizing
+├── src/lib/config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
+├── src/lib/handlers/                 # Command handlers (ask/review/explain/describe/impact/help/scheduled)
 ├── tests/                            # Unit and integration coverage
 ├── dist/index.js                     # Generated ncc bundle executed by GitHub
 ├── dist/licenses.txt                 # Generated third-party licenses
@@ -61,6 +63,10 @@ zai-code-bot/
 | `fetchFileAtRef` | function | `src/lib/pr-context.js` | medium | File content at base/head ref, sliding-window scoping |
 | `resolvePrRefs` | function | `src/lib/pr-context.js` | low | Resolves base/head refs for diff context |
 | `MAX_PR_FILES_API_LIMIT` | constant | `src/lib/changed-files.js` | low | GitHub API ceiling (3000) |
+| `calculateTokenBudget` | function | `src/lib/code-scope.js` | medium | Token/char budget sizing for prompts |
+| `detectEventType` | function | `src/lib/events.js` | low | Event-type detection for routing |
+| `loadScheduledConfig` | function | `src/lib/config/scheduled-config.js` | low | Parses `.zai-scheduled.yml` task config |
+| `handleScheduledCommand` | function | `src/lib/handlers/scheduled.js` | medium | Scheduled-task execution (largest handler) |
 
 ## CONVENTIONS
 - Edit maintained code in `src/`; do not hand-edit generated `dist/index.js`.
@@ -93,6 +99,6 @@ After source changes: run `npm run build` and commit `dist/index.js` + `dist/lic
 ## NOTES
 - CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
 - No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 6 command handlers: ask (521 lines), review (218 lines), explain (355 lines), describe (129 lines), impact (336 lines), help (95 lines).
+- 7 command handlers: ask (521), review (218), explain (355), describe (129), impact (336), help (95), scheduled (1075 — largest handler, drives scheduled tasks via `.zai-scheduled.yml`).
 - Test framework: Vitest v3 (not Jest). Command: `npm test` → `vitest run --coverage`.
-- Large files: src/index.js (1023 lines), src/lib/handlers/ask.js (521 lines), src/lib/pr-context.js (433 lines).
+- Large files: src/lib/handlers/scheduled.js (1075 lines), src/index.js (1095 lines), src/lib/handlers/ask.js (521 lines), src/lib/pr-context.js (433 lines).

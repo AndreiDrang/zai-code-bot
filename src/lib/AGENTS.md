@@ -18,6 +18,7 @@ src/lib/
 ├── auto-review.js  # Large PR batching and synthesis
 ├── changed-files.js # Paginated changed-files fetch (3000 limit)
 ├── pr-context.js   # Shared PR context fetch (files, content at ref, refs)
+├── config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
 └── handlers/       # Command-specific logic (see child AGENTS)
 ```
 
@@ -33,6 +34,8 @@ src/lib/
 | Large PR batching logic | `src/lib/auto-review.js` | Batch creation, synthesis prompts |
 | Paginated file fetching | `src/lib/changed-files.js` | GitHub API 3000 file limit |
 | Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
+| Tune prompt token budget | `src/lib/code-scope.js` | Keep sizing deterministic; affects all handlers |
+| Scheduled-task config parsing | `src/lib/config/scheduled-config.js` | Consumed by `handlers/scheduled.js` |
 
 ## CONVENTIONS
 - Prefer pure helpers for parsing/validation and exported command-safe wrappers.

@@ -1,7 +1,7 @@
 # HANDLER MODULE GUIDE
 
 ## OVERVIEW
-Command handlers implement `/zai` behavior only after parsing + authorization; each module owns prompt construction, API call wiring, and response formatting.
+Command handlers implement `/zai` behavior only after parsing + authorization; each module owns prompt construction, API call wiring, and response formatting. The `scheduled` handler is distinct: it executes scheduled tasks defined in `.zai-scheduled.yml` rather than responding to an inline `/zai` command.
 
 ## WHERE TO LOOK
 | Command | File | Lines | Notes |
@@ -12,7 +12,8 @@ Command handlers implement `/zai` behavior only after parsing + authorization; e
 | `/zai describe` | `src/lib/handlers/describe.js` | 129 | File/directory description |
 | `/zai impact` | `src/lib/handlers/impact.js` | 336 | Change impact analysis |
 | `/zai help` | `src/lib/handlers/help.js` | 95 | Static help output with auth gate |
-| Handler registry | `src/lib/handlers/index.js` | - | Dispatcher map consumed by runtime |
+| scheduled tasks | `src/lib/handlers/scheduled.js` | 1075 | Largest module; runs `.zai-scheduled.yml` tasks, not a `/zai` command |
+| Handler registry | `src/lib/handlers/index.js` | 42 | Dispatcher map consumed by runtime (note: `scheduled` is exported but not in the `/zai` HANDLERS map) |
 
 ## CONVENTIONS
 - Keep command argument parsing explicit and reject invalid formats early.
