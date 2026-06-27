@@ -36913,8 +36913,6 @@ async function handleUpdateAgentsTask(context) {
   } = context;
   
   const gistUrl = getGistUrl(task.config, config.defaults);
-  const manualFiles = task.config?.files || ['AGENTS.md'];
-  const autoDiscover = task.config?.auto_discover_files || false;
   const prTitle = task.config?.pr_title || 'chore: update AGENTS.md files';
   const prBody = task.config?.pr_body || 'Automated weekly update of AGENTS.md files from gist';
   const commitMessage = task.config?.commit_message || 'docs: update AGENTS.md from scheduled task';
@@ -36929,7 +36927,6 @@ async function handleUpdateAgentsTask(context) {
   }
   
   logger.info(`Fetching content from gist: ${gistUrl}`);
-  logger.info(`Auto-discovery mode: ${autoDiscover ? 'ENABLED' : 'DISABLED'}`);
   
   try {
     // Step 1: Fetch content from gist
@@ -36957,58 +36954,29 @@ async function handleUpdateAgentsTask(context) {
     logger.info(`Fetched ${gistContent.length} characters from gist`);
     
     // Step 2: Execute the command from Gist
-    // In auto-discovery mode, the command should return structured data with multiple files
-    // In manual mode, the command returns single content for all specified files
-    let fileUpdates;
+    // The command MUST return structured JSON with file paths and contents
+    logger.info('Executing command in auto-discovery mode - expecting structured file map');
+    let fileUpdates = await executeCommandAndGetFileUpdates({
+      commandText: gistContent,
+      octokit,
+      apiKey,
+      model,
+      owner,
+      repo,
+      targetBranch,
+      logger,
+    });
     
-    if (autoDiscover) {
-      // Auto-discovery mode: command returns structured response with file paths and contents
-      logger.info('Executing command in auto-discovery mode - expecting structured file map');
-      fileUpdates = await executeCommandAndGetFileUpdates({
-        commandText: gistContent,
-        octokit,
-        apiKey,
-        model,
-        owner,
-        repo,
-        targetBranch,
-        logger,
-      });
-      
-      if (!fileUpdates || fileUpdates.length === 0) {
-        logger.warn('Command returned no file updates in auto-discovery mode, falling back to manual mode');
-        // Fallback to manual mode with default file
-        fileUpdates = await processManualFiles(manualFiles, gistContent, fetchFile, targetBranch, logger);
-      } else {
-        logger.info(`Auto-discovery found ${fileUpdates.length} file(s) to update`);
-      }
-    } else {
-      // Manual mode: use hardcoded file list with single content
-      logger.info(`Processing ${manualFiles.length} manually specified file(s)`);
-      let generatedContent;
-      
-      try {
-        generatedContent = await executeCommandAndGetContent({
-          commandText: gistContent,
-          octokit,
-          apiKey,
-          model,
-          owner,
-          repo,
-          targetBranch,
-          logger,
-        });
-        
-        if (!generatedContent || generatedContent === gistContent) {
-          generatedContent = gistContent;
-        }
-      } catch (error) {
-        logger.warn({ error: error.message }, 'Failed to execute command, using raw gist content');
-        generatedContent = gistContent;
-      }
-      
-      fileUpdates = await processManualFiles(manualFiles, generatedContent, fetchFile, targetBranch, logger);
+    if (!fileUpdates || fileUpdates.length === 0) {
+      logger.error('Command returned no file updates. The command must return valid JSON with files array.');
+      return { 
+        success: false,
+        error: 'No file updates returned from command',
+        message: 'The command must return JSON with a "files" array containing AGENTS.md file updates'
+      };
     }
+    
+    logger.info(`Auto-discovery found ${fileUpdates.length} file(s) to update`);
     
     // Step 3: Check if there are any actual changes
     const updatedFiles = fileUpdates.filter(f => f.changed).map(f => f.file);
@@ -37058,59 +37026,6 @@ async function handleUpdateAgentsTask(context) {
       message: `Update task failed: ${error.message}`,
     };
   }
-}
-
-/**
- * Process manually specified files with generated content
- * @param {Array<string>} filePaths - List of file paths to update
- * @param {string} content - Content to write to each file
- * @param {Function} fetchFile - Function to fetch current file content
- * @param {string} targetBranch - Target branch
- * @param {Object} logger - Logger instance
- * @returns {Promise<Array<Object>>} - Array of file update objects
- */
-async function processManualFiles(filePaths, content, fetchFile, targetBranch, logger) {
-  const changes = [];
-  
-  for (const filePath of filePaths) {
-    try {
-      const currentContent = await fetchFile(filePath, targetBranch);
-      
-      if (currentContent === null) {
-        logger.info(`File ${filePath} does not exist, will be created`);
-        changes.push({
-          file: filePath,
-          oldContent: null,
-          newContent: content,
-          changed: true,
-          isNew: true,
-        });
-      } else if (currentContent !== content) {
-        logger.info(`File ${filePath} needs update`);
-        changes.push({
-          file: filePath,
-          oldContent: currentContent,
-          newContent: content,
-          changed: true,
-        });
-      } else {
-        logger.info(`File ${filePath} is up to date`);
-        changes.push({
-          file: filePath,
-          changed: false,
-        });
-      }
-    } catch (error) {
-      logger.error({ error: error.message, file: filePath }, 'Failed to check file');
-      changes.push({
-        file: filePath,
-        error: error.message,
-        changed: false,
-      });
-    }
-  }
-  
-  return changes;
 }
 
 /**

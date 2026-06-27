@@ -8,7 +8,7 @@
 # The bot will:
 # 1. Fetch the command text from the Gist
 # 2. Execute the command to generate/update AGENTS.md files
-# 3. The command itself is responsible for discovering which AGENTS.md files to create/update
+# 3. The command MUST scan the repo and return JSON with all AGENTS.md files to create/update
 #
 # Gist URL Configuration (priority order):
 # 1. ZAI_AGENTS_GIST_URL environment variable (secrets/vars)
@@ -17,11 +17,7 @@
 #
 # The Gist at the default URL should contain a prompt-command like:
 #   /init-agentsmd
-#   This command MUST autonomously scan the repo and generate the AGENTS.md tree
-#
-# Auto-discovery: When auto_discover_files: true, the command in the Gist is responsible
-# for finding all AGENTS.md files that need to be created/updated and returning them.
-# The bot will execute the command and use whatever files the command reports as changed.
+#   This command MUST autonomously scan the repo and return JSON with AGENTS.md tree
 
 version: 1
 
@@ -51,17 +47,6 @@ tasks:
     config:
       # Branch to update - will create PR targeting this branch
       branch: main
-      
-      # Enable auto-discovery mode: the command will scan repo and find/create AGENTS.md files
-      # When enabled, the 'files' list is ignored and the command determines which files to update
-      auto_discover_files: true
-      
-      # Optional: if auto_discover_files is false, manually specify files to update
-      # files:
-      #   - AGENTS.md
-      #   - src/lib/AGENTS.md
-      #   - src/lib/handlers/AGENTS.md
-      #   - tests/AGENTS.md
       
       # PR configuration
       pr_title: "chore: update AGENTS.md files"
