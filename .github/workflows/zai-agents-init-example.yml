@@ -1,0 +1,77 @@
+name: Zai AGENTS.md Init (Example)
+
+# Example workflow that runs on Mondays to initialize/update AGENTS.md files
+# This demonstrates the scheduled tasks feature for AGENTS.md management
+
+on:
+  schedule:
+    # Run every Monday at midnight UTC
+    - cron: "0 0 * * 1"
+  
+  # Allow manual triggering
+  workflow_dispatch:
+
+# Required permissions for creating branches and PRs
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  agents-init:
+    name: Initialize/Update AGENTS.md
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Full history needed for branch operations
+          fetch-depth: 0
+
+      - name: Run zai-code-bot with scheduled task
+        uses: ./
+        with:
+          # REQUIRED: Your Z.ai API key
+          # Store this in repository secrets: Settings > Secrets > Actions > New repository secret
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          
+          # Optional: Model to use (defaults to glm-5.2)
+          ZAI_MODEL: ${{ vars.ZAI_MODEL || 'glm-5.2' }}
+          
+          # REQUIRED: URL to your Gist file with AGENTS.md content
+          # This is the "agents init command" - the gist contains the AGENTS.md template
+          # Can be set via:
+          # 1. secrets.ZAI_AGENTS_GIST_URL (recommended for production)
+          # 2. vars.ZAI_AGENTS_GIST_URL (for organization-wide)
+          # 3. In .zai-scheduled.yml configuration file
+          ZAI_AGENTS_GIST_URL: ${{ secrets.ZAI_AGENTS_GIST_URL }}
+          
+          # Enable scheduled tasks processing
+          ZAI_SCHEDULED_ENABLED: "true"
+          
+          # Path to scheduled config (defaults to .zai-scheduled.yml)
+          ZAI_SCHEDULED_CONFIG_PATH: ".zai-scheduled.yml"
+        
+        # GitHub token is automatically provided by GitHub Actions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # Optional job to verify the update worked
+  verify:
+    name: Verify AGENTS.md Update
+    runs-on: ubuntu-latest
+    needs: agents-init
+    if: success()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        run: |
+          echo "AGENTS.md update workflow completed successfully"
+          # Add verification logic here if needed
+          # For example, check if files were modified:
+          # git diff --name-only HEAD~1 | grep -q "AGENTS.md" && echo "Files updated" || echo "No changes"

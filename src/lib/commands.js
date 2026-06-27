@@ -6,7 +6,7 @@
  */
 
 // Allowlisted commands
-const ALLOWED_COMMANDS = ['ask', 'describe', 'explain', 'help', 'impact', 'review'];
+const ALLOWED_COMMANDS = ['ask', 'describe', 'explain', 'help', 'impact', 'review', 'update-agents'];
 
 // Command metadata for help text
 const COMMAND_DESCRIPTIONS = {
@@ -33,6 +33,10 @@ const COMMAND_DESCRIPTIONS = {
   review: {
     usage: '/zai review [file]',
     description: 'Review specific files or all changed files',
+  },
+  'update-agents': {
+    usage: '/zai update-agents',
+    description: 'Manually trigger AGENTS.md update from gist (collaborators only)',
   },
 };
 

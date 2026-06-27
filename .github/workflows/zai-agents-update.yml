@@ -1,0 +1,64 @@
+name: Zai AGENTS.md Auto-Update
+
+# This workflow runs every Monday to update AGENTS.md files from a Gist URL
+# It uses the scheduled tasks feature of zai-code-bot
+
+on:
+  schedule:
+    # Run “At 06:00.”  UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    # Allow manual triggering from GitHub UI
+    inputs:
+      dry-run:
+        description: "Dry run (no PR creation)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write    # Required to create branches and update files
+  pull-requests: write  # Required to create PRs
+  issues: write       # Required for comments
+
+jobs:
+  update-agents:
+    name: Update AGENTS.md Files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for full git history
+
+      - name: Run zai-code-bot scheduled tasks
+        uses: ./
+        with:
+          # Required: Z.ai API key (from repository secrets)
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          
+          # Optional: Z.ai model to use
+          ZAI_MODEL: ${{ vars.ZAI_MODEL || 'glm-5.2' }}
+          
+          # Required: URL to raw gist file containing AGENTS.md content
+          # This can also be configured in .zai-scheduled.yml
+          ZAI_AGENTS_GIST_URL: ${{ secrets.ZAI_AGENTS_GIST_URL || vars.ZAI_AGENTS_GIST_URL }}
+          
+          # Enable scheduled tasks
+          ZAI_SCHEDULED_ENABLED: "true"
+          
+          # Optional: Path to scheduled configuration file
+          ZAI_SCHEDULED_CONFIG_PATH: ".zai-scheduled.yml"
+        env:
+          # GitHub token for API access (automatically provided by GitHub Actions)
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # Optional: Notify on failure
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: update-agents
+    if: failure() && needs.update-agents.result == 'failure'
+    steps:
+      - name: Send notification
+        run: echo "AGENTS.md update failed. Check workflow logs."
+        # Replace with actual notification (Slack, email, etc.)

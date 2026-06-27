@@ -36,6 +36,18 @@ inputs:
     description: "Maximum diff characters per file chunk before splitting a large patch across review parts"
     required: false
     default: "18000"
+  ZAI_SCHEDULED_ENABLED:
+    description: "Enable scheduled tasks execution"
+    required: false
+    default: "true"
+  ZAI_SCHEDULED_CONFIG_PATH:
+    description: "Path to scheduled tasks configuration file"
+    required: false
+    default: ".zai-scheduled.yml"
+  ZAI_AGENTS_GIST_URL:
+    description: "URL to raw gist file for AGENTS.md updates"
+    required: false
+    default: ""
 runs:
   using: "node20"
   main: "dist/index.js"
