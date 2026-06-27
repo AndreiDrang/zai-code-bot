@@ -11,6 +11,12 @@ const { loadScheduledConfig, getTasksToRun, getGistUrl } = require('../config/sc
 const { createLogger, generateCorrelationId } = require('../logging');
 const core = require('@actions/core');
 
+// Module-level fallback logger so module-scoped helpers (e.g. fetchFromUrl)
+// can log without depending on a handler-scoped logger instance.
+const moduleLogger = createLogger(generateCorrelationId(), {
+  eventName: 'schedule',
+});
+
 // Handler registry for scheduled commands
 const SCHEDULED_HANDLERS = {
   'update-agents': handleUpdateAgentsTask,
@@ -217,11 +223,11 @@ function buildExecutionContext(params) {
     context,
     targetBranch,
     // Utility functions
-    fetchFromUrl: fetchFromUrl,
+    fetchFromUrl: async (url) => fetchFromUrl(url, logger),
     fetchFile: async (path, ref) => fetchFileContent(octokit, owner, repo, path, ref || targetBranch),
     updateFile: async (path, content, ref, commitMessage) => 
       updateFileInRepo(octokit, owner, repo, path, content, ref || targetBranch, commitMessage),
-    createPullRequest: async (prParams) => createPR(octokit, owner, repo, prParams),
+    createPullRequest: async (prParams) => createPR(octokit, owner, repo, prParams, logger),
     getFileSha: async (path, ref) => getFileSha(octokit, owner, repo, path, ref || targetBranch),
   };
 }
@@ -298,7 +304,7 @@ async function handleUpdateAgentsTask(context) {
     // Step 1: Fetch content from gist
     let gistContent;
     try {
-      gistContent = await fetchFromUrl(gistUrl);
+      gistContent = await fetchFromUrl(gistUrl, logger);
     } catch (error) {
       logger.error({ error: error.message, url: gistUrl }, 'Failed to fetch from gist URL');
       return { 
@@ -841,7 +847,7 @@ async function callZaiApiWithRetry(apiKey, model, prompt, logger, retries = 3) {
  * @param {string} url - URL to fetch
  * @returns {Promise<string>} - Content as string
  */
-async function fetchFromUrl(url) {
+async function fetchFromUrl(url, logger = moduleLogger) {
   return new Promise((resolve, reject) => {
     try {
       const parsedUrl = new URL(url);
@@ -974,7 +980,7 @@ async function updateFileInRepo(octokit, owner, repo, path, content, ref, commit
  * @param {string} params.commitMessage - Commit message
  * @returns {Promise<Object>} - PR creation result
  */
-async function createPR(octokit, owner, repo, { title, body, base, files, commitMessage }) {
+async function createPR(octokit, owner, repo, { title, body, base, files, commitMessage }, logger = moduleLogger) {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');

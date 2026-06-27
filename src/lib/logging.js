@@ -139,61 +139,79 @@ function createLogger(correlationId, context = {}) {
     ...context,
   };
 
+  /**
+   * Normalize log arguments. Supports two calling conventions:
+   *   logger.info(fieldsObj, 'message')  -- structured form
+   *   logger.info('message')             -- shorthand form
+   * This prevents a bare string from being spread into character-indexed keys.
+   * @returns {{fields: Object, message: string}}
+   */
+  function normalizeArgs(fields, message) {
+    if (typeof fields === 'string') {
+      return { fields: {}, message: fields };
+    }
+    return { fields: fields || {}, message };
+  }
+
   return {
     /**
      * Log informational message
-     * @param {Object} fields - Additional fields to log
-     * @param {string} message - Log message
+     * @param {Object|string} fields - Additional fields to log, or the message string
+     * @param {string} [message] - Log message
      */
-    info(fields = {}, message) {
+    info(fields, message) {
+      const { fields: safeFields, message: msg } = normalizeArgs(fields, message);
       const logData = {
         ...baseContext,
-        ...fields,
+        ...safeFields,
         timestamp: new Date().toISOString(),
       };
-      core.info(formatLogData(logData) + (message ? ` ${message}` : ''));
+      core.info(formatLogData(logData) + (msg ? ` ${msg}` : ''));
     },
 
     /**
      * Log warning message
-     * @param {Object} fields - Additional fields to log
-     * @param {string} message - Log message
+     * @param {Object|string} fields - Additional fields to log, or the message string
+     * @param {string} [message] - Log message
      */
-    warn(fields = {}, message) {
+    warn(fields, message) {
+      const { fields: safeFields, message: msg } = normalizeArgs(fields, message);
       const logData = {
         ...baseContext,
-        ...fields,
+        ...safeFields,
         timestamp: new Date().toISOString(),
       };
-      core.warning(formatLogData(logData) + (message ? ` ${message}` : ''));
+      core.warning(formatLogData(logData) + (msg ? ` ${msg}` : ''));
     },
 
     /**
      * Log error message
-     * @param {Object} fields - Additional fields to log
-     * @param {string} message - Log message
+     * @param {Object|string} fields - Additional fields to log, or the message string
+     * @param {string} [message] - Log message
      */
-    error(fields = {}, message) {
+    error(fields, message) {
+      const { fields: safeFields, message: msg } = normalizeArgs(fields, message);
       const logData = {
         ...baseContext,
-        ...fields,
+        ...safeFields,
         timestamp: new Date().toISOString(),
       };
-      core.error(formatLogData(logData) + (message ? ` ${message}` : ''));
+      core.error(formatLogData(logData) + (msg ? ` ${msg}` : ''));
     },
 
     /**
      * Set failure status with user-safe message
-     * @param {Object} fields - Additional fields to log
-     * @param {string} message - User-safe message
+     * @param {Object|string} fields - Additional fields to log, or the message string
+     * @param {string} [message] - User-safe message
      */
-    setFailed(fields = {}, message) {
+    setFailed(fields, message) {
+      const { fields: safeFields, message: msg } = normalizeArgs(fields, message);
       const logData = {
         ...baseContext,
-        ...fields,
+        ...safeFields,
         timestamp: new Date().toISOString(),
       };
-      core.setFailed(formatLogData(logData) + (message ? ` ${message}` : ''));
+      core.setFailed(formatLogData(logData) + (msg ? ` ${msg}` : ''));
     },
   };
 }
