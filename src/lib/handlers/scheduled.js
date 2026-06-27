@@ -265,6 +265,8 @@ function getAllScheduledHandlers() {
 async function handleUpdateAgentsTask(context) {
   const { 
     octokit, 
+    apiKey,
+    model,
     owner, 
     repo, 
     task, 
@@ -277,7 +279,8 @@ async function handleUpdateAgentsTask(context) {
   } = context;
   
   const gistUrl = getGistUrl(task.config, config.defaults);
-  const files = task.config?.files || ['AGENTS.md'];
+  const manualFiles = task.config?.files || ['AGENTS.md'];
+  const autoDiscover = task.config?.auto_discover_files || false;
   const prTitle = task.config?.pr_title || 'chore: update AGENTS.md files';
   const prBody = task.config?.pr_body || 'Automated weekly update of AGENTS.md files from gist';
   const commitMessage = task.config?.commit_message || 'docs: update AGENTS.md from scheduled task';
@@ -292,6 +295,7 @@ async function handleUpdateAgentsTask(context) {
   }
   
   logger.info(`Fetching content from gist: ${gistUrl}`);
+  logger.info(`Auto-discovery mode: ${autoDiscover ? 'ENABLED' : 'DISABLED'}`);
   
   try {
     // Step 1: Fetch content from gist
@@ -318,13 +322,15 @@ async function handleUpdateAgentsTask(context) {
     
     logger.info(`Fetched ${gistContent.length} characters from gist`);
     
-    // Step 2: Execute the command from Gist to generate AGENTS.md content
-    // The Gist contains a command (e.g., /init-agentsmd) that generates the content
-    let generatedContent;
+    // Step 2: Execute the command from Gist
+    // In auto-discovery mode, the command should return structured data with multiple files
+    // In manual mode, the command returns single content for all specified files
+    let fileUpdates;
     
-    try {
-      // Try to execute the command to generate content
-      generatedContent = await executeCommandAndGetContent({
+    if (autoDiscover) {
+      // Auto-discovery mode: command returns structured response with file paths and contents
+      logger.info('Executing command in auto-discovery mode - expecting structured file map');
+      fileUpdates = await executeCommandAndGetFileUpdates({
         commandText: gistContent,
         octokit,
         apiKey,
@@ -335,72 +341,49 @@ async function handleUpdateAgentsTask(context) {
         logger,
       });
       
-      logger.info(`Generated ${generatedContent?.length || 0} characters of AGENTS.md content`);
-    } catch (error) {
-      logger.warn({ error: error.message }, 'Failed to execute command from Gist, falling back to raw content');
-      // Fallback: use the Gist content directly as AGENTS.md content
-      generatedContent = gistContent;
-    }
-    
-    // If execution returned empty or same as input, use raw content
-    if (!generatedContent || generatedContent === gistContent) {
-      logger.info('Using Gist content directly as AGENTS.md content (command may not have executed)');
-      generatedContent = gistContent;
-    }
-    
-    // Step 3: Check each target file for updates
-    const changes = [];
-    const updatedFiles = [];
-    
-    for (const filePath of files) {
+      if (!fileUpdates || fileUpdates.length === 0) {
+        logger.warn('Command returned no file updates in auto-discovery mode, falling back to manual mode');
+        // Fallback to manual mode with default file
+        fileUpdates = await processManualFiles(manualFiles, gistContent, fetchFile, targetBranch, logger);
+      } else {
+        logger.info(`Auto-discovery found ${fileUpdates.length} file(s) to update`);
+      }
+    } else {
+      // Manual mode: use hardcoded file list with single content
+      logger.info(`Processing ${manualFiles.length} manually specified file(s)`);
+      let generatedContent;
+      
       try {
-        const currentContent = await fetchFile(filePath, targetBranch);
+        generatedContent = await executeCommandAndGetContent({
+          commandText: gistContent,
+          octokit,
+          apiKey,
+          model,
+          owner,
+          repo,
+          targetBranch,
+          logger,
+        });
         
-        if (currentContent === null) {
-          // File doesn't exist - will be created
-          logger.info(`File ${filePath} does not exist, will be created`);
-          changes.push({
-            file: filePath,
-            oldContent: null,
-            newContent: generatedContent,
-            changed: true,
-            isNew: true,
-          });
-          updatedFiles.push(filePath);
-        } else if (currentContent !== generatedContent) {
-          // File exists and needs update
-          logger.info(`File ${filePath} needs update`);
-          changes.push({
-            file: filePath,
-            oldContent: currentContent,
-            newContent: generatedContent,
-            changed: true,
-          });
-          updatedFiles.push(filePath);
-        } else {
-          // File is up to date
-          logger.info(`File ${filePath} is up to date`);
-          changes.push({
-            file: filePath,
-            changed: false,
-          });
+        if (!generatedContent || generatedContent === gistContent) {
+          generatedContent = gistContent;
         }
       } catch (error) {
-        logger.error({ error: error.message, file: filePath }, 'Failed to check file');
-        changes.push({
-          file: filePath,
-          error: error.message,
-          changed: false,
-        });
+        logger.warn({ error: error.message }, 'Failed to execute command, using raw gist content');
+        generatedContent = gistContent;
       }
+      
+      fileUpdates = await processManualFiles(manualFiles, generatedContent, fetchFile, targetBranch, logger);
     }
     
-    // Step 4: If there are changes, create a PR
+    // Step 3: Check if there are any actual changes
+    const updatedFiles = fileUpdates.filter(f => f.changed).map(f => f.file);
+    
     if (updatedFiles.length === 0) {
       logger.info('No files need updating');
       return {
         success: true,
-        changes,
+        changes: fileUpdates,
         prCreated: false,
         message: 'No updates needed - all files are current',
       };
@@ -409,10 +392,12 @@ async function handleUpdateAgentsTask(context) {
     logger.info(`Creating PR with updates for ${updatedFiles.length} file(s): ${updatedFiles.join(', ')}`);
     
     // Create PR with all changes
-    const filesToUpdate = changes.filter(c => c.changed).map(c => ({
-      path: c.file,
-      content: c.newContent,
-    }));
+    const filesToUpdate = fileUpdates
+      .filter(f => f.changed)
+      .map(f => ({
+        path: f.file,
+        content: f.newContent,
+      }));
     
     const prResult = await createPullRequest({
       title: prTitle,
@@ -424,7 +409,7 @@ async function handleUpdateAgentsTask(context) {
     
     return {
       success: true,
-      changes,
+      changes: fileUpdates,
       prCreated: true,
       prNumber: prResult?.number,
       prUrl: prResult?.html_url,
@@ -438,6 +423,293 @@ async function handleUpdateAgentsTask(context) {
       error: error.message,
       message: `Update task failed: ${error.message}`,
     };
+  }
+}
+
+/**
+ * Process manually specified files with generated content
+ * @param {Array<string>} filePaths - List of file paths to update
+ * @param {string} content - Content to write to each file
+ * @param {Function} fetchFile - Function to fetch current file content
+ * @param {string} targetBranch - Target branch
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<Array<Object>>} - Array of file update objects
+ */
+async function processManualFiles(filePaths, content, fetchFile, targetBranch, logger) {
+  const changes = [];
+  
+  for (const filePath of filePaths) {
+    try {
+      const currentContent = await fetchFile(filePath, targetBranch);
+      
+      if (currentContent === null) {
+        logger.info(`File ${filePath} does not exist, will be created`);
+        changes.push({
+          file: filePath,
+          oldContent: null,
+          newContent: content,
+          changed: true,
+          isNew: true,
+        });
+      } else if (currentContent !== content) {
+        logger.info(`File ${filePath} needs update`);
+        changes.push({
+          file: filePath,
+          oldContent: currentContent,
+          newContent: content,
+          changed: true,
+        });
+      } else {
+        logger.info(`File ${filePath} is up to date`);
+        changes.push({
+          file: filePath,
+          changed: false,
+        });
+      }
+    } catch (error) {
+      logger.error({ error: error.message, file: filePath }, 'Failed to check file');
+      changes.push({
+        file: filePath,
+        error: error.message,
+        changed: false,
+      });
+    }
+  }
+  
+  return changes;
+}
+
+/**
+ * Execute a command and get structured file updates (for auto-discovery mode)
+ * The command should return a JSON structure with file paths and their contents
+ * @param {Object} params - Execution parameters
+ * @param {string} params.commandText - The command text to execute
+ * @param {Object} params.octokit - GitHub Octokit instance
+ * @param {string} params.apiKey - Z.ai API key
+ * @param {string} params.model - Z.ai model
+ * @param {string} params.owner - Repository owner
+ * @param {string} params.repo - Repository name
+ * @param {string} params.targetBranch - Target branch
+ * @param {Object} params.logger - Logger instance
+ * @returns {Promise<Array<Object>>} - Array of {file, oldContent, newContent, changed, isNew} objects
+ */
+async function executeCommandAndGetFileUpdates(params) {
+  const { commandText, octokit, apiKey, model, owner, repo, targetBranch, logger } = params;
+  
+  if (!commandText || commandText.trim() === '') {
+    logger.warn('Command text is empty, cannot execute');
+    return [];
+  }
+  
+  try {
+    // Check if it's a valid /zai command
+    const parseResult = parseCommand(commandText);
+    
+    // Build prompt for auto-discovery mode
+    // The command should scan the repo and return a JSON structure with all AGENTS.md files
+    const prompt = buildAutoDiscoveryPrompt(commandText, owner, repo, targetBranch);
+    
+    // Call Z.ai API to execute the command
+    const response = await callZaiApiWithRetry(apiKey, model, prompt, logger);
+    
+    if (!response || !response.content) {
+      logger.warn('Z.ai API returned empty content');
+      return [];
+    }
+    
+    // Parse the response to extract file updates
+    // Expected format: JSON array of {file: string, content: string} objects
+    // Or a special format that we can parse
+    const fileUpdates = parseFileUpdatesFromResponse(response.content, octokit, owner, repo, targetBranch, fetchFileContent, logger);
+    
+    return fileUpdates;
+    
+  } catch (error) {
+    logger.error({ error: error.message }, 'Failed to execute command for file discovery');
+    throw error;
+  }
+}
+
+/**
+ * Build prompt for auto-discovery mode
+ * @param {string} commandText - The command text
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} branch - Target branch
+ * @returns {string} - Formatted prompt
+ */
+function buildAutoDiscoveryPrompt(commandText, owner, repo, branch) {
+  return `Repository: ${owner}/${repo}
+Branch: ${branch}
+
+You are an AI assistant tasked with generating and updating AGENTS.md files.
+
+Execute the following command to scan the repository and generate/update AGENTS.md files:
+
+${commandText}
+
+IMPORTANT: You must return the results in a specific JSON format so the bot can process your changes.
+
+Return a JSON object with the following structure:
+{
+  "summary": "Brief description of changes",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "content": "... full file content ...",
+      "action": "created|updated|unchanged"
+    },
+    {
+      "path": "src/lib/AGENTS.md",
+      "content": "... full file content ...",
+      "action": "created|updated|unchanged"
+    }
+  ]
+}
+
+Rules:
+1. Scan the ENTIRE repository structure
+2. Identify ALL existing AGENTS.md files
+3. Determine if each needs to be updated
+4. Create new AGENTS.md files where needed (root and important subdirectories)
+5. For each file that needs changes, include the full new content
+6. Only include files that have actual changes (action: "created" or "updated")
+7. Return ONLY valid JSON, no other text, explanations, or markdown
+8. The content must be the exact text that should be written to each file
+
+Begin your response with the JSON object immediately, no preamble.`;
+}
+
+/**
+ * Parse file updates from Z.ai API response
+ * @param {string} responseContent - Response content from Z.ai
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} targetBranch - Target branch
+ * @param {Function} fetchFileContent - Function to fetch file content
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<Array<Object>>} - Array of file update objects
+ */
+async function parseFileUpdatesFromResponse(responseContent, octokit, owner, repo, targetBranch, fetchFileContent, logger) {
+  const fileUpdates = [];
+  
+  try {
+    // Try to parse as JSON
+    let parsed;
+    try {
+      // Remove any markdown code blocks if present
+      const cleaned = responseContent.trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsed = JSON.parse(jsonMatch[0]);
+      } else {
+        parsed = JSON.parse(cleaned);
+      }
+    } catch (e) {
+      logger.warn('Could not parse response as JSON, attempting to extract file information');
+      // Fallback: try to extract file paths and content from the response
+      return await extractFilesFromText(responseContent, octokit, owner, repo, targetBranch, fetchFileContent, logger);
+    }
+    
+    if (parsed && parsed.files && Array.isArray(parsed.files)) {
+      // Process each file from the structured response
+      for (const fileInfo of parsed.files) {
+        const filePath = fileInfo.path || fileInfo.file;
+        const newContent = fileInfo.content || fileInfo.body;
+        const action = (fileInfo.action || '').toLowerCase();
+        
+        if (!filePath || !newContent) {
+          logger.warn(`Skipping invalid file entry: ${JSON.stringify(fileInfo)}`);
+          continue;
+        }
+        
+        try {
+          const currentContent = await fetchFileContent(octokit, owner, repo, filePath, targetBranch);
+          const changed = action === 'created' || action === 'updated' || currentContent === null || currentContent !== newContent;
+          
+          if (changed) {
+            fileUpdates.push({
+              file: filePath,
+              oldContent: currentContent,
+              newContent,
+              changed: true,
+              isNew: currentContent === null,
+            });
+          } else {
+            fileUpdates.push({
+              file: filePath,
+              changed: false,
+            });
+          }
+        } catch (error) {
+          logger.error({ error: error.message, file: filePath }, 'Failed to check file for auto-discovery');
+          // Assume it needs to be created/updated
+          fileUpdates.push({
+            file: filePath,
+            oldContent: null,
+            newContent,
+            changed: true,
+            isNew: true,
+          });
+        }
+      }
+      
+      logger.info(`Parsed ${fileUpdates.length} file updates from structured response`);
+    } else {
+      logger.warn('Response does not contain expected files array, attempting fallback');
+      // Fallback: try to extract from text
+      return await extractFilesFromText(responseContent, octokit, owner, repo, targetBranch, fetchFileContent, logger);
+    }
+    
+  } catch (error) {
+    logger.error({ error: error.message }, 'Failed to parse file updates from response');
+    // Return empty array - caller will handle fallback
+  }
+  
+  return fileUpdates;
+}
+
+/**
+ * Fallback: Extract file information from plain text response
+ * @param {string} text - Plain text response
+ * @param {Object} octokit - GitHub Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} targetBranch - Target branch
+ * @param {Function} fetchFileContent - Function to fetch file content
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<Array<Object>>} - Array of file update objects
+ */
+async function extractFilesFromText(text, octokit, owner, repo, targetBranch, fetchFileContent, logger) {
+  logger.warn('Attempting to extract file updates from plain text response');
+  
+  // This is a fallback for when the response isn't structured JSON
+  // We'll just return the AGENTS.md file with the raw content
+  // In a real implementation, the command should return proper JSON
+  
+  const filePath = 'AGENTS.md';
+  const newContent = text;
+  
+  try {
+    const currentContent = await fetchFileContent(octokit, owner, repo, filePath, targetBranch);
+    const changed = currentContent === null || currentContent !== newContent;
+    
+    return [{
+      file: filePath,
+      oldContent: currentContent,
+      newContent,
+      changed,
+      isNew: currentContent === null,
+    }];
+  } catch (error) {
+    return [{
+      file: filePath,
+      oldContent: null,
+      newContent,
+      changed: true,
+      isNew: true,
+    }];
   }
 }
 
