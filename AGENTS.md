@@ -1,104 +1,57 @@
-# PROJECT KNOWLEDGE BASE
+# AGENTS.md
 
-**Generated:** 2026-06-27T00:00:00Z
-**Branch:** main
-**Refresh:** reconciled line counts, added `scheduled` handler + `config/` + `code-scope.js`
+## Repository overview
 
-## OVERVIEW
-JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/zai` PR comment commands. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
+`zai-code-bot` is a Python-based code assistant bot powered by ZhipuAI (GLM) models. It provides chat, code generation, code review, and repository-aware assistance through a bot interface.
 
-## STRUCTURE
+## Where to work
+
 ```text
-zai-code-bot/
-├── src/index.js                      # Runtime orchestration and event dispatch (~1095 lines)
-├── src/lib/                          # Commands/auth/context/comments/api/services
-├── src/lib/auto-review.js            # Large PR batching and synthesis
-├── src/lib/changed-files.js          # Paginated changed-files fetch (3000 file limit)
-├── src/lib/pr-context.js             # Shared PR context fetch (files, content at ref, refs)
-├── src/lib/code-scope.js             # Token-budget calculation for prompt sizing
-├── src/lib/config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
-├── src/lib/handlers/                 # Command handlers (ask/review/explain/describe/impact/help/scheduled)
-├── tests/                            # Unit and integration coverage
-├── dist/index.js                     # Generated ncc bundle executed by GitHub
-├── dist/licenses.txt                 # Generated third-party licenses
-├── action.yml                        # Action inputs and runtime entry
-├── .github/workflows/ci.yml          # Test/build/dist-drift/audit gates
-└── .github/workflows/code-review.yml # Consumer usage example
+.
+├── src/                  # Application source code (bot logic, handlers, tools)
+├── tests/                # Unit and integration tests
+├── docs/                 # Project documentation
+├── examples/             # Usage examples and sample scripts
+├── config/               # Configuration templates and settings
+└── scripts/              # Utility and deployment scripts
 ```
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-|------|----------|-------|
-| Route events and command execution | `src/index.js` | `run()`, pull_request path, issue_comment command path |
-| Parse commands and enforce allowlist | `src/lib/commands.js` | `/zai` parser, command normalization, help fallback |
-| Authorization and fork policy | `src/lib/auth.js` | Collaborator checks and fork-safe behavior |
-| Comment/reaction behavior | `src/lib/comments.js` | Marker-based upsert, threaded reply (`replyToId`), reactions |
-| API retry/error handling | `src/lib/api.js`, `src/lib/logging.js` | Retry policy, categorized safe errors |
-| Large PR batching and synthesis | `src/lib/auto-review.js` | Batch creation, context limit handling, synthesis prompt |
-| Paginated changed-files fetch | `src/lib/changed-files.js` | Handles GitHub's 3000 file API limit |
-| Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
-| Command-specific behavior | `src/lib/handlers/AGENTS.md` | Local guide for each handler module |
-| Test strategy and fixtures | `tests/AGENTS.md` | Test map and suite conventions |
-| Action runtime contract | `action.yml` | Node runtime + dist entrypoint |
-| Build and drift policy | `package.json`, `.github/workflows/ci.yml` | `ncc` build and `dist/` drift gate |
+## Architecture and boundaries
 
-## CODE MAP
-| Symbol | Type | Location | Refs | Role |
-|--------|------|----------|------|------|
-| `run` | function | `src/index.js` | high | Top-level event gate + dispatcher |
-| `handlePullRequestEvent` | function | `src/index.js` | medium | PR auto-review flow |
-| `handleIssueCommentEvent` | function | `src/index.js` | high | Command parse/auth/progress/dispatch flow |
-| `handlePullRequestReviewCommentEvent` | function | `src/index.js` | high | Inline review comment command flow |
-| `dispatchCommand` | function | `src/index.js` | high | Handler selection and response management |
-| `enforceCommandAuthorization` | function | `src/index.js` | medium | Auth gate before command dispatch |
-| `parseCommand` | function | `src/lib/commands.js` | high | Command extraction and validation |
-| `checkForkAuthorization` | function | `src/lib/auth.js` | medium | Fork-aware security policy |
-| `buildHandlerContext` | function | `src/lib/context.js` | medium | Shared context for handlers |
-| `upsertComment` | function | `src/lib/comments.js` | high | Marker idempotency + threaded reply support |
-| `callWithRetry` | function | `src/lib/api.js` | medium | API retry/backoff wrapper |
-| `saveContinuityState` | function | `src/lib/continuity.js` | medium | Hidden state persistence across turns |
-| `createReviewBatches` | function | `src/lib/auto-review.js` | medium | Large PR file chunking |
-| `fetchAllChangedFiles` | function | `src/lib/changed-files.js` | medium | Paginated file list (3000 limit) |
-| `fetchPrFiles` | function | `src/lib/pr-context.js` | medium | PR file list with size limits + fallbacks |
-| `fetchFileAtRef` | function | `src/lib/pr-context.js` | medium | File content at base/head ref, sliding-window scoping |
-| `resolvePrRefs` | function | `src/lib/pr-context.js` | low | Resolves base/head refs for diff context |
-| `MAX_PR_FILES_API_LIMIT` | constant | `src/lib/changed-files.js` | low | GitHub API ceiling (3000) |
-| `calculateTokenBudget` | function | `src/lib/code-scope.js` | medium | Token/char budget sizing for prompts |
-| `detectEventType` | function | `src/lib/events.js` | low | Event-type detection for routing |
-| `loadScheduledConfig` | function | `src/lib/config/scheduled-config.js` | low | Parses `.zai-scheduled.yml` task config |
-| `handleScheduledCommand` | function | `src/lib/handlers/scheduled.js` | medium | Scheduled-task execution (largest handler) |
+- **Bot layer**: Handles incoming messages, commands, and session management. Do not mix API-calling logic directly into message handlers.
+- **LLM integration**: All ZhipuAI API calls go through a dedicated client/service module. Never instantiate raw API clients in handlers.
+- **Tool/function-calling**: Code tools (analysis, generation, review) are registered separately and invoked via the model's function-calling capability.
+- **Configuration**: Runtime configuration is loaded from environment variables or config files. Do not hardcode API keys, model names, or endpoints.
+- **Session/context management**: Conversation context and token budgeting are managed centrally. Keep context-window logic in its dedicated module.
 
-## CONVENTIONS
-- Edit maintained code in `src/`; do not hand-edit generated `dist/index.js`.
-- After source changes, run `npm run build` and commit `dist/index.js` + `dist/licenses.txt`.
-- Use marker-based idempotent comments; preserve marker constants and update semantics.
-- Command responses should stay threaded to the invoking comment via `replyToId`.
-- Keep security posture strict: collaborator/fork checks before command execution, no secret leakage.
+## Change rules
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Bypassing authorization/fork checks for command handlers.
-- Executing command logic for non-PR issue comments.
-- Allowing unbounded context payloads into prompts.
-- Editing `dist/` manually or shipping source changes without rebuilt artifacts.
-- Treating `.github/workflows/code-review.yml` example as runtime logic.
+- Keep the bot handler layer thin; push logic into service modules.
+- When adding a new tool or capability, register it in the tool registry — do not inline it into the conversation flow.
+- Preserve the separation between prompt construction and API invocation.
+- Any new external API integration must go through the existing client abstraction.
+- Configuration changes must not introduce hardcoded secrets.
+- When modifying response formatting, test against the model output schema expected by the bot interface.
 
-## UNIQUE STYLES
-- Event-first architecture: `src/index.js` orchestrates; `src/lib/*` isolates concerns.
-- Reactions communicate command lifecycle (`eyes`/`thinking`/`rocket`/`x`).
-- Continuity is encoded with hidden markers in comments, not external storage.
+## Validation
 
-## COMMANDS
-```bash
-npm install
-npm test            # vitest run --coverage
-npm run build       # ncc build src/index.js -o dist --license licenses.txt
-npm audit --audit-level=moderate   # security audit gate (CI)
-```
-After source changes: run `npm run build` and commit `dist/index.js` + `dist/licenses.txt` (CI fails on dist drift).
+- **Run tests**: `pytest` (or `python -m pytest`) from the repository root.
+- **Type checking**: If `mypy` or `pyright` is configured, run it before submitting changes.
+- **Linting/formatting**: If `ruff`, `black`, or `flake8` configuration is present, run it.
+- Verify any new tools or handlers have corresponding test coverage in `tests/`.
+- If API integration changes are made, manually verify against the ZhipuAI API response format.
 
-## NOTES
-- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
-- No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 7 command handlers: ask (521), review (218), explain (355), describe (129), impact (336), help (95), scheduled (1075 — largest handler, drives scheduled tasks via `.zai-scheduled.yml`).
-- Test framework: Vitest v3 (not Jest). Command: `npm test` → `vitest run --coverage`.
-- Large files: src/lib/handlers/scheduled.js (1075 lines), src/index.js (1095 lines), src/lib/handlers/ask.js (521 lines), src/lib/pr-context.js (433 lines).
+## Key docs
+
+- `README.md` — Setup instructions, features, and usage overview.
+- `docs/` — Additional architecture and usage documentation.
+- `requirements.txt` / `pyproject.toml` — Dependency manifest; update when adding new packages.
+
+## Repository-specific gotchas
+
+- **API key handling**: ZhipuAI API keys must come from environment variables. Never commit keys or `.env` files.
+- **Model versioning**: Model names (e.g., `glm-4`, code-specific variants) may change. Centralize model name references rather than scattering them.
+- **Token limits**: GLM models have context window constraints. Any changes to conversation history or context assembly must respect token budgeting.
+- **Function-calling format**: The ZhipuAI function-calling schema differs slightly from OpenAI's. Verify argument serialization matches what the API expects.
+- **Rate limiting**: API calls are rate-limited. Do not introduce tight loops that call the API without backoff.
+- **Async patterns**: If the bot uses async I/O, ensure new code follows the existing async conventions — do not mix blocking calls into async paths.
