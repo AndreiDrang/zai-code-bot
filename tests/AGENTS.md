@@ -22,6 +22,7 @@ tests/
 | API and logging resilience | `tests/api.test.js`, `tests/logging.test.js` | Retry/error categorization |
 | Context, PR fetch, and batching | `tests/context.test.js`, `tests/pr-context.test.js`, `tests/changed-files.test.js`, `tests/auto-review.test.js` | Diff scoping, file-at-ref fetch, paginated/batched review |
 | Continuity and events | `tests/continuity.test.js`, `tests/events.test.js` | Hidden-marker state, event-type detection |
+| Scheduled pipeline | — | **GAP:** no tests for `scheduled.js` / `scheduled-config.js` yet (flagged in `plans/*`). Add unit (config load, `getTasksToRun`, `parseFileUpdatesFromResponse`) + integration (schedule event → PR) coverage. |
 | Full command pipeline | `tests/integration/command-pipeline.test.js` | Parse -> auth -> handler -> output contract |
 | PR auto-review behavior | `tests/integration/pr-auto-review.test.js` | Marker upsert and PR event lifecycle |
 

@@ -37712,6 +37712,7 @@ module.exports = {
   updateFileInRepo,
   createPR,
   buildExecutionContext,
+  parseFileUpdatesFromResponse,
 };
 
 

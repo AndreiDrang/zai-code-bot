@@ -7,7 +7,8 @@ GitHub Action for automatic PR reviews and context-rich `/zai` commands powered 
 ## Features
 
 - Automatic pull request review on `opened` and `synchronize`
-- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai describe`, `/zai impact`, `/zai help`
+- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai describe`, `/zai impact`, `/zai update-agents`, `/zai help`
+- Scheduled tasks (cron): periodically regenerate `AGENTS.md` files and open PRs (see [Scheduled Tasks](docs/scheduled-tasks.md))
 - Context-aware command prompts with full-file, diff, and thread context
 - Inline review-comment support (`pull_request_review_comment`) with file/line anchors
 - `/zai explain` auto-detects selected line range from review comments
@@ -66,6 +67,9 @@ jobs:
 | `ZAI_AUTO_REVIEW_MAX_BATCH_CHARS` | No | `120000` | Approximate character budget per batched PR auto-review request |
 | `ZAI_AUTO_REVIEW_MAX_FILES_PER_BATCH` | No | `40` | Maximum distinct files included in each batched PR auto-review request |
 | `ZAI_AUTO_REVIEW_MAX_PATCH_CHARS` | No | `18000` | Maximum diff characters per file chunk before a large patch is split across review parts |
+| `ZAI_SCHEDULED_ENABLED` | No | `true` | Master switch for the scheduled-tasks pipeline |
+| `ZAI_SCHEDULED_CONFIG_PATH` | No | `.zai-scheduled.yml` | Path to the scheduled-tasks config file |
+| `ZAI_AGENTS_GIST_URL` | No | - | Fallback Gist URL for the `update-agents` task (lowest priority) |
 
 ## Commands
 
@@ -78,6 +82,7 @@ Commands are processed from PR issue comments and PR review comments. Supported 
 | `/zai explain` | `/zai explain <lines>` | Explain selected lines (e.g., `/zai explain 10-25`) |
 | `/zai describe` | `/zai describe` | Generate a PR description from commit messages |
 | `/zai impact` | `/zai impact` | Analyze potential impact of changes |
+| `/zai update-agents` | `/zai update-agents` | Regenerate `AGENTS.md` files on demand (same as the scheduled task) |
 | `/zai help` | `/zai help` | Show command help |
 
 **Note:** Only collaborators (and PR authors on their own fork PRs) can use these commands.
@@ -92,6 +97,37 @@ Commands are processed from PR issue comments and PR review comments. Supported 
 - `/zai review` uses base/head or full-file context, not patch-only prompts
 - Command execution is authorization-gated; fork PR authors can run commands on their own PR
 - If GitHub's changed-files API limit is reached, the final review notes that coverage is incomplete beyond the platform ceiling
+
+## Scheduled Tasks
+
+In addition to PR review and `/zai` commands, Zai Code Bot can run tasks on a
+schedule. The built-in `update-agents` task periodically regenerates your
+`AGENTS.md` knowledge files and opens a pull request with the changes — a PR is
+created only when at least one file actually changed.
+
+### Minimal setup
+
+1. Add a `.zai-scheduled.yml` to your repo root (copy `.zai-scheduled.yml.template`).
+2. Put the generation command in a public Gist and expose its raw URL via the
+   `ZAI_AGENTS_GIST_URL` action input (or `gist_url` in the config).
+3. Add a `schedule` (cron) workflow that runs the action. A ready-to-use
+   workflow snippet is included in `.zai-scheduled.yml.template`.
+
+### `gist_url` priority
+
+The Gist URL is resolved first-non-empty-wins:
+`task.config.gist_url` > `defaults.gist_url` > `ZAI_AGENTS_GIST_URL`.
+
+### Manual run
+
+Trigger an AGENTS.md regeneration on any PR with:
+
+```
+/zai update-agents
+```
+
+For the full configuration reference, cron syntax, schedule-matching behavior,
+troubleshooting, and examples, see **[docs/scheduled-tasks.md](docs/scheduled-tasks.md)**.
 
 ## Setup
 
