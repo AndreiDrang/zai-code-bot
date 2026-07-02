@@ -5,6 +5,7 @@ const {
   validateAndNormalizeConfig,
   validateDefaults,
   validateAndNormalizeTask,
+  validateAgentsConfig,
   getTasksToRun,
   getTaskById,
   areScheduledTasksEnabled,
@@ -174,6 +175,55 @@ describe('validateAndNormalizeTask', () => {
   test('throws for non-array config files', () => {
     expect(() => validateAndNormalizeTask({ id: 't1', command: 'x', config: { files: 'nope' } }, 0, defaults))
       .toThrow('Task t1 has invalid files value (must be array)');
+  });
+});
+
+describe('validateAgentsConfig', () => {
+  test('accepts valid scoping/budget fields', () => {
+    const cfg = {
+      context_paths: ['src'],
+      target_paths: ['tests'],
+      exclude_paths: ['dist/**'],
+      max_context_chars: 100000,
+      max_file_chars: 8000,
+      max_files_to_fetch: 20,
+      allow_create_new: true,
+      update_existing_only: false,
+    };
+    expect(() => validateAgentsConfig('t1', cfg)).not.toThrow();
+  });
+
+  test('accepts empty/undefined config (all fields optional)', () => {
+    expect(() => validateAgentsConfig('t1', {})).not.toThrow();
+  });
+
+  test('throws for non-array path fields', () => {
+    expect(() => validateAgentsConfig('t1', { context_paths: 'src' })).toThrow('context_paths');
+    expect(() => validateAgentsConfig('t1', { target_paths: 1 })).toThrow('target_paths');
+    expect(() => validateAgentsConfig('t1', { exclude_paths: {} })).toThrow('exclude_paths');
+  });
+
+  test('throws for non-string entries in path arrays', () => {
+    expect(() => validateAgentsConfig('t1', { context_paths: ['ok', 5] })).toThrow('non-string');
+  });
+
+  test('throws for non-positive budget numbers', () => {
+    expect(() => validateAgentsConfig('t1', { max_context_chars: 0 })).toThrow('max_context_chars');
+    expect(() => validateAgentsConfig('t1', { max_file_chars: -1 })).toThrow('max_file_chars');
+    expect(() => validateAgentsConfig('t1', { max_files_to_fetch: 'x' })).toThrow('max_files_to_fetch');
+  });
+
+  test('throws for non-boolean flags', () => {
+    expect(() => validateAgentsConfig('t1', { allow_create_new: 1 })).toThrow('allow_create_new');
+    expect(() => validateAgentsConfig('t1', { update_existing_only: 'yes' })).toThrow('update_existing_only');
+  });
+
+  test('is wired into validateAndNormalizeTask end-to-end', () => {
+    expect(() => validateAndNormalizeTask(
+      { id: 't1', command: 'update-agents', config: { target_paths: 'bad' } },
+      0,
+      { branch: 'main', schedule: '0 0 * * 0', enabled: true },
+    )).toThrow('target_paths');
   });
 });
 

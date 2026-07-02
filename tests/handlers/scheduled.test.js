@@ -1,9 +1,10 @@
-import { test, describe, expect, afterEach } from 'vitest';
+import { test, describe, expect, afterEach, vi } from 'vitest';
 const {
   getScheduledHandler,
   registerScheduledHandler,
   getAllScheduledHandlers,
   buildExecutionContext,
+  buildAgentsUpgradePrompt,
   parseFileUpdatesFromResponse,
   createPR,
   handleUpdateAgentsTask,
@@ -315,6 +316,165 @@ describe('executeScheduledTask', () => {
       expect(result.changes).toHaveLength(1);
     } finally {
       registerScheduledHandler('test-runner', null);
+    }
+  });
+});
+
+describe('buildAgentsUpgradePrompt', () => {
+  test('embeds real repo context and anti-hallucination constraints', () => {
+    const ctx = {
+      owner: 'o', repo: 'r', branch: 'main', truncated: false,
+      tree: ['AGENTS.md', 'src/index.js', 'package.json', 'action.yml'],
+      existingAgentsFiles: ['AGENTS.md'],
+      fileContents: { 'package.json': '{"name":"zai"}' },
+      targetPaths: [],
+    };
+    const prompt = buildAgentsUpgradePrompt({
+      commandText: '/init-agentsmd',
+      owner: 'o', repo: 'r', branch: 'main', repositoryContext: ctx,
+    });
+
+    // Anti-hallucination: model told it has no live repo access.
+    expect(prompt).toContain('do NOT have live repository access');
+    // Real tree is embedded.
+    expect(prompt).toContain('src/index.js');
+    expect(prompt).toContain('action.yml');
+    // Existing AGENTS.md listed.
+    expect(prompt).toContain('- AGENTS.md');
+    // Real file content embedded.
+    expect(prompt).toContain('package.json');
+    expect(prompt).toContain('"name":"zai"');
+  });
+
+  test('includes scoped write restriction when targetPaths set', () => {
+    const ctx = {
+      owner: 'o', repo: 'r', branch: 'main', truncated: false,
+      tree: [], existingAgentsFiles: [], fileContents: {}, targetPaths: ['src/lib'],
+    };
+    const prompt = buildAgentsUpgradePrompt({
+      commandText: 'cmd', owner: 'o', repo: 'r', branch: 'main', repositoryContext: ctx,
+    });
+    expect(prompt).toContain('ONLY write AGENTS.md');
+    expect(prompt).toContain('src/lib');
+  });
+});
+
+describe('handleUpdateAgentsTask (grounded flow)', () => {
+  // Mocks the tree + content + gist + Z.ai layers to exercise the new pipeline
+  // end-to-end: gist fetch -> context collection -> Z.ai -> parse -> validate -> PR.
+  function buildCtx({ zaiResponse, existingAgentsFiles = ['AGENTS.md'] }) {
+    const tree = [
+      { type: 'blob', path: 'AGENTS.md' },
+      { type: 'blob', path: 'src/index.js' },
+      { type: 'blob', path: 'package.json' },
+      { type: 'blob', path: 'action.yml' },
+      ...existingAgentsFiles.filter(f => f !== 'AGENTS.md').map(p => ({ type: 'blob', path: p })),
+    ];
+    const fileContents = {
+      'AGENTS.md': '# existing agents uses src/index.js',
+      'package.json': '{"name":"zai-code-bot"}',
+      'action.yml': 'runs: using: node',
+      'src/index.js': 'module.exports = {};',
+    };
+    const octokit = {
+      rest: {
+        git: { getTree: vi.fn(async () => ({ data: { tree, truncated: false } })) },
+        repos: {
+          getContent: vi.fn(async ({ path }) => {
+            if (fileContents[path] === undefined) {
+              const e = new Error('nf'); e.status = 404; throw e;
+            }
+            return { data: { type: 'file', content: Buffer.from(fileContents[path], 'utf8').toString('base64') } };
+          }),
+        },
+      },
+    };
+
+    let capturedPrompt;
+    const promptSpy = vi.fn(async (_apiKey, _model, prompt) => {
+      capturedPrompt = prompt;
+      return { content: typeof zaiResponse === 'function' ? zaiResponse() : zaiResponse };
+    });
+
+    // Stub the module-internal Z.ai client with a capture hook.
+    const scheduled = require('../../src/lib/handlers/scheduled.js');
+    const origCall = scheduled.__callZaiForTest;
+    scheduled.__callZaiForTest = promptSpy;
+
+    const createPullRequest = vi.fn(async () => ({ number: 77, html_url: 'https://pr/77' }));
+
+    return {
+      context: {
+        octokit, apiKey: 'k', model: 'm', owner: 'o', repo: 'r',
+        task: { id: 'weekly', command: 'update-agents', config: { gist_url: 'https://gist.example' } },
+        config: { defaults: { branch: 'main' } },
+        logger: fakeLogger(), targetBranch: 'main',
+        fetchFromUrl: async () => 'cmd from gist',
+        fetchFile: async () => null,
+        createPullRequest,
+      },
+      createPullRequest,
+      restore: () => { scheduled.__callZaiForTest = origCall; },
+      getPrompt: () => capturedPrompt,
+    };
+  }
+
+  test('creates a PR for a valid, grounded update', async () => {
+    const validResponse = JSON.stringify({
+      summary: 'refreshed root',
+      files: [
+        { path: 'AGENTS.md', content: '# Project\n\nUses `src/index.js`, `package.json`, `action.yml`.', action: 'updated' },
+      ],
+    });
+    const env = buildCtx({ zaiResponse: validResponse });
+    try {
+      const result = await handleUpdateAgentsTask(env.context);
+      expect(result.success).toBe(true);
+      expect(result.prCreated).toBe(true);
+      expect(env.createPullRequest).toHaveBeenCalledTimes(1);
+      // PR body must include context metadata.
+      const prArgs = env.createPullRequest.mock.calls[0][0];
+      expect(prArgs.body).toContain('Context mode');
+      expect(prArgs.body).toContain('Existing AGENTS.md files found');
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('rejects hallucinated output and creates NO PR', async () => {
+    const hallucinated = JSON.stringify({
+      summary: 'rewrote',
+      files: [
+        { path: 'AGENTS.md', content: [
+          '`zai-code-bot` is a Telegram bot.',
+          'Entry: `main.py`, config: `config.py`, deps: `requirements.txt`.',
+          'Handlers: `handlers/__init__.py`, services: `services/client.py`.',
+        ].join('\n'), action: 'updated' },
+      ],
+    });
+    const env = buildCtx({ zaiResponse: hallucinated });
+    try {
+      const result = await handleUpdateAgentsTask(env.context);
+      expect(result.success).toBe(false);
+      expect(result.prCreated).toBeUndefined();
+      expect(result.error).toContain('validation');
+      expect(env.createPullRequest).not.toHaveBeenCalled();
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('aborts safely when repository context is empty', async () => {
+    const env = buildCtx({ zaiResponse: JSON.stringify({ files: [] }) });
+    // Override tree to be empty + not truncated.
+    env.context.octokit.rest.git.getTree = vi.fn(async () => ({ data: { tree: [], truncated: false } }));
+    try {
+      const result = await handleUpdateAgentsTask(env.context);
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Empty repository context');
+      expect(env.createPullRequest).not.toHaveBeenCalled();
+    } finally {
+      env.restore();
     }
   });
 });
