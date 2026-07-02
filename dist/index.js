@@ -32347,6 +32347,200 @@ run().catch(error => {
 
 /***/ }),
 
+/***/ 3731:
+/***/ ((module) => {
+
+/**
+ * AGENTS.md Output Validation
+ *
+ * Validates the model-generated AGENTS.md file updates against the collected
+ * repository context BEFORE any PR is created. This is the guardrail that
+ * prevents hallucinated output (e.g. a fictional Python project for a JS repo)
+ * from being committed — the exact failure seen in PR #15.
+ *
+ * Validation is conservative-by-default and never throws; it returns a
+ * structured result separating accepted files from rejected ones, with reasons.
+ */
+
+// Regex for path-like tokens. We scan raw content (backticks act as natural
+// delimiters since they are outside the character class), so this captures both
+// `backtick/path.js` tokens and bare tree-listing entries like '├── main.py'.
+const TOKEN_RE = /[A-Za-z0-9._/@-]{1,200}/g;
+
+// Suffix test: looks like a real file extension (letters/digits, length 1-5).
+const EXT_RE = /\.[a-z0-9]{1,5}$/i;
+
+// Files referenced in content that we never treat as hallucination evidence:
+// very common generic terms that look like paths but usually are not real files.
+const GENERIC_TERMS = new Set([
+  'AGENTS.md', 'README.md', 'LICENSE', 'CONTRIBUTING.md', 'CHANGELOG.md',
+  '.env', '.gitignore',
+]);
+
+/**
+ * Is this a valid AGENTS.md path? Must be exactly "AGENTS.md" or end with "/AGENTS.md".
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isAgentsPath(path) {
+  if (typeof path !== 'string') return false;
+  return path === 'AGENTS.md' || path.endsWith('/AGENTS.md');
+}
+
+/**
+ * Extract backtick-quoted path-like tokens from markdown content.
+ * @param {string} content
+ * @returns {string[]} unique tokens
+ */
+function extractReferencedPaths(content) {
+  if (!content || typeof content !== 'string') return [];
+  const found = new Set();
+  let match;
+  TOKEN_RE.lastIndex = 0;
+  while ((match = TOKEN_RE.exec(content)) !== null) {
+    const token = match[0];
+    if (GENERIC_TERMS.has(token)) continue;
+    // Looks path-ish: contains a slash OR has a file-like extension.
+    if (token.includes('/') || EXT_RE.test(token)) {
+      found.add(token);
+    }
+  }
+  return [...found];
+}
+
+/**
+ * Check whether a referenced token corresponds to (or is a prefix of) a real path
+ * in the collected tree. Tolerates leading "./" and trailing slashes.
+ * @param {string} token
+ * @param {string[]} tree - repo-relative file paths
+ * @returns {boolean}
+ */
+function referenceExistsInTree(token, tree) {
+  if (!tree || tree.length === 0) return true; // cannot disprove -> don't flag
+  const norm = token.replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!norm) return true;
+  // Exact file match, or the token is a directory prefix of a real path.
+  if (tree.includes(norm)) return true;
+  return tree.some(p => p.startsWith(norm + '/') || p === norm);
+}
+
+/**
+ * Validate a single generated file entry against context and policy.
+ * @param {Object} fileUpdate - { file, newContent, isNew }
+ * @param {Object} ctx - collected repository context
+ * @param {Object} policy - { targetPaths, allowCreateNew, updateExistingOnly }
+ * @returns {{ valid: boolean, reasons: string[] }}
+ */
+function validateFileEntry(fileUpdate, ctx, policy) {
+  const reasons = [];
+  const path = fileUpdate?.file;
+
+  // Rule 1: must be an AGENTS.md path.
+  if (!isAgentsPath(path)) {
+    reasons.push(`path "${path}" is not an AGENTS.md file`);
+    return { valid: false, reasons };
+  }
+
+  // Rule 2: target-path scoping. Root AGENTS.md is always allowed.
+  const isRoot = path === 'AGENTS.md';
+  if (!isRoot && policy.targetPaths && policy.targetPaths.length) {
+    const allowed = policy.targetPaths.some(prefix => {
+      if (!prefix) return true;
+      return path.startsWith(prefix + '/');
+    });
+    if (!allowed) {
+      reasons.push(`path "${path}" is outside configured target_paths (${policy.targetPaths.join(', ')})`);
+    }
+  }
+
+  // Rule 3: update-existing-only mode rejects brand-new child files.
+  const existedBefore = ctx?.existingAgentsFiles?.includes(path) ?? false;
+  if (policy.updateExistingOnly === true && !isRoot && !existedBefore) {
+    reasons.push(`new file "${path}" rejected because update_existing_only is true`);
+  }
+
+  // Rule 4: allow_create_new gate.
+  if (policy.allowCreateNew === false && !existedBefore && !isRoot) {
+    reasons.push(`new file "${path}" rejected because allow_create_new is false`);
+  }
+
+  // Rule 5: hallucination check. If content references many file paths that do
+  // not exist in the tree, that is strong evidence of fabrication.
+  const referenced = extractReferencedPaths(fileUpdate?.newContent || '');
+  if (referenced.length) {
+    const unknown = referenced.filter(t => !referenceExistsInTree(t, ctx?.tree));
+    // Flag when MORE THAN HALF of referenced concrete paths are unknown, OR when
+    // several distinct unknown files appear (catches wholesale fabricated trees).
+    const threshold = Math.max(3, Math.ceil(referenced.length / 2));
+    if (unknown.length >= threshold) {
+      reasons.push(
+        `content references ${unknown.length} file path(s) not present in the repository ` +
+        `(e.g. ${unknown.slice(0, 5).map(t => `\`${t}\``).join(', ')}); likely hallucination`
+      );
+    }
+  }
+
+  return { valid: reasons.length === 0, reasons };
+}
+
+/**
+ * Validate a full batch of generated file updates.
+ *
+ * @param {Object} params
+ * @param {Array<Object>} params.fileUpdates - [{ file, newContent, changed, isNew }]
+ * @param {Object} params.repositoryContext - collected context (see repository-context.js)
+ * @param {string[]} [params.targetPaths] - write scope restriction
+ * @param {boolean} [params.allowCreateNew=true] - may new child AGENTS.md be proposed
+ * @param {boolean} [params.updateExistingOnly=false] - reject new files entirely
+ * @param {Object} [params.logger]
+ * @returns {{ accepted: Array, rejected: Array<{file, reasons: string[]}>, allRejected: boolean }}
+ */
+function validateGeneratedAgentFiles(params) {
+  const fileUpdates = params.fileUpdates || [];
+  const repositoryContext = params.repositoryContext || {};
+  const logger = params.logger || console;
+  const policy = {
+    targetPaths: params.targetPaths || repositoryContext.targetPaths || [],
+    allowCreateNew: params.allowCreateNew !== false,
+    updateExistingOnly: params.updateExistingOnly === true,
+  };
+
+  const accepted = [];
+  const rejected = [];
+
+  for (const entry of fileUpdates) {
+    // Only validate entries that would actually change something.
+    if (entry && entry.changed === false) {
+      accepted.push(entry);
+      continue;
+    }
+    const { valid, reasons } = validateFileEntry(entry, repositoryContext, policy);
+    if (valid) {
+      accepted.push(entry);
+    } else {
+      rejected.push({ file: entry?.file, reasons });
+      logger.warn?.({ file: entry?.file, reasons }, 'Rejected generated AGENTS.md file');
+    }
+  }
+
+  return {
+    accepted,
+    rejected,
+    allRejected: fileUpdates.length > 0 && accepted.length === 0,
+  };
+}
+
+module.exports = {
+  validateGeneratedAgentFiles,
+  validateFileEntry,
+  isAgentsPath,
+  extractReferencedPaths,
+  referenceExistsInTree,
+};
+
+
+/***/ }),
+
 /***/ 9729:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -34224,7 +34418,51 @@ function validateAndNormalizeTask(task, index, defaults) {
     throw new Error(`Task ${task.id} has invalid files value (must be array)`);
   }
   
+  // Validate AGENTS.md upgrade scoping fields (all optional).
+  validateAgentsConfig(task.id, normalized.config);
+  
   return normalized;
+}
+
+/**
+ * Validate optional AGENTS.md upgrade scoping/budget fields on a task config.
+ * Unknown-but-typed-wrong values throw; missing values are left unset so
+ * callers apply their own defaults at runtime.
+ * @param {string} taskId
+ * @param {Object} cfg - task config (mutated to normalize array fields)
+ * @throws {Error} on type mismatches
+ */
+function validateAgentsConfig(taskId, cfg) {
+  const label = `Task ${taskId}`;
+
+  const pathArrays = ['context_paths', 'target_paths', 'exclude_paths'];
+  for (const key of pathArrays) {
+    if (cfg[key] !== undefined && !Array.isArray(cfg[key])) {
+      throw new Error(`${label} has invalid ${key} value (must be array of path/glob strings)`);
+    }
+    if (Array.isArray(cfg[key])) {
+      const bad = cfg[key].find(v => typeof v !== 'string');
+      if (bad !== undefined) {
+        throw new Error(`${label} has non-string entry in ${key}`);
+      }
+    }
+  }
+
+  const positiveInts = ['max_context_chars', 'max_file_chars', 'max_files_to_fetch'];
+  for (const key of positiveInts) {
+    if (cfg[key] !== undefined) {
+      if (typeof cfg[key] !== 'number' || !Number.isFinite(cfg[key]) || cfg[key] <= 0) {
+        throw new Error(`${label} has invalid ${key} value (must be a positive number)`);
+      }
+    }
+  }
+
+  const booleans = ['allow_create_new', 'update_existing_only'];
+  for (const key of booleans) {
+    if (cfg[key] !== undefined && typeof cfg[key] !== 'boolean') {
+      throw new Error(`${label} has invalid ${key} value (must be boolean)`);
+    }
+  }
 }
 
 /**
@@ -34287,6 +34525,7 @@ module.exports = {
   // Export for testing
   validateDefaults,
   validateAndNormalizeTask,
+  validateAgentsConfig,
 };
 
 
@@ -36643,6 +36882,11 @@ const https = __nccwpck_require__(4708);
 const { parseCommand, isValid } = __nccwpck_require__(5055);
 const { loadScheduledConfig, getTasksToRun, getGistUrl } = __nccwpck_require__(4658);
 const { createLogger, generateCorrelationId } = __nccwpck_require__(2120);
+const {
+  collectRepositoryContext,
+  renderRepositoryContext,
+} = __nccwpck_require__(787);
+const { validateGeneratedAgentFiles } = __nccwpck_require__(3731);
 const core = __nccwpck_require__(7484);
 
 // Module-level fallback logger so module-scoped helpers (e.g. fetchFromUrl)
@@ -36959,9 +37203,36 @@ async function handleUpdateAgentsTask(context) {
     
     logger.info(`Fetched ${gistContent.length} characters from gist`);
     
-    // Step 2: Execute the command from Gist
-    // The command MUST return structured JSON with file paths and contents
-    logger.info('Executing command in auto-discovery mode - expecting structured file map');
+    // Step 2: Collect REAL repository context (file tree, existing AGENTS.md
+    // files, key file contents). Without this the model has nothing to ground
+    // its output on and hallucinates a project from the repo name (PR #15 bug).
+    logger.info('Collecting repository context for grounded generation');
+    const repositoryContext = await collectRepositoryContext({
+      octokit,
+      owner,
+      repo,
+      branch: targetBranch,
+      contextPaths: task.config?.context_paths,
+      targetPaths: task.config?.target_paths,
+      excludePaths: task.config?.exclude_paths,
+      maxContextChars: task.config?.max_context_chars,
+      maxFileChars: task.config?.max_file_chars,
+      maxFilesToFetch: task.config?.max_files_to_fetch,
+      logger,
+    });
+    
+    if (repositoryContext.totalFiles === 0 && !repositoryContext.truncated) {
+      logger.error('Repository context collection returned no files; cannot safely generate AGENTS.md');
+      return {
+        success: false,
+        error: 'Empty repository context',
+        message: 'Could not read repository file tree. Aborting to avoid hallucinated output.',
+      };
+    }
+    
+    // Step 3: Execute the command from Gist WITH the collected context attached.
+    // The command MUST return structured JSON with file paths and contents.
+    logger.info('Executing command in auto-discovery mode with repository context - expecting structured file map');
     let fileUpdates = await executeCommandAndGetFileUpdates({
       commandText: gistContent,
       octokit,
@@ -36970,6 +37241,7 @@ async function handleUpdateAgentsTask(context) {
       owner,
       repo,
       targetBranch,
+      repositoryContext,
       logger,
     });
     
@@ -36982,9 +37254,48 @@ async function handleUpdateAgentsTask(context) {
       };
     }
     
-    logger.info(`Auto-discovery found ${fileUpdates.length} file(s) to update`);
+    // Step 4: VALIDATE generated output against real repository context BEFORE
+    // creating the PR. Rejects non-AGENTS.md paths, out-of-scope writes, and
+    // content that references files that do not exist (hallucination guard).
+    const validation = validateGeneratedAgentFiles({
+      fileUpdates,
+      repositoryContext,
+      targetPaths: repositoryContext.targetPaths,
+      allowCreateNew: task.config?.allow_create_new !== false,
+      updateExistingOnly: task.config?.update_existing_only === true,
+      logger,
+    });
     
-    // Step 3: Check if there are any actual changes
+    logger.info(
+      { accepted: validation.accepted.length, rejected: validation.rejected.length },
+      'Validation complete'
+    );
+    
+    if (validation.rejected.length) {
+      for (const r of validation.rejected) {
+        logger.warn({ file: r.file, reasons: r.reasons }, 'Rejected generated AGENTS.md file');
+      }
+    }
+    
+    if (validation.allRejected) {
+      const sample = validation.rejected[0];
+      return {
+        success: false,
+        error: 'All generated files failed validation',
+        message: 'Generated output was rejected by validation guards' +
+          (sample ? ` (e.g. ${sample.file}: ${sample.reasons[0]})` : '') +
+          '. No PR created to avoid committing hallucinated content.',
+        changes: fileUpdates,
+        rejected: validation.rejected,
+      };
+    }
+    
+    // Use only accepted entries going forward.
+    fileUpdates = validation.accepted;
+    
+    logger.info(`Auto-discovery produced ${fileUpdates.length} file(s) to consider`);
+    
+    // Step 5: Check if there are any actual changes
     const updatedFiles = fileUpdates.filter(f => f.changed).map(f => f.file);
     
     if (updatedFiles.length === 0) {
@@ -37009,7 +37320,7 @@ async function handleUpdateAgentsTask(context) {
     
     const prResult = await createPullRequest({
       title: prTitle,
-      body: buildPrBody(prBody, updatedFiles, task.id),
+      body: buildPrBody(prBody, updatedFiles, task.id, repositoryContext),
       base: targetBranch,
       files: filesToUpdate,
       commitMessage,
@@ -37049,7 +37360,7 @@ async function handleUpdateAgentsTask(context) {
  * @returns {Promise<Array<Object>>} - Array of {file, oldContent, newContent, changed, isNew} objects
  */
 async function executeCommandAndGetFileUpdates(params) {
-  const { commandText, octokit, apiKey, model, owner, repo, targetBranch, logger } = params;
+  const { commandText, octokit, apiKey, model, owner, repo, targetBranch, repositoryContext, logger } = params;
   
   if (!commandText || commandText.trim() === '') {
     logger.warn('Command text is empty, cannot execute');
@@ -37060,12 +37371,19 @@ async function executeCommandAndGetFileUpdates(params) {
     // Check if it's a valid /zai command
     const parseResult = parseCommand(commandText);
     
-    // Build prompt for auto-discovery mode
-    // The command should scan the repo and return a JSON structure with all AGENTS.md files
-    const prompt = buildAutoDiscoveryPrompt(commandText, owner, repo, targetBranch);
+    // Build a GROUNDED prompt using the collected repository context.
+    // Without real context the model hallucinates a project from the repo name.
+    const prompt = buildAgentsUpgradePrompt({
+      commandText,
+      owner,
+      repo,
+      branch: targetBranch,
+      repositoryContext,
+    });
     
-    // Call Z.ai API to execute the command
-    const response = await callZaiApiWithRetry(apiKey, model, prompt, logger);
+    // Call Z.ai API to execute the command (test-seam: __callZaiForTest hook).
+    const zaiCaller = module.exports.__callZaiForTest || callZaiApiWithRetry;
+    const response = await zaiCaller(apiKey, model, prompt, logger);
     
     if (!response || !response.content) {
       logger.warn('Z.ai API returned empty content');
@@ -37086,26 +37404,51 @@ async function executeCommandAndGetFileUpdates(params) {
 }
 
 /**
- * Build prompt for auto-discovery mode
- * @param {string} commandText - The command text
- * @param {string} owner - Repository owner
- * @param {string} repo - Repository name
- * @param {string} branch - Target branch
- * @returns {string} - Formatted prompt
+ * Build a GROUNDED prompt for AGENTS.md generation.
+ *
+ * The model is given the REAL repository context (file tree, existing AGENTS.md
+ * files, and key file contents) and is explicitly told it has NO live repo
+ * access and must not invent files/languages/frameworks. This is the fix for
+ * the PR #15 hallucination bug where the model fabricated a Python Telegram
+ * bot for a JavaScript GitHub Action.
+ *
+ * @param {Object} params
+ * @param {string} params.commandText - The gist command text
+ * @param {string} params.owner - Repository owner
+ * @param {string} params.repo - Repository name
+ * @param {string} params.branch - Target branch
+ * @param {Object} params.repositoryContext - Collected context (see repository-context.js)
+ * @returns {string} Formatted prompt
  */
-function buildAutoDiscoveryPrompt(commandText, owner, repo, branch) {
-  return `Repository: ${owner}/${repo}
+function buildAgentsUpgradePrompt({ commandText, owner, repo, branch, repositoryContext }) {
+  const contextBlock = renderRepositoryContext(repositoryContext);
+  const existingCount = repositoryContext?.existingAgentsFiles?.length || 0;
+  const scopedNote = repositoryContext?.targetPaths?.length
+    ? `\nYou may ONLY write AGENTS.md at the repository root and under these target paths: ${repositoryContext.targetPaths.join(', ')}. Do not propose AGENTS.md anywhere else.`
+    : '';
+
+  return `You are a Staff-level software engineer generating and updating AGENTS.md files.
+
+Repository: ${owner}/${repo}
 Branch: ${branch}
 
-You are an AI assistant tasked with generating and updating AGENTS.md files.
+CRITICAL CONSTRAINTS:
+- You do NOT have live repository access. Use ONLY the repository context below.
+- Do NOT invent files, directories, languages, frameworks, or services that are not present in the provided context.
+- Every fact in an AGENTS.md file must be grounded in the observable repository evidence below.
+- If the context is insufficient to describe a file accurately, return an empty files array instead of guessing.
 
-Execute the following command to scan the repository and generate/update AGENTS.md files:
+The repository context below contains: the real file tree, the list of EXISTING AGENTS.md files (auto-discovered), and the contents of key files. Ground all output in these facts.
+
+${contextBlock}
+
+You must update the ${existingCount} existing AGENTS.md file(s) listed above.${scopedNote}
+
+Execute the following command against the repository context above:
 
 ${commandText}
 
-IMPORTANT: You must return the results in a specific JSON format so the bot can process your changes.
-
-Return a JSON object with the following structure:
+RETURN FORMAT (strict JSON only, no markdown fences, no prose):
 {
   "summary": "Brief description of changes",
   "files": [
@@ -37113,26 +37456,26 @@ Return a JSON object with the following structure:
       "path": "AGENTS.md",
       "content": "... full file content ...",
       "action": "created|updated|unchanged"
-    },
-    {
-      "path": "src/lib/AGENTS.md",
-      "content": "... full file content ...",
-      "action": "created|updated|unchanged"
     }
   ]
 }
 
 Rules:
-1. Scan the ENTIRE repository structure
-2. Identify ALL existing AGENTS.md files
-3. Determine if each needs to be updated
-4. Create new AGENTS.md files where needed (root and important subdirectories)
-5. For each file that needs changes, include the full new content
-6. Only include files that have actual changes (action: "created" or "updated")
-7. Return ONLY valid JSON, no other text, explanations, or markdown
-8. The content must be the exact text that should be written to each file
+1. Only emit paths that are "AGENTS.md" or end with "/AGENTS.md".
+2. Preserve and reconcile EXISTING AGENTS.md content; do not discard repository-specific knowledge.
+3. Only include files with actual changes (action "created" or "updated").
+4. The content must be the exact text written to the file.
+5. If you cannot determine real facts, return {"summary": "insufficient context", "files": []}.
 
 Begin your response with the JSON object immediately, no preamble.`;
+}
+
+/**
+ * @deprecated Kept as a thin alias for backward compatibility.
+ * Prefer buildAgentsUpgradePrompt(), which grounds output in real repo context.
+ */
+function buildAutoDiscoveryPrompt(commandText, owner, repo, branch) {
+  return buildAgentsUpgradePrompt({ commandText, owner, repo, branch, repositoryContext: null });
 }
 
 /**
@@ -37273,18 +37616,42 @@ async function extractFilesFromText(text, octokit, owner, repo, targetBranch, fe
  * @param {string} baseBody - Base PR body
  * @param {Array<string>} updatedFiles - List of updated files
  * @param {string} taskId - Task ID
+ * @param {Object} [repositoryContext] - Collected repo context for transparency
  * @returns {string} - Full PR body
  */
-function buildPrBody(baseBody, updatedFiles, taskId) {
+function buildPrBody(baseBody, updatedFiles, taskId, repositoryContext) {
   const timestamp = new Date().toISOString();
   const filesList = updatedFiles.map(f => `- ${f}`).join('\n');
   
-  return `${baseBody}\n\n` +
-         `**Task:** ${taskId}\n` +
-         `**Timestamp:** ${timestamp}\n` +
-         `**Files Updated:**\n${filesList}\n\n` +
-         `---\n` +
-         `*Generated automatically by zai-code-bot scheduled task*`;
+  const parts = [baseBody || '', ''];
+  
+  if (repositoryContext) {
+    parts.push(`**Context mode:** ${repositoryContext.targetPaths?.length ? 'scoped' : 'full repository'}`);
+    if (repositoryContext.existingAgentsFiles?.length) {
+      parts.push('**Existing AGENTS.md files found:**');
+      for (const f of repositoryContext.existingAgentsFiles) parts.push(`- ${f}`);
+    }
+    if (repositoryContext.targetPaths?.length) {
+      parts.push('**Target paths:**');
+      for (const t of repositoryContext.targetPaths) parts.push(`- ${t}`);
+    }
+    if (repositoryContext.truncated) {
+      parts.push('**Note:** repository file tree was truncated; context may be incomplete.');
+    }
+    parts.push('');
+  }
+  
+  parts.push(
+    `**Task:** ${taskId}`,
+    `**Timestamp:** ${timestamp}`,
+    `**Files Updated:**`,
+    filesList,
+    '',
+    '---',
+    '*Generated automatically by zai-code-bot scheduled task*',
+  );
+  
+  return parts.join('\n');
 }
 
 // ============================================================================
@@ -37712,6 +38079,9 @@ module.exports = {
   updateFileInRepo,
   createPR,
   buildExecutionContext,
+  buildAgentsUpgradePrompt,
+  buildAutoDiscoveryPrompt,
+  parseFileUpdatesFromResponse,
 };
 
 
@@ -38470,6 +38840,416 @@ module.exports = {
   FALLBACK_MESSAGES,
   parsePatchLineRanges,
   scopeLargeFileContent,
+};
+
+
+/***/ }),
+
+/***/ 787:
+/***/ ((module) => {
+
+/**
+ * Repository Context Collection
+ *
+ * Gathers real, observable repository facts (file tree, existing AGENTS.md files,
+ * and key file contents) so the AGENTS.md upgrade prompt is grounded in evidence
+ * instead of letting the model hallucinate a project from the repo name alone.
+ *
+ * This module is deliberately self-contained: it talks to Octokit directly and
+ * never depends on the scheduled handler, avoiding circular imports.
+ */
+
+// Files that are always pulled into context when present (repo-defining metadata).
+// These ground the model in the real language/framework/entry points.
+const KEY_FILES = [
+  'README.md',
+  'package.json',
+  'package-lock.json',
+  'tsconfig.json',
+  'pyproject.toml',
+  'requirements.txt',
+  'Cargo.toml',
+  'go.mod',
+  'pom.xml',
+  'build.gradle',
+  'action.yml',
+  'action.yaml',
+  '.zai-scheduled.yml',
+  'Dockerfile',
+  'CONTRIBUTING.md',
+  'ARCHITECTURE.md',
+  '.github/copilot-instructions.md',
+];
+
+// Glob directory patterns excluded from context by default (vendored/generated noise).
+const DEFAULT_EXCLUDE_PATHS = [
+  'node_modules/**',
+  '.git/**',
+  'dist/**',
+  'build/**',
+  'coverage/**',
+  '.next/**',
+  '.nuxt/**',
+  '.cache/**',
+  '.turbo/**',
+  '__pycache__/**',
+  '.venv/**',
+  'vendor/**',
+  '*.lock',
+  '*.min.js',
+  '*.min.css',
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+];
+
+// Default context budget (characters). Generous enough for mid-size repos while
+// staying well under typical model context windows after the gist prompt is added.
+const DEFAULT_MAX_CONTEXT_CHARS = 120000;
+
+// Per-file content cap. Large files are head-truncated to this many characters.
+const DEFAULT_MAX_FILE_CHARS = 12000;
+
+// Maximum number of content fetches we will issue (protects the API rate limit).
+const DEFAULT_MAX_FILES_TO_FETCH = 40;
+
+/**
+ * Convert a glob pattern (supporting ** and *) into a RegExp.
+ * @param {string} pattern - Glob pattern
+ * @returns {RegExp} Matching regular expression
+ */
+function globToRegExp(pattern) {
+  // Anchor and escape, then translate glob tokens.
+  let re = '^';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*') {
+      if (pattern[i + 1] === '*') {
+        // '**' matches across directory separators.
+        // If it follows a literal '/', make that '/' optional so that
+        // 'node_modules/**' matches both 'node_modules' and 'node_modules/x'.
+        if (re.endsWith('/')) {
+          re = re.slice(0, -1) + '(?:/.*)?';
+        } else {
+          re += '.*';
+        }
+        i++; // consume second '*'
+        // swallow an optional trailing slash so 'a/**/' also works
+        if (pattern[i + 1] === '/') i++;
+      } else {
+        // '*' matches within a path segment
+        re += '[^/]*';
+      }
+    } else if ('.+?^${}()|[]\\'.includes(c)) {
+      re += '\\' + c;
+    } else {
+      re += c;
+    }
+  }
+  re += '$';
+  return new RegExp(re);
+}
+
+/**
+ * Test whether a repo-relative path is excluded by any exclude glob.
+ * @param {string} path - Repo-relative path
+ * @param {RegExp[]} excludeRegexes - Compiled exclude patterns
+ * @returns {boolean}
+ */
+function isExcluded(path, excludeRegexes) {
+  return excludeRegexes.some(re => re.test(path));
+}
+
+/**
+ * Normalize a user-supplied path into a directory prefix form.
+ * '.' and '' -> '' (repo root). Trailing slash stripped.
+ * @param {string} p
+ * @returns {string}
+ */
+function normalizePathPrefix(p) {
+  if (!p) return '';
+  let s = String(p).trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  if (s === '.' ) return '';
+  return s;
+}
+
+/**
+ * Returns true if `path` lives under one of the given context/target prefixes.
+ * Empty prefix list means "everywhere" (no restriction).
+ * @param {string} path
+ * @param {string[]} prefixes - normalized prefixes
+ * @returns {boolean}
+ */
+function isUnderPrefix(path, prefixes) {
+  if (!prefixes || prefixes.length === 0) return true;
+  const norm = path.replace(/\\/g, '/');
+  return prefixes.some(prefix => {
+    if (!prefix) return true;
+    return norm === prefix || norm.startsWith(prefix + '/');
+  });
+}
+
+/**
+ * Fetch a single file's text content from the repository.
+ * Returns null for missing files (404) instead of throwing.
+ * @param {Object} octokit
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} path
+ * @param {string} ref
+ * @returns {Promise<string|null>}
+ */
+async function fetchFile(octokit, owner, repo, path, ref) {
+  try {
+    const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ref });
+    // Directory entries (array) or non-text entries have no content.
+    if (!data || data.type !== 'file' || typeof data.content !== 'string') {
+      return null;
+    }
+    return Buffer.from(data.content, 'base64').toString('utf8');
+  } catch (error) {
+    if (error.status === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * Collect grounded repository context for AGENTS.md generation.
+ *
+ * @param {Object} params
+ * @param {Object} params.octokit - GitHub Octokit instance
+ * @param {string} params.owner - Repository owner
+ * @param {string} params.repo - Repository name
+ * @param {string} params.branch - Branch/ref to read from
+ * @param {string[]} [params.contextPaths] - Limit analysis (file tree + contents) to these paths. Default: whole repo.
+ * @param {string[]} [params.targetPaths] - Limit where AGENTS.md may be written. Default: anywhere. (Root AGENTS.md always allowed.)
+ * @param {string[]} [params.excludePaths] - Globs to ignore. Merged with sensible defaults.
+ * @param {number} [params.maxContextChars] - Total char budget for file contents.
+ * @param {number} [params.maxFileChars] - Per-file content cap.
+ * @param {number} [params.maxFilesToFetch] - Hard cap on content fetches.
+ * @param {Object} [params.logger]
+ * @returns {Promise<Object>} Collected context object
+ */
+async function collectRepositoryContext(params) {
+  const {
+    octokit,
+    owner,
+    repo,
+    branch,
+  } = params;
+
+  const logger = params.logger || console;
+  const contextPaths = (params.contextPaths || []).map(normalizePathPrefix).filter(Boolean);
+  const targetPaths = (params.targetPaths || []).map(normalizePathPrefix).filter(Boolean);
+  const excludePaths = [
+    ...DEFAULT_EXCLUDE_PATHS,
+    ...(params.excludePaths || []),
+  ];
+  const maxContextChars = params.maxContextChars || DEFAULT_MAX_CONTEXT_CHARS;
+  const maxFileChars = params.maxFileChars || DEFAULT_MAX_FILE_CHARS;
+  const maxFilesToFetch = params.maxFilesToFetch || DEFAULT_MAX_FILES_TO_FETCH;
+
+  const excludeRegexes = excludePaths.map(globToRegExp);
+
+  // ---- Step 1: full recursive file tree ----
+  let tree = [];
+  let truncated = false;
+  try {
+    const { data } = await octokit.rest.git.getTree({
+      owner,
+      repo,
+      tree_sha: branch,
+      recursive: 'true',
+    });
+    tree = Array.isArray(data.tree) ? data.tree : [];
+    truncated = data.truncated === true;
+  } catch (error) {
+    logger.warn?.({ error: error.message }, 'Failed to fetch repository tree');
+    // Treat as empty tree rather than crashing; existing-files detection still
+    // works via the targeted key-file fetches below.
+    tree = [];
+  }
+
+  if (truncated) {
+    logger.warn?.('Repository tree is truncated; context may be incomplete');
+  }
+
+  // Build a flat list of repo-relative file paths (blobs only), respecting excludes.
+  const allFiles = tree
+    .filter(entry => entry.type === 'blob' && entry.path)
+    .map(entry => entry.path)
+    .filter(p => !isExcluded(p, excludeRegexes));
+
+  // Detect existing AGENTS.md files (auto-discovery). Root + any nested.
+  const existingAgentsFiles = allFiles.filter(
+    p => p === 'AGENTS.md' || p.endsWith('/AGENTS.md')
+  );
+
+  // ---- Step 2: select files whose CONTENT to fetch ----
+  const contextScopedFiles = contextPaths.length
+    ? allFiles.filter(p => isUnderPrefix(p, contextPaths))
+    : allFiles;
+
+  // Priority order for content fetching: existing AGENTS.md > key files > dir hints.
+  const wantedSet = new Set();
+  for (const p of existingAgentsFiles) wantedSet.add(p);
+  for (const kf of KEY_FILES) {
+    if (contextScopedFiles.includes(kf) || allFiles.includes(kf)) wantedSet.add(kf);
+  }
+  // Pull a few representative source files per context path so the model sees real code.
+  // Limit to avoid rate-limit pressure; prefer small/typical entry files.
+  const codeLike = contextScopedFiles.filter(p =>
+    /\.(js|mjs|cjs|ts|tsx|jsx|py|go|rs|java|rb|php|cs|sh)$/i.test(p)
+  );
+  for (const p of codeLike) {
+    wantedSet.add(p);
+    if (wantedSet.size >= maxFilesToFetch) break;
+  }
+
+  // Convert to ordered array, then enforce the fetch cap.
+  let filesToFetch = [...wantedSet];
+  if (filesToFetch.length > maxFilesToFetch) {
+    filesToFetch = filesToFetch.slice(0, maxFilesToFetch);
+  }
+
+  // ---- Step 3: fetch contents within the char budget ----
+  const fileContents = {};
+  let usedChars = 0;
+
+  for (const path of filesToFetch) {
+    if (usedChars >= maxContextChars) {
+      logger.info?.({ path }, 'Context char budget reached, skipping remaining file fetches');
+      break;
+    }
+    let content;
+    try {
+      content = await fetchFile(octokit, owner, repo, path, branch);
+    } catch (error) {
+      logger.warn?.({ error: error.message, path }, 'Failed to fetch file content for context');
+      continue;
+    }
+    if (content === null || content === undefined) continue;
+
+    let capped = content;
+    if (capped.length > maxFileChars) {
+      capped = capped.slice(0, maxFileChars) + '\n... [truncated]';
+    }
+    if (usedChars + capped.length > maxContextChars) {
+      // Fill whatever budget remains for this file, then stop.
+      const remaining = maxContextChars - usedChars;
+      if (remaining <= 0) break;
+      capped = capped.slice(0, remaining) + '\n... [budget limit]';
+    }
+    fileContents[path] = capped;
+    usedChars += capped.length;
+  }
+
+  const collected = {
+    owner,
+    repo,
+    branch,
+    truncated,
+    totalFiles: allFiles.length,
+    tree: allFiles,                       // flat blob path list (post-exclude)
+    existingAgentsFiles,                  // auto-discovered
+    fileContents,                         // path -> text (budgeted)
+    contextPaths,                         // normalized
+    targetPaths,                          // normalized
+    excludePaths,                         // merged + normalized (raw globs)
+    contentCharCount: usedChars,
+    filesFetched: Object.keys(fileContents).length,
+  };
+
+  logger.info?.(
+    {
+      totalFiles: collected.totalFiles,
+      existingAgents: collected.existingAgentsFiles.length,
+      filesFetched: collected.filesFetched,
+      chars: usedChars,
+      truncated,
+    },
+    'Repository context collected'
+  );
+
+  return collected;
+}
+
+/**
+ * Render collected context into a compact, deterministic text block for the prompt.
+ * @param {Object} ctx - Result of collectRepositoryContext
+ * @returns {string}
+ */
+function renderRepositoryContext(ctx) {
+  if (!ctx) return '(no repository context available)';
+
+  const lines = [];
+
+  lines.push(`Repository: ${ctx.owner}/${ctx.repo}`);
+  lines.push(`Branch: ${ctx.branch}`);
+  if (ctx.truncated) {
+    lines.push('NOTE: The repository file tree was truncated by the GitHub API. The listing below may be incomplete.');
+  }
+
+  lines.push('');
+  lines.push('# Existing AGENTS.md files (auto-discovered, do not omit any):');
+  if (ctx.existingAgentsFiles.length) {
+    for (const f of ctx.existingAgentsFiles) lines.push(`- ${f}`);
+  } else {
+    lines.push('- (none found)');
+  }
+
+  lines.push('');
+  lines.push('# Repository file tree (paths only):');
+  const treePreview = ctx.tree && ctx.tree.length
+    ? ctx.tree
+    : [];
+  if (treePreview.length) {
+    // Cap the tree listing so it cannot blow the budget on its own.
+    const cap = 400;
+    for (const p of treePreview.slice(0, cap)) lines.push(p);
+    if (treePreview.length > cap) {
+      lines.push(`... [${treePreview.length - cap} more paths omitted]`);
+    }
+  } else {
+    lines.push('(file tree unavailable)');
+  }
+
+  lines.push('');
+  lines.push('# Key file contents:');
+  const entries = Object.entries(ctx.fileContents || {});
+  if (entries.length) {
+    for (const [path, content] of entries) {
+      lines.push('');
+      lines.push(`## ===== ${path} =====`);
+      lines.push(content);
+      lines.push(`## ===== end ${path} =====`);
+    }
+  } else {
+    lines.push('(no file contents available)');
+  }
+
+  if (ctx.targetPaths && ctx.targetPaths.length) {
+    lines.push('');
+    lines.push('# Write targets are restricted to:');
+    lines.push('- AGENTS.md (root, always allowed)');
+    for (const t of ctx.targetPaths) lines.push(`- ${t}/AGENTS.md`);
+  }
+
+  return lines.join('\n');
+}
+
+module.exports = {
+  collectRepositoryContext,
+  renderRepositoryContext,
+  fetchFile,
+  globToRegExp,
+  isExcluded,
+  isUnderPrefix,
+  normalizePathPrefix,
+  KEY_FILES,
+  DEFAULT_EXCLUDE_PATHS,
+  DEFAULT_MAX_CONTEXT_CHARS,
+  DEFAULT_MAX_FILE_CHARS,
 };
 
 

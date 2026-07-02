@@ -9,6 +9,11 @@ const https = require('node:https');
 const { parseCommand, isValid } = require('../commands');
 const { loadScheduledConfig, getTasksToRun, getGistUrl } = require('../config/scheduled-config');
 const { createLogger, generateCorrelationId } = require('../logging');
+const {
+  collectRepositoryContext,
+  renderRepositoryContext,
+} = require('../repository-context');
+const { validateGeneratedAgentFiles } = require('../agents-validation');
 const core = require('@actions/core');
 
 // Module-level fallback logger so module-scoped helpers (e.g. fetchFromUrl)
@@ -325,9 +330,36 @@ async function handleUpdateAgentsTask(context) {
     
     logger.info(`Fetched ${gistContent.length} characters from gist`);
     
-    // Step 2: Execute the command from Gist
-    // The command MUST return structured JSON with file paths and contents
-    logger.info('Executing command in auto-discovery mode - expecting structured file map');
+    // Step 2: Collect REAL repository context (file tree, existing AGENTS.md
+    // files, key file contents). Without this the model has nothing to ground
+    // its output on and hallucinates a project from the repo name (PR #15 bug).
+    logger.info('Collecting repository context for grounded generation');
+    const repositoryContext = await collectRepositoryContext({
+      octokit,
+      owner,
+      repo,
+      branch: targetBranch,
+      contextPaths: task.config?.context_paths,
+      targetPaths: task.config?.target_paths,
+      excludePaths: task.config?.exclude_paths,
+      maxContextChars: task.config?.max_context_chars,
+      maxFileChars: task.config?.max_file_chars,
+      maxFilesToFetch: task.config?.max_files_to_fetch,
+      logger,
+    });
+    
+    if (repositoryContext.totalFiles === 0 && !repositoryContext.truncated) {
+      logger.error('Repository context collection returned no files; cannot safely generate AGENTS.md');
+      return {
+        success: false,
+        error: 'Empty repository context',
+        message: 'Could not read repository file tree. Aborting to avoid hallucinated output.',
+      };
+    }
+    
+    // Step 3: Execute the command from Gist WITH the collected context attached.
+    // The command MUST return structured JSON with file paths and contents.
+    logger.info('Executing command in auto-discovery mode with repository context - expecting structured file map');
     let fileUpdates = await executeCommandAndGetFileUpdates({
       commandText: gistContent,
       octokit,
@@ -336,6 +368,7 @@ async function handleUpdateAgentsTask(context) {
       owner,
       repo,
       targetBranch,
+      repositoryContext,
       logger,
     });
     
@@ -348,9 +381,48 @@ async function handleUpdateAgentsTask(context) {
       };
     }
     
-    logger.info(`Auto-discovery found ${fileUpdates.length} file(s) to update`);
+    // Step 4: VALIDATE generated output against real repository context BEFORE
+    // creating the PR. Rejects non-AGENTS.md paths, out-of-scope writes, and
+    // content that references files that do not exist (hallucination guard).
+    const validation = validateGeneratedAgentFiles({
+      fileUpdates,
+      repositoryContext,
+      targetPaths: repositoryContext.targetPaths,
+      allowCreateNew: task.config?.allow_create_new !== false,
+      updateExistingOnly: task.config?.update_existing_only === true,
+      logger,
+    });
     
-    // Step 3: Check if there are any actual changes
+    logger.info(
+      { accepted: validation.accepted.length, rejected: validation.rejected.length },
+      'Validation complete'
+    );
+    
+    if (validation.rejected.length) {
+      for (const r of validation.rejected) {
+        logger.warn({ file: r.file, reasons: r.reasons }, 'Rejected generated AGENTS.md file');
+      }
+    }
+    
+    if (validation.allRejected) {
+      const sample = validation.rejected[0];
+      return {
+        success: false,
+        error: 'All generated files failed validation',
+        message: 'Generated output was rejected by validation guards' +
+          (sample ? ` (e.g. ${sample.file}: ${sample.reasons[0]})` : '') +
+          '. No PR created to avoid committing hallucinated content.',
+        changes: fileUpdates,
+        rejected: validation.rejected,
+      };
+    }
+    
+    // Use only accepted entries going forward.
+    fileUpdates = validation.accepted;
+    
+    logger.info(`Auto-discovery produced ${fileUpdates.length} file(s) to consider`);
+    
+    // Step 5: Check if there are any actual changes
     const updatedFiles = fileUpdates.filter(f => f.changed).map(f => f.file);
     
     if (updatedFiles.length === 0) {
@@ -375,7 +447,7 @@ async function handleUpdateAgentsTask(context) {
     
     const prResult = await createPullRequest({
       title: prTitle,
-      body: buildPrBody(prBody, updatedFiles, task.id),
+      body: buildPrBody(prBody, updatedFiles, task.id, repositoryContext),
       base: targetBranch,
       files: filesToUpdate,
       commitMessage,
@@ -415,7 +487,7 @@ async function handleUpdateAgentsTask(context) {
  * @returns {Promise<Array<Object>>} - Array of {file, oldContent, newContent, changed, isNew} objects
  */
 async function executeCommandAndGetFileUpdates(params) {
-  const { commandText, octokit, apiKey, model, owner, repo, targetBranch, logger } = params;
+  const { commandText, octokit, apiKey, model, owner, repo, targetBranch, repositoryContext, logger } = params;
   
   if (!commandText || commandText.trim() === '') {
     logger.warn('Command text is empty, cannot execute');
@@ -426,12 +498,19 @@ async function executeCommandAndGetFileUpdates(params) {
     // Check if it's a valid /zai command
     const parseResult = parseCommand(commandText);
     
-    // Build prompt for auto-discovery mode
-    // The command should scan the repo and return a JSON structure with all AGENTS.md files
-    const prompt = buildAutoDiscoveryPrompt(commandText, owner, repo, targetBranch);
+    // Build a GROUNDED prompt using the collected repository context.
+    // Without real context the model hallucinates a project from the repo name.
+    const prompt = buildAgentsUpgradePrompt({
+      commandText,
+      owner,
+      repo,
+      branch: targetBranch,
+      repositoryContext,
+    });
     
-    // Call Z.ai API to execute the command
-    const response = await callZaiApiWithRetry(apiKey, model, prompt, logger);
+    // Call Z.ai API to execute the command (test-seam: __callZaiForTest hook).
+    const zaiCaller = module.exports.__callZaiForTest || callZaiApiWithRetry;
+    const response = await zaiCaller(apiKey, model, prompt, logger);
     
     if (!response || !response.content) {
       logger.warn('Z.ai API returned empty content');
@@ -452,26 +531,51 @@ async function executeCommandAndGetFileUpdates(params) {
 }
 
 /**
- * Build prompt for auto-discovery mode
- * @param {string} commandText - The command text
- * @param {string} owner - Repository owner
- * @param {string} repo - Repository name
- * @param {string} branch - Target branch
- * @returns {string} - Formatted prompt
+ * Build a GROUNDED prompt for AGENTS.md generation.
+ *
+ * The model is given the REAL repository context (file tree, existing AGENTS.md
+ * files, and key file contents) and is explicitly told it has NO live repo
+ * access and must not invent files/languages/frameworks. This is the fix for
+ * the PR #15 hallucination bug where the model fabricated a Python Telegram
+ * bot for a JavaScript GitHub Action.
+ *
+ * @param {Object} params
+ * @param {string} params.commandText - The gist command text
+ * @param {string} params.owner - Repository owner
+ * @param {string} params.repo - Repository name
+ * @param {string} params.branch - Target branch
+ * @param {Object} params.repositoryContext - Collected context (see repository-context.js)
+ * @returns {string} Formatted prompt
  */
-function buildAutoDiscoveryPrompt(commandText, owner, repo, branch) {
-  return `Repository: ${owner}/${repo}
+function buildAgentsUpgradePrompt({ commandText, owner, repo, branch, repositoryContext }) {
+  const contextBlock = renderRepositoryContext(repositoryContext);
+  const existingCount = repositoryContext?.existingAgentsFiles?.length || 0;
+  const scopedNote = repositoryContext?.targetPaths?.length
+    ? `\nYou may ONLY write AGENTS.md at the repository root and under these target paths: ${repositoryContext.targetPaths.join(', ')}. Do not propose AGENTS.md anywhere else.`
+    : '';
+
+  return `You are a Staff-level software engineer generating and updating AGENTS.md files.
+
+Repository: ${owner}/${repo}
 Branch: ${branch}
 
-You are an AI assistant tasked with generating and updating AGENTS.md files.
+CRITICAL CONSTRAINTS:
+- You do NOT have live repository access. Use ONLY the repository context below.
+- Do NOT invent files, directories, languages, frameworks, or services that are not present in the provided context.
+- Every fact in an AGENTS.md file must be grounded in the observable repository evidence below.
+- If the context is insufficient to describe a file accurately, return an empty files array instead of guessing.
 
-Execute the following command to scan the repository and generate/update AGENTS.md files:
+The repository context below contains: the real file tree, the list of EXISTING AGENTS.md files (auto-discovered), and the contents of key files. Ground all output in these facts.
+
+${contextBlock}
+
+You must update the ${existingCount} existing AGENTS.md file(s) listed above.${scopedNote}
+
+Execute the following command against the repository context above:
 
 ${commandText}
 
-IMPORTANT: You must return the results in a specific JSON format so the bot can process your changes.
-
-Return a JSON object with the following structure:
+RETURN FORMAT (strict JSON only, no markdown fences, no prose):
 {
   "summary": "Brief description of changes",
   "files": [
@@ -479,26 +583,26 @@ Return a JSON object with the following structure:
       "path": "AGENTS.md",
       "content": "... full file content ...",
       "action": "created|updated|unchanged"
-    },
-    {
-      "path": "src/lib/AGENTS.md",
-      "content": "... full file content ...",
-      "action": "created|updated|unchanged"
     }
   ]
 }
 
 Rules:
-1. Scan the ENTIRE repository structure
-2. Identify ALL existing AGENTS.md files
-3. Determine if each needs to be updated
-4. Create new AGENTS.md files where needed (root and important subdirectories)
-5. For each file that needs changes, include the full new content
-6. Only include files that have actual changes (action: "created" or "updated")
-7. Return ONLY valid JSON, no other text, explanations, or markdown
-8. The content must be the exact text that should be written to each file
+1. Only emit paths that are "AGENTS.md" or end with "/AGENTS.md".
+2. Preserve and reconcile EXISTING AGENTS.md content; do not discard repository-specific knowledge.
+3. Only include files with actual changes (action "created" or "updated").
+4. The content must be the exact text written to the file.
+5. If you cannot determine real facts, return {"summary": "insufficient context", "files": []}.
 
 Begin your response with the JSON object immediately, no preamble.`;
+}
+
+/**
+ * @deprecated Kept as a thin alias for backward compatibility.
+ * Prefer buildAgentsUpgradePrompt(), which grounds output in real repo context.
+ */
+function buildAutoDiscoveryPrompt(commandText, owner, repo, branch) {
+  return buildAgentsUpgradePrompt({ commandText, owner, repo, branch, repositoryContext: null });
 }
 
 /**
@@ -639,18 +743,42 @@ async function extractFilesFromText(text, octokit, owner, repo, targetBranch, fe
  * @param {string} baseBody - Base PR body
  * @param {Array<string>} updatedFiles - List of updated files
  * @param {string} taskId - Task ID
+ * @param {Object} [repositoryContext] - Collected repo context for transparency
  * @returns {string} - Full PR body
  */
-function buildPrBody(baseBody, updatedFiles, taskId) {
+function buildPrBody(baseBody, updatedFiles, taskId, repositoryContext) {
   const timestamp = new Date().toISOString();
   const filesList = updatedFiles.map(f => `- ${f}`).join('\n');
   
-  return `${baseBody}\n\n` +
-         `**Task:** ${taskId}\n` +
-         `**Timestamp:** ${timestamp}\n` +
-         `**Files Updated:**\n${filesList}\n\n` +
-         `---\n` +
-         `*Generated automatically by zai-code-bot scheduled task*`;
+  const parts = [baseBody || '', ''];
+  
+  if (repositoryContext) {
+    parts.push(`**Context mode:** ${repositoryContext.targetPaths?.length ? 'scoped' : 'full repository'}`);
+    if (repositoryContext.existingAgentsFiles?.length) {
+      parts.push('**Existing AGENTS.md files found:**');
+      for (const f of repositoryContext.existingAgentsFiles) parts.push(`- ${f}`);
+    }
+    if (repositoryContext.targetPaths?.length) {
+      parts.push('**Target paths:**');
+      for (const t of repositoryContext.targetPaths) parts.push(`- ${t}`);
+    }
+    if (repositoryContext.truncated) {
+      parts.push('**Note:** repository file tree was truncated; context may be incomplete.');
+    }
+    parts.push('');
+  }
+  
+  parts.push(
+    `**Task:** ${taskId}`,
+    `**Timestamp:** ${timestamp}`,
+    `**Files Updated:**`,
+    filesList,
+    '',
+    '---',
+    '*Generated automatically by zai-code-bot scheduled task*',
+  );
+  
+  return parts.join('\n');
 }
 
 // ============================================================================
@@ -1078,4 +1206,7 @@ module.exports = {
   updateFileInRepo,
   createPR,
   buildExecutionContext,
+  buildAgentsUpgradePrompt,
+  buildAutoDiscoveryPrompt,
+  parseFileUpdatesFromResponse,
 };

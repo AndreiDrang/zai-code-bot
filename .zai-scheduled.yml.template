@@ -43,6 +43,37 @@ tasks:
       # URL to fetch content from
       gist_url: https://gist.githubusercontent.com/AndreiDrang/1580ae796fe56074b600cee6352a5f14/raw
       
+      # --- AGENTS.md upgrade scoping (all optional) ---
+      # 
+      # The bot always collects REAL repository context (file tree, existing
+      # AGENTS.md files, and key file contents) and feeds it to the model so it
+      # never hallucinates a project from the repo name alone.
+      # 
+      # Limit which parts of the repo are analyzed for context (default: whole repo):
+      # context_paths:
+      #   - "src"
+      #   - "tests"
+      # 
+      # Restrict where AGENTS.md may be written. Root AGENTS.md is ALWAYS allowed.
+      # When omitted, the model may update/create AGENTS.md anywhere justified.
+      # target_paths:
+      #   - "src/lib"
+      #   - "tests"
+      # 
+      # Globs to ignore when collecting context (merged with built-in defaults
+      # like node_modules, dist, build, coverage, *.lock):
+      # exclude_paths:
+      #   - "docs/generated/**"
+      # 
+      # Prompt/context budgets:
+      # max_context_chars: 120000   # total chars of file contents sent to the model
+      # max_file_chars: 12000       # per-file content cap (large files head-truncated)
+      # max_files_to_fetch: 40      # hard cap on content fetches (rate-limit guard)
+      # 
+      # Generation policy:
+      # allow_create_new: true        # may propose new child AGENTS.md files (default true)
+      # update_existing_only: false   # if true, only existing AGENTS.md files may change
+      
       # PR configuration
       pr_title: "chore: update AGENTS.md files"
       pr_body: |
@@ -113,6 +144,20 @@ tasks:
 #
 #   Required config: branch (optional, defaults to main)
 #   Optional config: gist_url, pr_title, pr_body, commit_message
+#
+#   AGENTS.md upgrade scoping (all optional):
+#     context_paths        - limit which repo paths are analyzed for context
+#     target_paths         - restrict where AGENTS.md files may be written
+#     exclude_paths        - globs ignored when collecting context
+#     max_context_chars    - total context char budget (default 120000)
+#     max_file_chars       - per-file content cap (default 12000)
+#     max_files_to_fetch   - hard cap on content fetches (default 40)
+#     allow_create_new     - may propose new child AGENTS.md (default true)
+#     update_existing_only - only existing AGENTS.md files may change (default false)
+#
+#   The bot ALWAYS collects real repository context before generating, and
+#   VALIDATES output against it: it rejects files that reference paths that do
+#   not exist in the repo, preventing hallucinated content from being committed.
 #
 # Example command for auto-discovery mode (should be in Gist):
 #   /init-agentsmd

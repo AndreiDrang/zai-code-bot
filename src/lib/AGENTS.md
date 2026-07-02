@@ -25,7 +25,8 @@ src/lib/
 ## WHERE TO LOOK
 | Task | File | Notes |
 |------|------|-------|
-| Add or change command grammar | `src/lib/commands.js` | Keep command allowlist strict |
+| Add or change command grammar | `src/lib/commands.js` | Keep command allowlist strict; `update-agents` is allowed |
+| Event-type detection / routing | `src/lib/events.js` | `getEventType` + `shouldProcessEvent`; includes `schedule` (cron) always-process gate |
 | Adjust collaborator/fork policy | `src/lib/auth.js` | Respect silent fork-block behavior |
 | Tune context budget/range rules | `src/lib/context.js` | Keep truncation deterministic |
 | Change comment lifecycle | `src/lib/comments.js` | Preserve marker idempotency |

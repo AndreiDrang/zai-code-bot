@@ -174,7 +174,51 @@ function validateAndNormalizeTask(task, index, defaults) {
     throw new Error(`Task ${task.id} has invalid files value (must be array)`);
   }
   
+  // Validate AGENTS.md upgrade scoping fields (all optional).
+  validateAgentsConfig(task.id, normalized.config);
+  
   return normalized;
+}
+
+/**
+ * Validate optional AGENTS.md upgrade scoping/budget fields on a task config.
+ * Unknown-but-typed-wrong values throw; missing values are left unset so
+ * callers apply their own defaults at runtime.
+ * @param {string} taskId
+ * @param {Object} cfg - task config (mutated to normalize array fields)
+ * @throws {Error} on type mismatches
+ */
+function validateAgentsConfig(taskId, cfg) {
+  const label = `Task ${taskId}`;
+
+  const pathArrays = ['context_paths', 'target_paths', 'exclude_paths'];
+  for (const key of pathArrays) {
+    if (cfg[key] !== undefined && !Array.isArray(cfg[key])) {
+      throw new Error(`${label} has invalid ${key} value (must be array of path/glob strings)`);
+    }
+    if (Array.isArray(cfg[key])) {
+      const bad = cfg[key].find(v => typeof v !== 'string');
+      if (bad !== undefined) {
+        throw new Error(`${label} has non-string entry in ${key}`);
+      }
+    }
+  }
+
+  const positiveInts = ['max_context_chars', 'max_file_chars', 'max_files_to_fetch'];
+  for (const key of positiveInts) {
+    if (cfg[key] !== undefined) {
+      if (typeof cfg[key] !== 'number' || !Number.isFinite(cfg[key]) || cfg[key] <= 0) {
+        throw new Error(`${label} has invalid ${key} value (must be a positive number)`);
+      }
+    }
+  }
+
+  const booleans = ['allow_create_new', 'update_existing_only'];
+  for (const key of booleans) {
+    if (cfg[key] !== undefined && typeof cfg[key] !== 'boolean') {
+      throw new Error(`${label} has invalid ${key} value (must be boolean)`);
+    }
+  }
 }
 
 /**
@@ -237,4 +281,5 @@ module.exports = {
   // Export for testing
   validateDefaults,
   validateAndNormalizeTask,
+  validateAgentsConfig,
 };
