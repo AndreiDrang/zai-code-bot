@@ -22,7 +22,8 @@ tests/
 | API and logging resilience | `tests/api.test.js`, `tests/logging.test.js` | Retry/error categorization |
 | Context, PR fetch, and batching | `tests/context.test.js`, `tests/pr-context.test.js`, `tests/changed-files.test.js`, `tests/auto-review.test.js` | Diff scoping, file-at-ref fetch, paginated/batched review |
 | Continuity and events | `tests/continuity.test.js`, `tests/events.test.js` | Hidden-marker state, event-type detection |
-| Scheduled pipeline | — | **GAP:** no tests for `scheduled.js` / `scheduled-config.js` yet (flagged in `plans/*`). Add unit (config load, `getTasksToRun`, `parseFileUpdatesFromResponse`) + integration (schedule event → PR) coverage. |
+| Scheduled pipeline | `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` | Config load + `validateAgentsConfig` scoping; `parseFileUpdatesFromResponse`; grounded `handleUpdateAgentsTask` flow incl. hallucination rejection; repo-context collection (tree/budgets/globs); validation guards incl. PR #15 regression |
+| Scheduled pipeline (integration) | (pending) | End-to-end schedule event → context → Z.ai mock → validated PR is still a gap worth adding; unit coverage of the grounded flow exists via the `handleUpdateAgentsTask` seam (`__callZaiForTest`). |
 | Full command pipeline | `tests/integration/command-pipeline.test.js` | Parse -> auth -> handler -> output contract |
 | PR auto-review behavior | `tests/integration/pr-auto-review.test.js` | Marker upsert and PR event lifecycle |
 

@@ -19,6 +19,8 @@ zai-code-bot/
 ├── src/lib/pr-context.js             # Shared PR context fetch (files, content at ref, refs)
 ├── src/lib/code-scope.js             # Token-budget calculation for prompt sizing
 ├── src/lib/config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
+├── src/lib/repository-context.js     # Real repo context collection (tree + AGENTS.md discovery + key files)
+├── src/lib/agents-validation.js      # Hallucination guard: validates generated AGENTS.md vs real repo
 ├── src/lib/handlers/                 # Command + scheduled handlers (ask/review/explain/describe/impact/help/scheduled)
 ├── tests/                            # Unit and integration coverage
 ├── dist/index.js                     # Generated ncc bundle executed by GitHub
@@ -43,8 +45,10 @@ zai-code-bot/
 | Large PR batching and synthesis | `src/lib/auto-review.js` | Batch creation, context limit handling, synthesis prompt |
 | Paginated changed-files fetch | `src/lib/changed-files.js` | Handles GitHub's 3000 file API limit |
 | Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
-| Scheduled-task config loading | `src/lib/config/scheduled-config.js` | `loadScheduledConfig`, `getTasksToRun`, `validateAndNormalizeConfig`, `getGistUrl` |
-| Scheduled-task execution | `src/lib/handlers/scheduled.js` | `handleScheduledEvent`, `handleUpdateAgentsTask`, `SCHEDULED_HANDLERS`; see child `src/lib/handlers/AGENTS.md` |
+| Scheduled-task config loading | `src/lib/config/scheduled-config.js` | `loadScheduledConfig`, `getTasksToRun`, `validateAndNormalizeConfig`, `validateAgentsConfig`, `getGistUrl`; scoping fields (`context_paths`/`target_paths`/`exclude_paths`/budgets) |
+| Scheduled-task execution | `src/lib/handlers/scheduled.js` | `handleScheduledEvent`, `handleUpdateAgentsTask` (grounded flow: context→prompt→validate→PR), `SCHEDULED_HANDLERS`; see child `src/lib/handlers/AGENTS.md` |
+| Repository context for AGENTS.md gen | `src/lib/repository-context.js` | `collectRepositoryContext` (git tree + existing AGENTS.md discovery + key files, budgeted), `renderRepositoryContext` |
+| AGENTS.md output validation | `src/lib/agents-validation.js` | `validateGeneratedAgentFiles` — rejects non-AGENTS paths, out-of-scope writes, and hallucinated content referencing non-existent files |
 | Manual `/zai update-agents` | `src/index.js` (`dispatchCommand`) | Reuses `handleUpdateAgentsTask` for ad-hoc AGENTS.md updates |
 | Command-specific behavior | `src/lib/handlers/AGENTS.md` | Local guide for each handler module |
 | Test strategy and fixtures | `tests/AGENTS.md` | Test map and suite conventions |
@@ -81,12 +85,17 @@ zai-code-bot/
 | `getGistUrl` | function | `src/lib/config/scheduled-config.js` | low | Resolves gist URL priority: task > defaults > env |
 | `handleScheduledEvent` | function | `src/lib/handlers/scheduled.js` | medium | Scheduled pipeline entry: load config, run matching tasks |
 | `executeScheduledTask` | function | `src/lib/handlers/scheduled.js` | medium | Per-task executor; builds context, dispatches via registry |
-| `handleUpdateAgentsTask` | function | `src/lib/handlers/scheduled.js` | medium | AGENTS.md regeneration: gist → Z.ai → JSON diff → PR |
+| `handleUpdateAgentsTask` | function | `src/lib/handlers/scheduled.js` | medium | AGENTS.md regeneration: gist → collect repo context → grounded Z.ai prompt → validate → JSON diff → PR |
 | `SCHEDULED_HANDLERS` | constant | `src/lib/handlers/scheduled.js` | low | Command→handler registry; `getScheduledHandler`/`registerScheduledHandler` extend it |
+| `buildAgentsUpgradePrompt` | function | `src/lib/handlers/scheduled.js` | low | Grounded prompt: embeds real tree + existing AGENTS.md + key files; tells model it has NO live repo access |
 | `parseFileUpdatesFromResponse` | function | `src/lib/handlers/scheduled.js` | low | Multi-format JSON extraction from Z.ai output |
 | `callZaiApiWithRetry` | function | `src/lib/handlers/scheduled.js` | low | Z.ai HTTP client (native https) with retry for scheduled tasks |
 | `fetchFromUrl` | function | `src/lib/handlers/scheduled.js` | low | HTTP GET for gist command text (30s timeout) |
 | `createPR` | function | `src/lib/handlers/scheduled.js` | low | Branch + multi-file commit + PR open for scheduled changes |
+| `collectRepositoryContext` | function | `src/lib/repository-context.js` | medium | git.getTree → existing AGENTS.md discovery + key-file contents, budgeted + glob-excluded |
+| `renderRepositoryContext` | function | `src/lib/repository-context.js` | low | Renders collected context into a compact prompt block |
+| `validateGeneratedAgentFiles` | function | `src/lib/agents-validation.js` | medium | Pre-PR guard: rejects non-AGENTS paths, out-of-scope/target writes, and hallucinated content |
+| `validateAgentsConfig` | function | `src/lib/config/scheduled-config.js` | low | Validates scoping/budget config fields (`context_paths`, `target_paths`, etc.) |
 
 ## CONVENTIONS
 - Edit maintained code in `src/`; do not hand-edit generated `dist/index.js`.
@@ -99,6 +108,8 @@ zai-code-bot/
 - Bypassing authorization/fork checks for command handlers.
 - Executing command logic for non-PR issue comments.
 - Allowing unbounded context payloads into prompts.
+- Asking an LLM to "scan the repo" without providing real repo context (causes hallucinated AGENTS.md — PR #15 bug).
+- Committing AGENTS.md output that references files/languages not present in the repo.
 - Editing `dist/` manually or shipping source changes without rebuilt artifacts.
 - Treating `.github/workflows/code-review.yml` example as runtime logic.
 
@@ -119,7 +130,8 @@ After source changes: run `npm run build` and commit `dist/index.js` + `dist/lic
 ## NOTES
 - CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
 - No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 7 command handlers + scheduled pipeline: ask (521), review (218), explain (355), describe (129), impact (336), help (95), scheduled (1081 — largest handler, drives scheduled tasks via `.zai-scheduled.yml`). `update-agents` (manual `/zai` command) reuses `handleUpdateAgentsTask` from the scheduled module.
-- Scheduled pipeline gaps (per `plans/*`): no scheduled unit/integration tests yet; `docs/scheduled-tasks.md` not created; README has no scheduled section.
+- 7 command handlers + scheduled pipeline: ask (521), review (218), explain (355), describe (129), impact (336), help (95), scheduled (~1180 — largest handler, drives scheduled tasks via `.zai-scheduled.yml`). `update-agents` (manual `/zai` command) reuses `handleUpdateAgentsTask` from the scheduled module.
+- AGENTS.md upgrade flow (the `update-agents` task) is grounded + validated: `handleUpdateAgentsTask` calls `collectRepositoryContext` (`src/lib/repository-context.js`) to gather the real file tree, auto-discover existing AGENTS.md files, and fetch key file contents; `buildAgentsUpgradePrompt` embeds that context and tells the model it has NO live repo access; `validateGeneratedAgentFiles` (`src/lib/agents-validation.js`) rejects hallucinated/non-AGENTS/out-of-scope output before any PR. Scoping knobs live in `.zai-scheduled.yml` task config: `context_paths`, `target_paths`, `exclude_paths`, `max_context_chars`, `max_file_chars`, `max_files_to_fetch`, `allow_create_new`, `update_existing_only`.
+- Scheduled pipeline gaps (per `plans/*`): `docs/scheduled-tasks.md` not created; README has no scheduled section. (Scheduled unit/integration tests now exist: `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`.)
 - Test framework: Vitest v3 (not Jest). Command: `npm test` → `vitest run --coverage`.
 - Large files: src/lib/handlers/scheduled.js (1081 lines), src/index.js (1095 lines), src/lib/handlers/ask.js (521 lines), src/lib/pr-context.js (433 lines).
