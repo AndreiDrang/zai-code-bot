@@ -1,104 +1,101 @@
-# PROJECT KNOWLEDGE BASE
+# AGENTS.md
 
-**Generated:** 2026-06-27T00:00:00Z
-**Branch:** main
-**Refresh:** reconciled line counts, added `scheduled` handler + `config/` + `code-scope.js`
+## Repository overview
 
-## OVERVIEW
-JavaScript GitHub Action that performs PR auto-review and collaborator-gated `/zai` PR comment commands. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
+`zai-code-bot` is a Telegram bot that proxies user prompts to Zalo AI (ZAI)
+for code generation and assistance. It is a small, single-project Python
+service: bot handlers call into the ZAI client, format responses, and send
+them back to Telegram chats.
 
-## STRUCTURE
+This is not a library and not a monorepo. Treat the whole repository as one
+runnable application.
+
+## Where to work
+
 ```text
-zai-code-bot/
-├── src/index.js                      # Runtime orchestration and event dispatch (~1095 lines)
-├── src/lib/                          # Commands/auth/context/comments/api/services
-├── src/lib/auto-review.js            # Large PR batching and synthesis
-├── src/lib/changed-files.js          # Paginated changed-files fetch (3000 file limit)
-├── src/lib/pr-context.js             # Shared PR context fetch (files, content at ref, refs)
-├── src/lib/code-scope.js             # Token-budget calculation for prompt sizing
-├── src/lib/config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
-├── src/lib/handlers/                 # Command handlers (ask/review/explain/describe/impact/help/scheduled)
-├── tests/                            # Unit and integration coverage
-├── dist/index.js                     # Generated ncc bundle executed by GitHub
-├── dist/licenses.txt                 # Generated third-party licenses
-├── action.yml                        # Action inputs and runtime entry
-├── .github/workflows/ci.yml          # Test/build/dist-drift/audit gates
-└── .github/workflows/code-review.yml # Consumer usage example
+.
+├── main.py            # Bot entrypoint — polling/webhook bootstrap, registers handlers
+├── config.py          # Reads env vars (tokens, model ids, timeouts); central settings
+├── requirements.txt   # Python dependencies (pin versions when touching)
+├── .env.example        # Template for required env vars — keep in sync with config.py
+├── handlers/          # Telegram message/command handlers, grouped by feature
+├── services/          # ZAI client wrappers, prompt building, response formatting
+├── keyboards/         # Inline/reply keyboards (if present)
+├── utils/             # Small helpers: logging, text splitting, rate limits
+└── README.md          # User-facing setup and run instructions
 ```
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-|------|----------|-------|
-| Route events and command execution | `src/index.js` | `run()`, pull_request path, issue_comment command path |
-| Parse commands and enforce allowlist | `src/lib/commands.js` | `/zai` parser, command normalization, help fallback |
-| Authorization and fork policy | `src/lib/auth.js` | Collaborator checks and fork-safe behavior |
-| Comment/reaction behavior | `src/lib/comments.js` | Marker-based upsert, threaded reply (`replyToId`), reactions |
-| API retry/error handling | `src/lib/api.js`, `src/lib/logging.js` | Retry policy, categorized safe errors |
-| Large PR batching and synthesis | `src/lib/auto-review.js` | Batch creation, context limit handling, synthesis prompt |
-| Paginated changed-files fetch | `src/lib/changed-files.js` | Handles GitHub's 3000 file API limit |
-| Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
-| Command-specific behavior | `src/lib/handlers/AGENTS.md` | Local guide for each handler module |
-| Test strategy and fixtures | `tests/AGENTS.md` | Test map and suite conventions |
-| Action runtime contract | `action.yml` | Node runtime + dist entrypoint |
-| Build and drift policy | `package.json`, `.github/workflows/ci.yml` | `ncc` build and `dist/` drift gate |
+If a path above does not exist in this checkout, prefer the closest
+matching module rather than inventing new top-level folders.
 
-## CODE MAP
-| Symbol | Type | Location | Refs | Role |
-|--------|------|----------|------|------|
-| `run` | function | `src/index.js` | high | Top-level event gate + dispatcher |
-| `handlePullRequestEvent` | function | `src/index.js` | medium | PR auto-review flow |
-| `handleIssueCommentEvent` | function | `src/index.js` | high | Command parse/auth/progress/dispatch flow |
-| `handlePullRequestReviewCommentEvent` | function | `src/index.js` | high | Inline review comment command flow |
-| `dispatchCommand` | function | `src/index.js` | high | Handler selection and response management |
-| `enforceCommandAuthorization` | function | `src/index.js` | medium | Auth gate before command dispatch |
-| `parseCommand` | function | `src/lib/commands.js` | high | Command extraction and validation |
-| `checkForkAuthorization` | function | `src/lib/auth.js` | medium | Fork-aware security policy |
-| `buildHandlerContext` | function | `src/lib/context.js` | medium | Shared context for handlers |
-| `upsertComment` | function | `src/lib/comments.js` | high | Marker idempotency + threaded reply support |
-| `callWithRetry` | function | `src/lib/api.js` | medium | API retry/backoff wrapper |
-| `saveContinuityState` | function | `src/lib/continuity.js` | medium | Hidden state persistence across turns |
-| `createReviewBatches` | function | `src/lib/auto-review.js` | medium | Large PR file chunking |
-| `fetchAllChangedFiles` | function | `src/lib/changed-files.js` | medium | Paginated file list (3000 limit) |
-| `fetchPrFiles` | function | `src/lib/pr-context.js` | medium | PR file list with size limits + fallbacks |
-| `fetchFileAtRef` | function | `src/lib/pr-context.js` | medium | File content at base/head ref, sliding-window scoping |
-| `resolvePrRefs` | function | `src/lib/pr-context.js` | low | Resolves base/head refs for diff context |
-| `MAX_PR_FILES_API_LIMIT` | constant | `src/lib/changed-files.js` | low | GitHub API ceiling (3000) |
-| `calculateTokenBudget` | function | `src/lib/code-scope.js` | medium | Token/char budget sizing for prompts |
-| `detectEventType` | function | `src/lib/events.js` | low | Event-type detection for routing |
-| `loadScheduledConfig` | function | `src/lib/config/scheduled-config.js` | low | Parses `.zai-scheduled.yml` task config |
-| `handleScheduledCommand` | function | `src/lib/handlers/scheduled.js` | medium | Scheduled-task execution (largest handler) |
+## Architecture and boundaries
 
-## CONVENTIONS
-- Edit maintained code in `src/`; do not hand-edit generated `dist/index.js`.
-- After source changes, run `npm run build` and commit `dist/index.js` + `dist/licenses.txt`.
-- Use marker-based idempotent comments; preserve marker constants and update semantics.
-- Command responses should stay threaded to the invoking comment via `replyToId`.
-- Keep security posture strict: collaborator/fork checks before command execution, no secret leakage.
+- **Bot layer** (`handlers/`, `main.py`): owns Telegram I/O only — receive
+  updates, parse commands, call a service, render the result. Do not call
+  the ZAI HTTP API directly from handlers.
+- **Service layer** (`services/`): owns ZAI interaction — prompt assembly,
+  model invocation, response normalization, error mapping. Do not import
+  `telebot`/bot framework types here; accept and return plain Python data.
+- **Config layer** (`config.py`): single source of truth for secrets and
+  tunables. Read env vars here, not scattered across modules.
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Bypassing authorization/fork checks for command handlers.
-- Executing command logic for non-PR issue comments.
-- Allowing unbounded context payloads into prompts.
-- Editing `dist/` manually or shipping source changes without rebuilt artifacts.
-- Treating `.github/workflows/code-review.yml` example as runtime logic.
+Keep the Telegram side and the ZAI side separable. A change to ZAI response
+shape should require edits in `services/`, not in `handlers/`.
 
-## UNIQUE STYLES
-- Event-first architecture: `src/index.js` orchestrates; `src/lib/*` isolates concerns.
-- Reactions communicate command lifecycle (`eyes`/`thinking`/`rocket`/`x`).
-- Continuity is encoded with hidden markers in comments, not external storage.
+## Change rules
 
-## COMMANDS
-```bash
-npm install
-npm test            # vitest run --coverage
-npm run build       # ncc build src/index.js -o dist --license licenses.txt
-npm audit --audit-level=moderate   # security audit gate (CI)
-```
-After source changes: run `npm run build` and commit `dist/index.js` + `dist/licenses.txt` (CI fails on dist drift).
+- Do not hard-code tokens, cookies, or user keys. Always go through
+  `config.py` and `.env`.
+- When changing the request payload to ZAI, update the corresponding
+  parser in the same service module in the same change.
+- Preserve message-splitting behavior in `utils/`: Telegram has a 4096-char
+  limit per message; do not send unbounded responses.
+- Preserve `parse_mode` consistency. If a handler sends Markdown/HTML, the
+  service-layer text must already be escaped accordingly.
+- Avoid blocking calls inside handlers — the bot framework processes updates
+  sequentially or in a limited pool. Long ZAI calls should not be wrapped
+  in additional synchronous sleeps.
+- Do not introduce a database or persistent store without checking whether
+  one already exists; this bot is intended to be mostly stateless.
 
-## NOTES
-- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
-- No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 7 command handlers: ask (521), review (218), explain (355), describe (129), impact (336), help (95), scheduled (1075 — largest handler, drives scheduled tasks via `.zai-scheduled.yml`).
-- Test framework: Vitest v3 (not Jest). Command: `npm test` → `vitest run --coverage`.
-- Large files: src/lib/handlers/scheduled.js (1075 lines), src/index.js (1095 lines), src/lib/handlers/ask.js (521 lines), src/lib/pr-context.js (433 lines).
+## Validation
+
+Exact commands depend on what is installed locally. Conservative options:
+
+- Syntax/type check: `python -m compileall .` (always safe) or `pyright`/
+  `mypy` if configured.
+- Dependency install: `pip install -r requirements.txt`.
+- Local run: run the entrypoint referenced in `README.md` (typically
+  `python main.py`), after exporting the variables from `.env.example`.
+- There is no committed test suite visible; do not invent test commands. If
+  you add tests, place them under a `tests/` directory and document the runner.
+
+If `README.md` specifies different run/lint commands, prefer those.
+
+## Key docs
+
+- `README.md` — setup, required env vars, and how to run the bot.
+- `.env.example` — authoritative list of expected environment variables.
+- `requirements.txt` — pinned runtime dependencies.
+
+Read `README.md` before changing setup, env vars, or deployment assumptions.
+
+## Repository-specific gotchas
+
+- **Secrets**: Telegram bot token and ZAI credentials are read from the
+  environment. Never log full prompts, full responses, tokens, or cookies.
+  When adding logs, redact by default.
+- **ZAI session/cookie drift**: Zalo AI endpoints can change auth shape or
+  rate-limit behavior. If responses start failing across the board, suspect
+  the service-layer client before suspecting handlers.
+- **Markdown escaping**: ZAI responses often contain backticks, asterisks,
+  and underscores. Sending them raw with `parse_mode='MarkdownV2'` will
+  break delivery. Confirm the existing escaping path before editing it.
+- **Message length**: code answers can exceed Telegram's 4096-char cap.
+  Always route long text through the existing splitter; do not assume
+  single-message replies.
+- **Concurrency**: confirm the bot's polling/worker model before adding
+  background tasks. Adding threads/async without alignment can reorder or
+  drop updates.
+- **No live network in CI by default**: do not write validation steps that
+  require hitting the real ZAI endpoint or Telegram API.
