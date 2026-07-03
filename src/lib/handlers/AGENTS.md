@@ -4,17 +4,17 @@
 Command handlers implement `/zai` behavior only after parsing + authorization; each module owns prompt construction, API call wiring, and response formatting. The `scheduled` handler is distinct: it executes scheduled tasks defined in `.zai-scheduled.yml` (and the manual `/zai update-agents` command) rather than responding to a standard review command.
 
 ## WHERE TO LOOK
-| Command | File | Lines | Notes |
-|---------|------|-------|-------|
-| `/zai ask` | `src/lib/handlers/ask.js` | 521 | Uses continuity state and broad PR context |
-| `/zai review <path>` | `src/lib/handlers/review.js` | 218 | Targeted diff review, file-in-PR validation |
-| `/zai explain <path>#Lx-Ly` | `src/lib/handlers/explain.js` | 355 | Range parsing + snippet extraction |
-| `/zai describe` | `src/lib/handlers/describe.js` | 129 | File/directory description |
-| `/zai impact` | `src/lib/handlers/impact.js` | 336 | Change impact analysis |
-| `/zai help` | `src/lib/handlers/help.js` | 95 | Static help output with auth gate |
-| `/zai update-agents` | `src/index.js` (`dispatchCommand`) | — | Manual AGENTS.md regen; reuses `handleUpdateAgentsTask` |
-| scheduled tasks | `src/lib/handlers/scheduled.js` | ~1180 | Largest module; cron-driven `.zai-scheduled.yml` tasks; grounded + validated AGENTS.md upgrades |
-| Handler registry | `src/lib/handlers/index.js` | 42 | Dispatcher map consumed by runtime (note: `scheduled` is exported but not in the `/zai` HANDLERS map) |
+| Command | File | Notes |
+|---------|------|-------|
+| `/zai ask` | `src/lib/handlers/ask.js` | Uses continuity state and broad PR context |
+| `/zai review <path>` | `src/lib/handlers/review.js` | Targeted diff review, file-in-PR validation |
+| `/zai explain <path>#Lx-Ly` | `src/lib/handlers/explain.js` | Range parsing + snippet extraction |
+| `/zai describe` | `src/lib/handlers/describe.js` | File/directory description |
+| `/zai impact` | `src/lib/handlers/impact.js` | Change impact analysis |
+| `/zai help` | `src/lib/handlers/help.js` | Static help output with auth gate |
+| `/zai update-agents` | `src/index.js` (`dispatchCommand`) | Manual AGENTS.md regen; reuses `handleUpdateAgentsTask` |
+| scheduled tasks | `src/lib/handlers/scheduled.js` | Largest module; cron-driven `.zai-scheduled.yml` tasks; grounded + validated AGENTS.md upgrades |
+| Handler registry | `src/lib/handlers/index.js` | Dispatcher map consumed by runtime (note: `scheduled` is exported but not in the `/zai` HANDLERS map) |
 
 ## SCHEDULED MODULE (`scheduled.js`) KEY SYMBOLS
 - `handleScheduledEvent` (entry) → `executeScheduledTask` (per-task) → `buildExecutionContext` → `getScheduledHandler` (registry lookup).
@@ -32,7 +32,7 @@ Command handlers implement `/zai` behavior only after parsing + authorization; e
 - Return user-safe failures; log internal details through shared logging helpers.
 
 ## TESTING
-- Local handler unit coverage exists in this folder (`review.test.js`, `explain.test.js`, `scheduled.test.js`).
+- Local handler unit coverage exists in `tests/handlers/`: `ask.test.js`, `explain.test.js`, `impact.test.js`, `review.test.js`, `scheduled.test.js`.
 - Scheduled pipeline coverage: `tests/handlers/scheduled.test.js` (registry, PR creation, parse, grounded `handleUpdateAgentsTask` flow incl. hallucination rejection), `tests/scheduled-config.test.js` (config + `validateAgentsConfig` scoping fields), `tests/repository-context.test.js` (tree/AGENTS.md discovery/budgets/globs), `tests/agents-validation.test.js` (path/hallucination/target-path guards incl. PR #15 regression).
 - End-to-end command pipeline behavior is validated in `tests/integration/command-pipeline.test.js`.
 - When changing parsing or output contracts, update both unit and integration assertions.
