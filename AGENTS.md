@@ -2,7 +2,7 @@
 
 **Generated:** 2025-01-20T00:00:00Z
 **Branch:** main
-**Refresh:** reconciled against actual file tree and `plans/*`; verified scheduled event routing, config loader, handler symbols, manual `/zai update-agents` command, action.yml inputs, and test coverage. Fixed stale workflow filenames (replaced nonexistent `code-review.yml` with actual `zai-code-bot.yml`, `zai-agents-init-example.yml`). Confirmed: scheduled test coverage exists (`tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`); `docs/scheduled-tasks.md` present; README updated with scheduled-tasks section and `/zai update-agents` command.
+**Refresh:** reconciled against actual file tree and `plans/*`; verified scheduled event routing, config loader, handler symbols, manual `/zai update-agents` command, action.yml inputs, and test coverage. Completed CONVENTIONS, added ANTI-PATTERNS and NOTES sections. Confirmed all module and test paths against file tree.
 
 ## OVERVIEW
 JavaScript GitHub Action with three event flows: (1) PR auto-review, (2) collaborator-gated `/zai` PR comment commands, and (3) cron-triggered scheduled tasks (`.zai-scheduled.yml`) that regenerate AGENTS.md files and open PRs. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
@@ -115,37 +115,30 @@ zai-code-bot/
 ## CONVENTIONS
 - Edit maintained code in `src/`; do not hand-edit generated `dist/index.js`.
 - After source changes, run `npm run build` and commit `dist/index.js` + `dist/licenses.txt`.
-- Use marker-based idempotent comments; preserve marker constants and update semantics.
+- Use marker-based idempotent comments; preserve marker constants (`COMMENT_MARKER`, `PROGRESS_MARKER`, `AUTH_MARKER`, `GUIDANCE_MARKER`) and update semantics.
 - Command responses should stay threaded to the invoking comment via `replyToId`.
-- Keep security posture strict: collaborator/fork checks before command execution, no secret leakage.
+- Keep handlers decoupled from Octokit details via shared context structures built in `src/lib/context.js`.
+- Return explicit `{ success, error }`-style outcomes where already established (e.g., `src/lib/api.js`).
+- Never expose raw exception details or secrets in PR comments; route through `src/lib/logging.js` categorized safe errors.
+- Keep command allowlist strict in `src/lib/commands.js`; new commands must be added to `ALLOWED_COMMANDS`.
+- Tests use Vitest v3 globals (`describe`/`test`/`expect`) configured via `vitest.config.js`.
+- Scheduled-task AGENTS.md output must pass `validateGeneratedAgentFiles` before PR creation.
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Bypassing authorization/fork checks for command handlers.
-- Executing command logic for non-PR issue comments.
-- Allowing unbounded context payloads into prompts.
-- Asking an LLM to "scan the repo" without providing real repo context (causes hallucinated AGENTS.md — PR #15 bug).
-- Committing AGENTS.md output that references files/languages not present in the repo.
-- Editing `dist/` manually or shipping source changes without rebuilt artifacts.
-- Confusing consumer-facing workflow examples (README snippet) with this repo's own `.github/workflows/` runtime logic.
-
-## UNIQUE STYLES
-- Event-first architecture: `src/index.js` orchestrates; `src/lib/*` isolates concerns.
-- Reactions communicate command lifecycle (`eyes`/`thinking`/`rocket`/`x`).
-- Continuity is encoded with hidden markers in comments, not external storage.
-
-## COMMANDS
-```bash
-npm install
-npm test            # vitest run --coverage
-npm run build       # ncc build src/index.js -o dist --license licenses.txt
-npm audit --audit-level=moderate   # security audit gate (CI)
-```
-After source changes: run `npm run build` and commit `dist/index.js` + `dist/licenses.txt` (CI fails on dist drift).
+## ANTI-PATTERNS
+- Hand-editing `dist/index.js` instead of rebuilding from `src/`.
+- Running command handlers before `enforceCommandAuthorization` succeeds.
+- Posting top-level comments for command replies instead of threaded replies.
+- Passing unbounded diffs/patches into prompts; always use context budgeting (`src/lib/code-scope.js`, `src/lib/auto-review.js`).
+- Exposing raw exception details or secrets in PR comments.
+- Introducing cross-handler coupling; prefer shared service modules in `src/lib/`.
+- Bypassing `validateGeneratedAgentFiles` before committing AGENTS.md updates.
+- Duplicating parser/auth logic that already exists in `src/lib/commands.js` or `src/lib/auth.js`.
 
 ## NOTES
-- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
-- No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 7 command handlers + scheduled pipeline: `ask`, `review`, `explain`, `describe`, `impact`, `help`, plus `scheduled` (largest handler, drives cron tasks via `.zai-scheduled.yml`).
-- Scheduled test coverage: `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` (unit-level); end-to-end schedule integration test is still a gap.
-- Scheduled-tasks configuration reference: `docs/scheduled-tasks.md`.
-- Architecture and invariants catalog: `ARCHITECTURE.md`.
+- Test command: `npm test` → `vitest run --coverage`.
+- Coverage uploaded to Codecov.
+- See `ARCHITECTURE.md` for layered architecture, dependency direction, and life-of-request flows.
+- See `RUNBOOK.md` for rollback and incident response procedures.
+- See `SECURITY.md` for authorization rules and permission model.
+- See `CONTRIBUTING.md` for contribution guide and review checklists.
+- `dist/` is not shown in the source file tree but must exist and be committed; CI `dist-drift` gate fails on uncommitted bundle changes.
