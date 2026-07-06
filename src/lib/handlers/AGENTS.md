@@ -12,9 +12,9 @@ Command handlers implement `/zai` behavior only after parsing + authorization; e
 | `/zai describe` | `src/lib/handlers/describe.js` | File/directory description |
 | `/zai impact` | `src/lib/handlers/impact.js` | Change impact analysis |
 | `/zai help` | `src/lib/handlers/help.js` | Static help output with auth gate |
-| `/zai update-agents` | `src/index.js` (`dispatchCommand`) | Manual AGENTS.md regen; reuses `handleUpdateAgentsTask` |
+| `/zai update-agents` | `src/index.js` (`dispatchCommand`) | Manual AGENTS.md regen; reuses `handleUpdateAgentsTask` from `scheduled.js` |
 | scheduled tasks | `src/lib/handlers/scheduled.js` | Largest module; cron-driven `.zai-scheduled.yml` tasks; grounded + validated AGENTS.md upgrades |
-| Handler registry | `src/lib/handlers/index.js` | Dispatcher map consumed by runtime (note: `scheduled` is exported but not in the `/zai` HANDLERS map) |
+| Handler registry | `src/lib/handlers/index.js` | Dispatcher map consumed by runtime (note: `scheduled` is exported but not in the `/zai` HANDLERS map; imported directly in `src/index.js`) |
 
 ## SCHEDULED MODULE (`scheduled.js`) KEY SYMBOLS
 - `handleScheduledEvent` (entry) → `executeScheduledTask` (per-task) → `buildExecutionContext` → `getScheduledHandler` (registry lookup).
@@ -27,7 +27,7 @@ Command handlers implement `/zai` behavior only after parsing + authorization; e
 ## CONVENTIONS
 - Keep command argument parsing explicit and reject invalid formats early.
 - Always use threaded replies (`replyToId`) for command results.
-- Reactions should reflect lifecycle: acknowledge -> work -> success/failure.
+- Reactions should reflect lifecycle: acknowledge → work → success/failure.
 - Keep prompts bounded via context truncation helpers; never pass raw unbounded patches.
 - Return user-safe failures; log internal details through shared logging helpers.
 
@@ -46,3 +46,4 @@ Command handlers implement `/zai` behavior only after parsing + authorization; e
 ## NOTES
 - Prefer adding helper functions within a handler module before introducing cross-handler coupling.
 - Keep marker constants stable once tests depend on them.
+- `handleUpdateAgentsTask` is testable via the `__callZaiForTest` injection seam (see `tests/handlers/scheduled.test.js`); use this to mock Z.ai responses without network calls.
