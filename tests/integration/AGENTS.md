@@ -9,6 +9,7 @@ Integration tests verify end-to-end GitHub event pipelines and visible bot behav
 | Issue comment command pipeline | `tests/integration/command-pipeline.test.js` | Event classification, command parse, auth, dispatch, response shape |
 | Pull request auto-review pipeline | `tests/integration/pr-auto-review.test.js` | PR event handling, marker create/update, no-change short-circuits |
 | Integration fixture data | `tests/integration/fixtures/events.js` | Shared event payloads for realistic event simulation |
+| Scheduled-task end-to-end | (none) | No integration test exists yet. Unit-level coverage of the grounded `handleUpdateAgentsTask` flow (context -> prompt -> validate -> PR) lives in `tests/handlers/scheduled.test.js` via the `__callZaiForTest` seam; see `tests/AGENTS.md` for the full scheduled-coverage map. |
 
 ## CONVENTIONS
 - Test the public behavior chain from event input to final comment/reaction outcome.
