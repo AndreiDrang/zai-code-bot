@@ -14,6 +14,7 @@ Integration tests verify end-to-end GitHub event pipelines and visible bot behav
 - Test the public behavior chain from event input to final comment/reaction outcome.
 - Cover both happy paths and safety gates (non-PR comments, unauthorized users, empty diffs).
 - Keep marker expectations explicit so idempotent update regressions are caught quickly.
+- Shared event payloads in `tests/integration/fixtures/events.js` should be extended rather than duplicating inline JSON.
 
 ## ANTI-PATTERNS
 - Replacing integration assertions with unit-level mocks only.
