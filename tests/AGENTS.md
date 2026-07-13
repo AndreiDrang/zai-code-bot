@@ -1,5 +1,13 @@
 # TEST SUITE GUIDE
 
+## Scope and inheritance
+
+Applies to: `tests/`.
+
+Inherits repository-wide guidance from `AGENTS.md` (root).
+
+This file defines only local differences for this subtree.
+
 ## OVERVIEW
 Repository test coverage mixes module-focused tests in `tests/*.test.js` and scenario-driven flows in `tests/integration/*`.
 
@@ -26,7 +34,7 @@ tests/
 | Describe handler | `tests/describe.test.js` | PR description generation |
 | Scheduled pipeline | `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` | Config load + `validateAgentsConfig` scoping; `parseFileUpdatesFromResponse`; grounded `handleUpdateAgentsTask` flow incl. hallucination rejection; repo-context collection (tree/budgets/globs); validation guards incl. PR #15 regression |
 | Scheduled pipeline (integration) | (pending) | End-to-end schedule event → context → Z.ai mock → validated PR is still a gap; unit coverage of the grounded flow exists via the `handleUpdateAgentsTask` seam (`__callZaiForTest`). |
-| Full command pipeline | `tests/integration/command-pipeline.test.js` | Parse -> auth -> handler -> output contract |
+| Full command pipeline | `tests/integration/command-pipeline.test.js` | Parse → auth → handler → output contract |
 | PR auto-review behavior | `tests/integration/pr-auto-review.test.js` | Marker upsert and PR event lifecycle |
 
 ## CONVENTIONS
@@ -44,3 +52,4 @@ tests/
 - Test command: `npm test` → `vitest run --coverage`.
 - Coverage uploaded to Codecov.
 - Integration tests are the safety net for command threading and marker idempotency.
+- Integration test guide: `tests/integration/AGENTS.md`.
