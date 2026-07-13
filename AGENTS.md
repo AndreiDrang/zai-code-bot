@@ -1,151 +1,127 @@
-# PROJECT KNOWLEDGE BASE
+# AGENTS.md
 
-**Generated:** 2025-01-20T00:00:00Z
-**Branch:** main
-**Refresh:** reconciled against actual file tree and `plans/*`; verified scheduled event routing, config loader, handler symbols, manual `/zai update-agents` command, action.yml inputs, and test coverage. Fixed stale workflow filenames (replaced nonexistent `code-review.yml` with actual `zai-code-bot.yml`, `zai-agents-init-example.yml`). Confirmed: scheduled test coverage exists (`tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`); `docs/scheduled-tasks.md` present; README updated with scheduled-tasks section and `/zai update-agents` command.
+## Repository overview
 
-## OVERVIEW
-JavaScript GitHub Action with three event flows: (1) PR auto-review, (2) collaborator-gated `/zai` PR comment commands, and (3) cron-triggered scheduled tasks (`.zai-scheduled.yml`) that regenerate AGENTS.md files and open PRs. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
+JavaScript GitHub Action (`action.yml`: `node20` runtime, entrypoint `dist/index.js`) with three event-driven flows:
+1. **PR auto-review** — `pull_request` opened/synchronize triggers batched diff review via Z.ai.
+2. **`/zai` commands** — collaborator-gated PR comment commands (`ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`).
+3. **Scheduled tasks** — cron-triggered `.zai-scheduled.yml` tasks that regenerate AGENTS.md files and open PRs.
 
-## STRUCTURE
+GitHub executes the ncc-bundled `dist/index.js`. Maintained source lives in `src/index.js` and `src/lib/*`.
+
+## Where to work
+
 ```text
-zai-code-bot/
-├── src/index.js                      # Runtime orchestration and event dispatch
-├── src/lib/                          # Commands/auth/context/comments/api/services
-├── src/lib/events.js                 # Event-type detection incl. `schedule` (cron) routing
-├── src/lib/commands.js               # `/zai` parser + allowlist (incl. `update-agents`)
-├── src/lib/auto-review.js            # Large PR batching and synthesis
-├── src/lib/changed-files.js          # Paginated changed-files fetch (3000 file limit)
-├── src/lib/pr-context.js             # Shared PR context fetch (files, content at ref, refs)
-├── src/lib/code-scope.js             # Token-budget calculation for prompt sizing
-├── src/lib/context.js                # Changed-file fetch + truncation/range helpers
-├── src/lib/config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
-├── src/lib/repository-context.js     # Real repo context collection (tree + AGENTS.md discovery + key files)
-├── src/lib/agents-validation.js      # Hallucination guard: validates generated AGENTS.md vs real repo
-├── src/lib/handlers/                 # Command + scheduled handlers (ask/review/explain/describe/impact/help/scheduled)
-├── tests/                            # Unit and integration coverage (Vitest v3)
-├── dist/index.js                     # Generated ncc bundle executed by GitHub
-├── dist/licenses.txt                 # Generated third-party licenses
-├── action.yml                        # Action inputs (incl. ZAI_SCHEDULED_*, ZAI_AGENTS_GIST_URL)
-├── .zai-scheduled.yml                # Scheduled-task config for THIS repo (AGENTS.md upkeep)
-├── .zai-scheduled.yml.template       # Consumer template for scheduled tasks
-├── .github/workflows/ci.yml                     # Test/build/dist-drift/audit gates
-├── .github/workflows/zai-agents-update.yml      # Self-hosted scheduled AGENTS.md upkeep
-├── .github/workflows/zai-code-bot.yml           # Bot execution on this repo's own PRs
-├── .github/workflows/zai-agents-init-example.yml # Example workflow for AGENTS.md init
-├── docs/scheduled-tasks.md           # Scheduled-tasks configuration reference
-├── plans/                            # Planning docs (scheduled-tasks integration)
-├── ARCHITECTURE.md                   # Layered architecture and invariants catalog
-├── CONTRIBUTING.md                   # Contribution guide and review checklists
-├── RUNBOOK.md                        # Operational runbook and rollback procedures
-├── SECURITY.md                       # Security policies and authorization rules
-├── README.md                         # User-facing inputs, commands, quickstart
-└── vitest.config.js                  # Vitest configuration
+src/index.js                        # Runtime entrypoint: event routing + dispatch
+src/lib/                            # Services layer (commands/auth/context/comments/api/logging)
+src/lib/handlers/                   # Per-command logic (see src/lib/handlers/AGENTS.md)
+src/lib/config/scheduled-config.js  # Scheduled-task config loader (.zai-scheduled.yml)
+tests/                              # Vitest v3 suite (see tests/AGENTS.md)
+action.yml                          # Action inputs + node20 contract
+.zai-scheduled.yml                  # This repo's scheduled-task config
+dist/index.js                       # Generated ncc bundle (DO NOT hand-edit)
 ```
 
-## WHERE TO LOOK
+## Architecture and boundaries
+
+Three layers with strictly downward dependency direction (full map in `ARCHITECTURE.md`):
+
+1. **Orchestration** — `src/index.js`: event classification, auto-review pipeline, command parse → authorize → dispatch.
+2. **Services** — `src/lib/*.js`: cross-cutting infrastructure (commands, auth, context, comments, api, logging, continuity, code-scope).
+3. **Handlers** — `src/lib/handlers/*.js`: per-command prompt construction, API wiring, response formatting.
+
+Invariants (detailed in `ARCHITECTURE.md` §5):
+- `dist/index.js` is the only artifact GitHub executes; CI `dist-drift` gate fails on uncommitted bundle changes.
+- Command handlers run only after `enforceCommandAuthorization` succeeds.
+- Automated comments use marker constants for idempotency; replies threaded via `replyToId`.
+- No raw exception internals or secrets in PR comments — route through `src/lib/logging.js` safe-error wrappers.
+- Prompt sizing bounded via `src/lib/code-scope.js` and `src/lib/context.js`; never unbounded diffs.
+
+## Context routing
+
+Read only when relevant:
+- Architectural or cross-module changes → `ARCHITECTURE.md`
+- Security or authorization changes → `SECURITY.md`
+- Operational/rollback procedures → `RUNBOOK.md`
+- Scheduled-task configuration, cron syntax, troubleshooting → `docs/scheduled-tasks.md`
+- Contribution guide and review checklists → `CONTRIBUTING.md`
+- Test strategy and suite layout → `tests/AGENTS.md`
+- Handler-specific rules and scheduled-module internals → `src/lib/handlers/AGENTS.md`
+- Services-layer module guide → `src/lib/AGENTS.md`
+
+## Change rules
+
+- Edit source in `src/`; never hand-edit `dist/index.js`.
+- After source changes: run `npm run build`, then commit `dist/index.js` + `dist/licenses.txt`.
+- Keep command allowlist strict in `src/lib/commands.js` (`ALLOWED_COMMANDS`); `update-agents` is allowed.
+- Preserve marker constants (`<!-- zai-code-review -->`, `<!-- zai-progress -->`, `<!-- zai-guidance -->`, `<!-- zai-auth -->`) — tests depend on them.
+- Command responses must stay threaded to the invoking comment (`replyToId`).
+- Keep prompts bounded; use `src/lib/code-scope.js` for token/char budgeting.
+- Return `{ success, error }`-style outcomes where the pattern is already established.
+- Prefer pure helpers for parsing/validation; keep handlers decoupled from Octokit via shared context structures.
+
+## Validation
+
+```bash
+npm test          # vitest run --coverage
+npm run build     # ncc build src/index.js -o dist --license licenses.txt
+```
+
+CI (`.github/workflows/ci.yml`) runs test/build/dist-drift/security-audit gates. Coverage uploaded to Codecov.
+
+## Where to look
+
 | Task | Location | Notes |
 |------|----------|-------|
-| Route events and command execution | `src/index.js` | `run()`, pull_request path, issue_comment command path, schedule path |
-| Schedule event detection | `src/lib/events.js` | `getEventType` returns `schedule`; `shouldProcessEvent` always processes cron events |
-| Parse commands and enforce allowlist | `src/lib/commands.js` | `/zai` parser, command normalization, help fallback; `update-agents` in allowlist |
-| Authorization and fork policy | `src/lib/auth.js` | Collaborator checks and fork-safe behavior |
-| Comment/reaction behavior | `src/lib/comments.js` | Marker-based upsert, threaded reply (`replyToId`), reactions |
-| API retry/error handling | `src/lib/api.js`, `src/lib/logging.js` | Retry policy, categorized safe errors |
-| Large PR batching and synthesis | `src/lib/auto-review.js` | Batch creation, context limit handling, synthesis prompt |
-| Paginated changed-files fetch | `src/lib/changed-files.js` | Handles GitHub's 3000 file API limit |
-| Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
-| Token budget calculation | `src/lib/code-scope.js` | Window extraction, enclosing block detection for prompt sizing |
-| Scheduled-task config loading | `src/lib/config/scheduled-config.js` | `loadScheduledConfig`, `getTasksToRun`, `validateAndNormalizeConfig`, `validateAgentsConfig`, `getGistUrl`; scoping fields (`context_paths`/`target_paths`/`exclude_paths`/budgets) |
-| Scheduled-task execution | `src/lib/handlers/scheduled.js` | `handleScheduledEvent`, `handleUpdateAgentsTask` (grounded flow: context→prompt→validate→PR), `SCHEDULED_HANDLERS`; see child `src/lib/handlers/AGENTS.md` |
-| Repository context for AGENTS.md gen | `src/lib/repository-context.js` | `collectRepositoryContext` (git tree + existing AGENTS.md discovery + key files, budgeted), `renderRepositoryContext` |
-| AGENTS.md output validation | `src/lib/agents-validation.js` | `validateGeneratedAgentFiles` — rejects non-AGENTS paths, out-of-scope writes, and hallucinated content referencing non-existent files |
-| Manual `/zai update-agents` | `src/index.js` (`dispatchCommand`) | Reuses `handleUpdateAgentsTask` for ad-hoc AGENTS.md updates |
-| Command-specific behavior | `src/lib/handlers/AGENTS.md` | Local guide for each handler module |
-| Test strategy and fixtures | `tests/AGENTS.md` | Test map and suite conventions |
-| Scheduled-tasks reference | `docs/scheduled-tasks.md` | Configuration reference, cron syntax, troubleshooting |
-| Architecture and invariants | `ARCHITECTURE.md` | Layered architecture, dependency direction, life-of-request flows |
-| Operational procedures | `RUNBOOK.md` | Rollback and incident response |
-| Security policies | `SECURITY.md` | Authorization rules and permission model |
-| Action runtime contract | `action.yml` | Node 20 runtime + dist entrypoint |
-| Build and drift policy | `package.json`, `.github/workflows/ci.yml` | `ncc` build and `dist/` drift gate |
+| Event routing and dispatch | `src/index.js` | `run()`, PR path, issue_comment path, schedule path |
+| Command parsing + allowlist | `src/lib/commands.js` | `/zai` parser, `@zai-bot` normalization, `update-agents` in allowlist |
+| Authorization + fork policy | `src/lib/auth.js` | `checkForkAuthorization`, `getCommenter`; permissive for identifiable users |
+| Comment lifecycle | `src/lib/comments.js` | Marker upsert, threaded replies (`replyToId`), reactions |
+| API retry/error handling | `src/lib/api.js`, `src/lib/logging.js` | Progressive timeout, categorized safe errors |
+| Large PR batching + synthesis | `src/lib/auto-review.js` | `createReviewBatches`, context-limit splitting, synthesis prompt |
+| Paginated changed-files | `src/lib/changed-files.js` | 3000-file API ceiling (`MAX_PR_FILES_API_LIMIT`) |
+| PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks |
+| Token budget calculation | `src/lib/code-scope.js` | Window/enclosing-block extraction |
+| Scheduled config loading | `src/lib/config/scheduled-config.js` | `loadScheduledConfig`, `getTasksToRun`, `getGistUrl`, `validateAgentsConfig` |
+| Scheduled execution | `src/lib/handlers/scheduled.js` | `handleScheduledEvent`, `handleUpdateAgentsTask`, `SCHEDULED_HANDLERS` |
+| Repo context for AGENTS.md gen | `src/lib/repository-context.js` | `collectRepositoryContext`, `renderRepositoryContext` |
+| AGENTS.md output validation | `src/lib/agents-validation.js` | `validateGeneratedAgentFiles` — hallucination guard |
+| Manual `/zai update-agents` | `src/index.js` (`dispatchCommand`) | Reuses `handleUpdateAgentsTask` |
+| Action inputs contract | `action.yml` | `ZAI_API_KEY`, `ZAI_MODEL`, `ZAI_AUTO_REVIEW_*`, `ZAI_SCHEDULED_*`, `ZAI_AGENTS_GIST_URL` |
 
-## CODE MAP
-| Symbol | Type | Location | Refs | Role |
-|--------|------|----------|------|------|
-| `run` | function | `src/index.js` | high | Top-level event gate + dispatcher |
-| `handlePullRequestEvent` | function | `src/index.js` | medium | PR auto-review flow |
-| `handleIssueCommentEvent` | function | `src/index.js` | high | Command parse/auth/progress/dispatch flow |
-| `handlePullRequestReviewCommentEvent` | function | `src/index.js` | high | Inline review comment command flow |
-| `dispatchCommand` | function | `src/index.js` | high | Handler selection and response management |
-| `enforceCommandAuthorization` | function | `src/index.js` | medium | Auth gate before command dispatch |
-| `parseCommand` | function | `src/lib/commands.js` | high | Command extraction and validation |
-| `checkForkAuthorization` | function | `src/lib/auth.js` | medium | Fork-aware security policy |
-| `buildHandlerContext` | function | `src/lib/context.js` | medium | Shared context for handlers |
-| `upsertComment` | function | `src/lib/comments.js` | high | Marker idempotency + threaded reply support |
-| `callWithRetry` | function | `src/lib/api.js` | medium | API retry/backoff wrapper |
-| `saveContinuityState` | function | `src/lib/continuity.js` | medium | Hidden state persistence across turns |
-| `createReviewBatches` | function | `src/lib/auto-review.js` | medium | Large PR file chunking |
-| `fetchAllChangedFiles` | function | `src/lib/changed-files.js` | medium | Paginated file list (3000 limit) |
-| `fetchPrFiles` | function | `src/lib/pr-context.js` | medium | PR file list with size limits + fallbacks |
-| `fetchFileAtRef` | function | `src/lib/pr-context.js` | medium | File content at base/head ref, sliding-window scoping |
-| `resolvePrRefs` | function | `src/lib/pr-context.js` | low | Resolves base/head refs for diff context |
-| `MAX_PR_FILES_API_LIMIT` | constant | `src/lib/changed-files.js` | low | GitHub API ceiling (3000) |
-| `calculateTokenBudget` | function | `src/lib/code-scope.js` | medium | Token/char budget sizing for prompts |
-| `getEventType` | function | `src/lib/events.js` | low | Event-type detection for routing (incl. `schedule`) |
-| `shouldProcessEvent` | function | `src/lib/events.js` | low | Event filter; always-process gate for cron events |
-| `loadScheduledConfig` | function | `src/lib/config/scheduled-config.js` | low | Parses `.zai-scheduled.yml` task config |
-| `validateAndNormalizeConfig` | function | `src/lib/config/scheduled-config.js` | low | Schema validation + default-merging for tasks |
-| `getTasksToRun` | function | `src/lib/config/scheduled-config.js` | low | Filters tasks whose schedule matches the event |
-| `getGistUrl` | function | `src/lib/config/scheduled-config.js` | low | Resolves gist URL priority: task > defaults > env |
-| `handleScheduledEvent` | function | `src/lib/handlers/scheduled.js` | medium | Scheduled pipeline entry: load config, run matching tasks |
-| `executeScheduledTask` | function | `src/lib/handlers/scheduled.js` | medium | Per-task executor; builds context, dispatches via registry |
-| `handleUpdateAgentsTask` | function | `src/lib/handlers/scheduled.js` | medium | AGENTS.md regeneration: gist → collect repo context → grounded Z.ai prompt → validate → JSON diff → PR |
-| `SCHEDULED_HANDLERS` | constant | `src/lib/handlers/scheduled.js` | low | Command→handler registry; `getScheduledHandler`/`registerScheduledHandler` extend it |
-| `buildAgentsUpgradePrompt` | function | `src/lib/handlers/scheduled.js` | low | Grounded prompt: embeds real tree + existing AGENTS.md + key files; tells model it has NO live repo access |
-| `parseFileUpdatesFromResponse` | function | `src/lib/handlers/scheduled.js` | low | Multi-format JSON extraction from Z.ai output |
-| `callZaiApiWithRetry` | function | `src/lib/handlers/scheduled.js` | low | Z.ai HTTP client (native https) with retry for scheduled tasks |
-| `fetchFromUrl` | function | `src/lib/handlers/scheduled.js` | low | HTTP GET for gist command text (30s timeout) |
-| `createPR` | function | `src/lib/handlers/scheduled.js` | low | Branch + multi-file commit + PR open for scheduled changes |
-| `collectRepositoryContext` | function | `src/lib/repository-context.js` | medium | git.getTree → existing AGENTS.md discovery + key-file contents, budgeted + glob-excluded |
-| `renderRepositoryContext` | function | `src/lib/repository-context.js` | low | Renders collected context into a compact prompt block |
-| `validateGeneratedAgentFiles` | function | `src/lib/agents-validation.js` | medium | Pre-PR guard: rejects non-AGENTS paths, out-of-scope/target writes, and hallucinated content |
-| `validateAgentsConfig` | function | `src/lib/config/scheduled-config.js` | low | Validates scoping/budget config fields (`context_paths`, `target_paths`, etc.) |
+## Code map
 
-## CONVENTIONS
-- Edit maintained code in `src/`; do not hand-edit generated `dist/index.js`.
-- After source changes, run `npm run build` and commit `dist/index.js` + `dist/licenses.txt`.
-- Use marker-based idempotent comments; preserve marker constants and update semantics.
-- Command responses should stay threaded to the invoking comment via `replyToId`.
-- Keep security posture strict: collaborator/fork checks before command execution, no secret leakage.
+| Symbol | Location | Role |
+|--------|----------|------|
+| `run` | `src/index.js` | Top-level event gate + dispatcher |
+| `handlePullRequestEvent` | `src/index.js` | PR auto-review flow |
+| `handleIssueCommentEvent` | `src/index.js` | Command parse/auth/progress/dispatch flow |
+| `handlePullRequestReviewCommentEvent` | `src/index.js` | Inline review comment command flow |
+| `dispatchCommand` | `src/index.js` | Handler selection and response management |
+| `enforceCommandAuthorization` | `src/index.js` | Auth gate before command dispatch |
+| `parseCommand` | `src/lib/commands.js` | Command extraction, normalization, allowlist validation |
+| `checkForkAuthorization` | `src/lib/auth.js` | Fork-aware authorization policy |
+| `buildHandlerContext` | `src/lib/context.js` | Shared context structure for handlers |
+| `upsertComment` | `src/lib/comments.js` | Marker-idempotent comment create/update + threaded reply |
+| `callWithRetry` | `src/lib/api.js` | Progressive-timeout retry/backoff wrapper |
+| `createReviewBatches` | `src/lib/auto-review.js` | Large-PR file chunking by priority + budget |
+| `isLargePr` | `src/lib/auto-review.js` | Threshold check for batched mode |
+| `fetchAllChangedFiles` | `src/lib/changed-files.js` | Paginated file list (3000 ceiling) |
+| `fetchPrFiles` / `fetchFileAtRef` | `src/lib/pr-context.js` | PR file list + content at ref with size limits |
+| `extractWindow` / `extractEnclosingBlock` | `src/lib/code-scope.js` | Prompt scoping for explain/review |
+| `getEventType` / `shouldProcessEvent` | `src/lib/events.js` | Event-type detection; cron always processed |
+| `loadScheduledConfig` | `src/lib/config/scheduled-config.js` | Parses `.zai-scheduled.yml` |
+| `handleScheduledEvent` | `src/lib/handlers/scheduled.js` | Scheduled pipeline entry |
+| `handleUpdateAgentsTask` | `src/lib/handlers/scheduled.js` | Grounded AGENTS.md regen: context → prompt → validate → PR |
+| `collectRepositoryContext` | `src/lib/repository-context.js` | Git tree + existing AGENTS.md discovery + key files |
+| `validateGeneratedAgentFiles` | `src/lib/agents-validation.js` | Pre-PR guard: rejects non-AGENTS paths, out-of-scope writes, hallucinated content |
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Bypassing authorization/fork checks for command handlers.
-- Executing command logic for non-PR issue comments.
-- Allowing unbounded context payloads into prompts.
-- Asking an LLM to "scan the repo" without providing real repo context (causes hallucinated AGENTS.md — PR #15 bug).
-- Committing AGENTS.md output that references files/languages not present in the repo.
-- Editing `dist/` manually or shipping source changes without rebuilt artifacts.
-- Confusing consumer-facing workflow examples (README snippet) with this repo's own `.github/workflows/` runtime logic.
+## Repository-specific gotchas
 
-## UNIQUE STYLES
-- Event-first architecture: `src/index.js` orchestrates; `src/lib/*` isolates concerns.
-- Reactions communicate command lifecycle (`eyes`/`thinking`/`rocket`/`x`).
-- Continuity is encoded with hidden markers in comments, not external storage.
-
-## COMMANDS
-```bash
-npm install
-npm test            # vitest run --coverage
-npm run build       # ncc build src/index.js -o dist --license licenses.txt
-npm audit --audit-level=moderate   # security audit gate (CI)
-```
-After source changes: run `npm run build` and commit `dist/index.js` + `dist/licenses.txt` (CI fails on dist drift).
-
-## NOTES
-- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
-- No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 7 command handlers + scheduled pipeline: `ask`, `review`, `explain`, `describe`, `impact`, `help`, plus `scheduled` (largest handler, drives cron tasks via `.zai-scheduled.yml`).
-- Scheduled test coverage: `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` (unit-level); end-to-end schedule integration test is still a gap.
-- Scheduled-tasks configuration reference: `docs/scheduled-tasks.md`.
-- Architecture and invariants catalog: `ARCHITECTURE.md`.
+- `dist/index.js` must be committed — the Actions runner does not run `npm install` or build steps.
+- `REACTIONS.THINKING` maps to `'eyes'` (not a distinct reaction) in `src/lib/comments.js`.
+- `checkAuthorization` in `src/lib/auth.js` currently returns `authorized: true` for any identifiable user; `checkForkAuthorization` delegates to it for non-fork PRs. Legacy collaborator-check code is present but unreachable.
+- The `scheduled` handler is exported from `src/lib/handlers/index.js` but is NOT in the `/zai` HANDLERS dispatch map — it runs via the schedule event path and manual `/zai update-agents`.
+- `isContextLimitError` in `auto-review.js` triggers automatic sub-batch splitting during large-PR review.
+- Gist URL priority: `task.config.gist_url` > `defaults.gist_url` > `ZAI_AGENTS_GIST_URL` env/input.
+- `yaml` package (devDependency) is bundled by ncc; scheduled-config parsing depends on it.
