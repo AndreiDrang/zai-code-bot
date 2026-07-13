@@ -2,7 +2,7 @@
 
 **Generated:** 2025-01-20T00:00:00Z
 **Branch:** main
-**Refresh:** reconciled against actual file tree and `plans/*`; verified scheduled event routing, config loader, handler symbols, manual `/zai update-agents` command, action.yml inputs, and test coverage. Fixed stale workflow filenames (replaced nonexistent `code-review.yml` with actual `zai-code-bot.yml`, `zai-agents-init-example.yml`). Confirmed: scheduled test coverage exists (`tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`); `docs/scheduled-tasks.md` present; README updated with scheduled-tasks section and `/zai update-agents` command.
+**Refresh:** reconciled against actual file tree, `action.yml` inputs, `src/index.js` imports, and test coverage. Added CONTEXT ROUTING section; completed CONVENTIONS and ANTI-PATTERNS from ARCHITECTURE.md invariants. Verified: scheduled event routing, config loader, handler symbols, manual `/zai update-agents` command, and test coverage exist as documented. Confirmed: scheduled test coverage (`tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`); `docs/scheduled-tasks.md` present; README updated with scheduled-tasks section and `/zai update-agents` command.
 
 ## OVERVIEW
 JavaScript GitHub Action with three event flows: (1) PR auto-review, (2) collaborator-gated `/zai` PR comment commands, and (3) cron-triggered scheduled tasks (`.zai-scheduled.yml`) that regenerate AGENTS.md files and open PRs. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
@@ -70,6 +70,18 @@ zai-code-bot/
 | Action runtime contract | `action.yml` | Node 20 runtime + dist entrypoint |
 | Build and drift policy | `package.json`, `.github/workflows/ci.yml` | `ncc` build and `dist/` drift gate |
 
+## CONTEXT ROUTING
+Read these docs only when the task warrants:
+
+- Architectural or cross-module changes → `ARCHITECTURE.md` (layered architecture, dependency direction, life-of-request flows, invariant catalog)
+- Operational incidents or rollback → `RUNBOOK.md`
+- Security policy or permission model changes → `SECURITY.md`
+- Release process or review checklists → `CONTRIBUTING.md`
+- Scheduled-tasks configuration (cron syntax, scoping fields, troubleshooting) → `docs/scheduled-tasks.md`
+- Per-command handler internals → `src/lib/handlers/AGENTS.md`
+- Test strategy, fixtures, and suite conventions → `tests/AGENTS.md`
+- End-to-end integration test guide → `tests/integration/AGENTS.md`
+
 ## CODE MAP
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
@@ -117,35 +129,27 @@ zai-code-bot/
 - After source changes, run `npm run build` and commit `dist/index.js` + `dist/licenses.txt`.
 - Use marker-based idempotent comments; preserve marker constants and update semantics.
 - Command responses should stay threaded to the invoking comment via `replyToId`.
-- Keep security posture strict: collaborator/fork checks before command execution, no secret leakage.
+- Keep prompts bounded via `src/lib/code-scope.js` and `src/lib/context.js`; never pass raw unbounded patches.
+- External I/O (Z.ai, GitHub) goes through `src/lib/api.js` and `src/lib/pr-context.js`, not ad-hoc calls in handlers.
+- Authorization (`enforceCommandAuthorization` in `src/index.js`) always precedes command dispatch.
+- Return user-safe errors; log internal details through `src/lib/logging.js` categorized wrappers.
+- The services layer (`src/lib/*.js`) stays policy-centric; orchestration stays in `src/index.js`; command-specific logic stays in `src/lib/handlers/`.
+- Scheduled-task AGENTS.md generation must be grounded: collect real repo context → embed in prompt → validate output against real tree before creating a PR.
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Bypassing authorization/fork checks for command handlers.
-- Executing command logic for non-PR issue comments.
-- Allowing unbounded context payloads into prompts.
-- Asking an LLM to "scan the repo" without providing real repo context (causes hallucinated AGENTS.md — PR #15 bug).
-- Committing AGENTS.md output that references files/languages not present in the repo.
-- Editing `dist/` manually or shipping source changes without rebuilt artifacts.
-- Confusing consumer-facing workflow examples (README snippet) with this repo's own `.github/workflows/` runtime logic.
-
-## UNIQUE STYLES
-- Event-first architecture: `src/index.js` orchestrates; `src/lib/*` isolates concerns.
-- Reactions communicate command lifecycle (`eyes`/`thinking`/`rocket`/`x`).
-- Continuity is encoded with hidden markers in comments, not external storage.
-
-## COMMANDS
-```bash
-npm install
-npm test            # vitest run --coverage
-npm run build       # ncc build src/index.js -o dist --license licenses.txt
-npm audit --audit-level=moderate   # security audit gate (CI)
-```
-After source changes: run `npm run build` and commit `dist/index.js` + `dist/licenses.txt` (CI fails on dist drift).
+## ANTI-PATTERNS
+- Hand-editing `dist/index.js` instead of rebuilding from `src/`.
+- Running handler logic before `enforceCommandAuthorization` succeeds.
+- Returning raw exception details or secrets in PR comments.
+- Unbounded diff/context payloads in prompts.
+- Introducing hidden coupling between unrelated service modules.
+- Bypassing marker constants for automated comments (causes duplicate spam).
+- Posting top-level comments for command replies instead of threaded replies.
+- Embedding duplicate parser/auth logic in handlers that already exists upstream.
+- Creating AGENTS.md PRs without running `validateGeneratedAgentFiles` (hallucination risk).
 
 ## NOTES
-- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
-- No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 7 command handlers + scheduled pipeline: `ask`, `review`, `explain`, `describe`, `impact`, `help`, plus `scheduled` (largest handler, drives cron tasks via `.zai-scheduled.yml`).
-- Scheduled test coverage: `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` (unit-level); end-to-end schedule integration test is still a gap.
-- Scheduled-tasks configuration reference: `docs/scheduled-tasks.md`.
-- Architecture and invariants catalog: `ARCHITECTURE.md`.
+- Build: `npm run build` (ncc bundle `src/index.js` → `dist/index.js`).
+- Test: `npm test` (Vitest v3 with coverage, uploaded to Codecov).
+- Node.js 20+ required (matches `action.yml` `node20` runtime).
+- Three event flows share `src/index.js` `run()`: PR auto-review, issue/review comment commands, and scheduled (cron) tasks.
+- Child AGENTS.md files exist in `src/lib/`, `src/lib/handlers/`, `tests/`, and `tests/integration/` — each defines only local deltas.
