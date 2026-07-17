@@ -1,21 +1,36 @@
-# INTEGRATION TEST GUIDE
+# AGENTS.md — tests/integration
 
-## OVERVIEW
-Integration tests verify end-to-end GitHub event pipelines and visible bot behavior, not just isolated helper logic.
+## Scope and inheritance
 
-## WHERE TO LOOK
-| Scenario | File | Notes |
-|----------|------|-------|
-| Issue comment command pipeline | `tests/integration/command-pipeline.test.js` | Event classification, command parse, auth, dispatch, response shape |
-| Pull request auto-review pipeline | `tests/integration/pr-auto-review.test.js` | PR event handling, marker create/update, no-change short-circuits |
-| Integration fixture data | `tests/integration/fixtures/events.js` | Shared event payloads for realistic event simulation |
+Applies to: `tests/integration/`.
 
-## CONVENTIONS
-- Test the public behavior chain from event input to final comment/reaction outcome.
-- Cover both happy paths and safety gates (non-PR comments, unauthorized users, empty diffs).
+Inherits from `tests/AGENTS.md` and the root `AGENTS.md`. This file defines only local differences for end-to-end pipeline tests.
+
+Local overrides: none.
+
+## What lives here
+
+```text
+tests/integration/
+├── command-pipeline.test.js     # Issue comment event → parse → auth → dispatch → output shape
+├── pr-auto-review.test.js       # pull_request event → marker upsert / update / no-change short-circuit
+└── fixtures/events.js           # Shared event payloads for realistic simulation
+```
+
+## Local boundaries and invariants
+
+- Integration tests validate the **public behavior chain** from event input to final comment/reaction outcome, not isolated helper logic.
+- Cover both happy paths and safety gates: non-PR comments, unauthorized users, empty diffs, marker collisions.
 - Keep marker expectations explicit so idempotent update regressions are caught quickly.
+- Shared event payloads belong in `fixtures/events.js`; static payloads live in `tests/fixtures/`.
 
-## ANTI-PATTERNS
+## Anti-patterns
+
 - Replacing integration assertions with unit-level mocks only.
 - Ignoring failure-path expectations for auth and API errors.
 - Coupling tests to unrelated implementation details that break harmless refactors.
+
+## Nearby docs
+
+- Full test map and conventions → `tests/AGENTS.md`
+- Handler contracts → `src/lib/handlers/AGENTS.md`
