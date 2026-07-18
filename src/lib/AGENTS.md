@@ -1,55 +1,65 @@
-# LIBRARY MODULE GUIDE
+# AGENTS.md
 
-## OVERVIEW
-Core runtime services used by `src/index.js`: events, commands, auth, context, comments, API, logging, and continuity.
+## Scope and inheritance
 
-## STRUCTURE
+Applies to: `src/lib/` and descendants.
+
+Inherits repository-wide guidance from `AGENTS.md` (root).
+
+This file defines only local differences for the services layer.
+
+## What lives here
+
 ```text
 src/lib/
-├── events.js       # Event filtering and event-type detection
-├── commands.js     # `/zai` parser + allowlist normalization
-├── auth.js         # Collaborator/fork authorization policy
-├── context.js      # Changed-file fetch + truncation/range helpers
-├── comments.js     # Marker upsert + threaded replies + reactions
-├── api.js          # Z.ai HTTP client and retry wrapper
-├── logging.js      # Categorized safe errors and logger wrappers
-├── continuity.js   # Hidden marker state persistence
-├── code-scope.js   # Token budget calculation for prompt sizing
-├── auto-review.js  # Large PR batching and synthesis
-├── changed-files.js # Paginated changed-files fetch (3000 limit)
-├── pr-context.js   # Shared PR context fetch (files, content at ref, refs)
-├── config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
-└── handlers/       # Command-specific logic (see child AGENTS)
+├── events.js                  # Event-type detection incl. `schedule` routing
+├── commands.js                # `/zai` parser + `ALLOWED_COMMANDS` allowlist
+├── auth.js                    # Collaborator/fork authorization (currently permissive)
+├── context.js                 # Changed-file fetch + truncation/range helpers
+├── pr-context.js              # PR files, file-at-ref, base/head ref resolution
+├── changed-files.js           # Paginated changed-files fetch (3000-file ceiling)
+├── comments.js                # Marker upsert + threaded replies + reactions
+├── api.js                     # Z.ai HTTP client + retry wrapper
+├── logging.js                 # Categorized safe errors / logger wrappers
+├── continuity.js              # Hidden-marker state persistence across turns
+├── code-scope.js              # Token/character budgeting for prompts
+├── auto-review.js             # Large-PR batching + synthesis
+├── repository-context.js      # Repo-context collection for AGENTS.md generation
+├── agents-validation.js       # Hallucination guard for generated AGENTS.md
+├── config/scheduled-config.js # `.zai-scheduled.yml` loader + scoping validation
+└── handlers/                  # Per-command modules (see child AGENTS.md)
 ```
 
-## WHERE TO LOOK
-| Task | File | Notes |
-|------|------|-------|
-| Add or change command grammar | `src/lib/commands.js` | Keep command allowlist strict; `update-agents` is allowed |
-| Event-type detection / routing | `src/lib/events.js` | `getEventType` + `shouldProcessEvent`; includes `schedule` (cron) always-process gate |
-| Adjust collaborator/fork policy | `src/lib/auth.js` | Respect silent fork-block behavior |
-| Tune context budget/range rules | `src/lib/context.js` | Keep truncation deterministic |
-| Change comment lifecycle | `src/lib/comments.js` | Preserve marker idempotency |
-| Modify API retry/failure policy | `src/lib/api.js` | Keep safe retry classification |
-| Update user-safe error mapping | `src/lib/logging.js` | Do not leak internals/secrets |
-| Large PR batching logic | `src/lib/auto-review.js` | Batch creation, synthesis prompts |
-| Paginated file fetching | `src/lib/changed-files.js` | GitHub API 3000 file limit |
-| Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
-| Tune prompt token budget | `src/lib/code-scope.js` | Keep sizing deterministic; affects all handlers |
-| Scheduled-task config parsing | `src/lib/config/scheduled-config.js` | Consumed by `handlers/scheduled.js` |
+## Local boundaries and invariants
 
-## CONVENTIONS
-- Prefer pure helpers for parsing/validation and exported command-safe wrappers.
-- Keep handlers decoupled from Octokit details via shared context structures.
-- Return explicit `{ success, error }`-style outcomes where already established.
-- Use marker constants for all automated comments to avoid duplicate spam.
+- This layer is **policy-centric and command-agnostic**. Orchestration stays in `src/index.js`; command-specific logic goes in `src/lib/handlers/`.
+- External I/O is centralized here: Z.ai via `api.js`, GitHub via `pr-context.js` / `changed-files.js`. Handlers must not call Octokit ad hoc.
+- Return explicit `{ success, error }`-style outcomes where already established (e.g., `api.js` `callWithRetry`, `agents-validation.js` `validateGeneratedAgentFiles`).
+- Marker constants drive all automated-comment idempotency; never invent new markers without updating `comments.js` upsert semantics.
+- Never leak raw exception details or secrets through this layer; route failures through `logging.js` categorization.
+- Keep sizing helpers deterministic — `code-scope.js` and `context.js` budgets affect every handler and the auto-review path.
 
-## ANTI-PATTERNS
-- Running handler logic before auth/fork checks.
-- Returning raw exception details to PR comments.
-- Unbounded diff/context payloads in prompts.
-- Introducing hidden coupling between unrelated service modules.
+## Safe change rules
 
-## NOTES
-- If behavior is command-specific, implement in `src/lib/handlers/*` instead of this layer.
-- Keep this layer policy-centric; orchestration remains in `src/index.js`.
+- **Adding a `/zai` command**: extend `ALLOWED_COMMANDS` + `COMMAND_DESCRIPTIONS` in `commands.js`, then add the handler in `src/lib/handlers/`, register it in `src/lib/handlers/index.js`, and wire the dispatch switch in `src/index.js`.
+- **Changing event routing**: edit `events.js` (`getEventType`, `shouldProcessEvent`); cron events always pass `shouldProcessEvent`.
+- **Tuning prompt budgets**: edit `code-scope.js` / `context.js`; keep sizing deterministic.
+- **Adjusting retry/failure policy**: edit `api.js`; preserve `categorizeError` retry classification and progressive-timeout multipliers.
+- **Changing comment lifecycle**: edit `comments.js`; preserve marker idempotency and `replyToId` threading.
+- **Adjusting authorization**: edit `auth.js`; the current policy is intentionally permissive (`checkAuthorization` authorizes any identifiable user) — see root gotchas before tightening.
+- **Scheduled-task config**: edit `config/scheduled-config.js`; preserve `getGistUrl` priority order (task → defaults → `ZAI_AGENTS_GIST_URL` env) and `validateAgentsConfig` scoping fields.
+
+## Validation
+
+- `npm test` runs the Vitest v3 suite.
+- Service-specific unit tests live in `tests/`:
+  - `tests/api.test.js`, `tests/auth.test.js`, `tests/comments.test.js`, `tests/commands.test.js`, `tests/context.test.js`, `tests/logging.test.js`, `tests/continuity.test.js`, `tests/events.test.js`, `tests/changed-files.test.js`, `tests/auto-review.test.js`, `tests/pr-context.test.js`.
+  - `tests/lib/code-scope.test.js`.
+  - `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`.
+
+## Nearby docs
+
+- `src/lib/handlers/AGENTS.md` — per-command handler guide (including the structurally distinct `scheduled.js` module).
+- `ARCHITECTURE.md` — full layer map, dependency direction, and request-flow diagrams.
+- `SECURITY.md` — authorization model and fork-policy intent.
+- `docs/scheduled-tasks.md` — scheduled-task configuration reference.
