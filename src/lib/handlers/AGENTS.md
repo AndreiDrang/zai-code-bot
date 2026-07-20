@@ -1,48 +1,77 @@
-# HANDLER MODULE GUIDE
+# AGENTS.md — Handler Layer
 
-## OVERVIEW
-Command handlers implement `/zai` behavior only after parsing + authorization; each module owns prompt construction, API call wiring, and response formatting. The `scheduled` handler is distinct: it executes scheduled tasks defined in `.zai-scheduled.yml` (and the manual `/zai update-agents` command) rather than responding to a standard review command.
+## Scope and inheritance
 
-## WHERE TO LOOK
-| Command | File | Notes |
-|---------|------|-------|
-| `/zai ask` | `src/lib/handlers/ask.js` | Uses continuity state and broad PR context |
-| `/zai review <path>` | `src/lib/handlers/review.js` | Targeted diff review, file-in-PR validation |
-| `/zai explain <path>#Lx-Ly` | `src/lib/handlers/explain.js` | Range parsing + snippet extraction |
-| `/zai describe` | `src/lib/handlers/describe.js` | File/directory description |
-| `/zai impact` | `src/lib/handlers/impact.js` | Change impact analysis |
-| `/zai help` | `src/lib/handlers/help.js` | Static help output with auth gate |
-| `/zai update-agents` | `src/index.js` (`dispatchCommand`) | Manual AGENTS.md regen; reuses `handleUpdateAgentsTask` |
-| scheduled tasks | `src/lib/handlers/scheduled.js` | Largest module; cron-driven `.zai-scheduled.yml` tasks; grounded + validated AGENTS.md upgrades |
-| Handler registry | `src/lib/handlers/index.js` | Dispatcher map consumed by runtime (note: `scheduled` is exported but not in the `/zai` HANDLERS map) |
+Applies to: `src/lib/handlers/`.
+Inherits repository-wide guidance from `AGENTS.md` (root) and service-layer guidance from `src/lib/AGENTS.md`.
+This file defines only local differences for this subtree.
 
-## SCHEDULED MODULE (`scheduled.js`) KEY SYMBOLS
-- `handleScheduledEvent` (entry) → `executeScheduledTask` (per-task) → `buildExecutionContext` → `getScheduledHandler` (registry lookup).
-- `handleUpdateAgentsTask` (grounded flow): gist command → `collectRepositoryContext` (`../repository-context.js`: real tree + existing AGENTS.md discovery + key files) → `buildAgentsUpgradePrompt` (embeds context, tells model it has NO live repo access) → `callZaiApiWithRetry` → `parseFileUpdatesFromResponse` (multi-format JSON) → `validateGeneratedAgentFiles` (`../agents-validation.js`: rejects non-AGENTS paths, out-of-scope writes, hallucinated content referencing non-existent files) → diff vs repo files → `createPR`.
-- Registry: `SCHEDULED_HANDLERS` (const) + `registerScheduledHandler`/`getAllScheduledHandlers` for extension.
-- GitHub helpers: `fetchFileContent`, `getFileSha`, `updateFileInRepo`; HTTP: `fetchFromUrl` (gist, 30s timeout).
-- Config consumed from `src/lib/config/scheduled-config.js` (`loadScheduledConfig`, `getTasksToRun`, `getGistUrl`, `validateAgentsConfig`).
-- Scoping config (all optional, per-task in `.zai-scheduled.yml`): `context_paths`, `target_paths`, `exclude_paths`, `max_context_chars`, `max_file_chars`, `max_files_to_fetch`, `allow_create_new`, `update_existing_only`.
+## What lives here
 
-## CONVENTIONS
-- Keep command argument parsing explicit and reject invalid formats early.
+```text
+src/lib/handlers/
+├── ask.js          # /zai ask — uses continuity state + broad PR context
+├── review.js       # /zai review [file] — targeted diff review, file-in-PR validation
+├── explain.js      # /zai explain <path>#Lx-Ly — range parsing + snippet extraction
+├── describe.js     # /zai describe — PR description from commits
+├── impact.js       # /zai impact — change impact analysis
+├── help.js         # /zai help — static help output
+├── scheduled.js    # Largest module: cron-driven AGENTS.md regeneration + manual /zai update-agents
+└── index.js        # Handler registry/dispatcher map consumed by runtime
+```
+
+## Local boundaries and invariants
+
+- Handlers run **only after** `enforceCommandAuthorization` succeeds in `src/index.js`.
+- Handlers receive shared context (files, refs, octokit, core) — they do not construct Octokit directly.
+- `scheduled.js` is distinct: it executes `.zai-scheduled.yml` tasks, not standard review commands. It is exported but is **not** in the `/zai` HANDLERS map.
+- `/zai update-agents` (manual) reuses `handleUpdateAgentsTask` from `scheduled.js`.
+
+## Scheduled module (`scheduled.js`) key flow
+
+`handleScheduledEvent` → `executeScheduledTask` → `handleUpdateAgentsTask`:
+1. Fetch command text from Gist URL (`fetchFromUrl`, 30s timeout)
+2. Collect real repo context (`collectRepositoryContext`: git tree + existing AGENTS.md + key files)
+3. Build grounded prompt (`buildAgentsUpgradePrompt`: embeds context, tells model NO live repo access)
+4. Call Z.ai (`callZaiApiWithRetry`: native https)
+5. Parse file updates (`parseFileUpdatesFromResponse`: multi-format JSON extraction)
+6. Validate (`validateGeneratedAgentFiles`: rejects non-AGENTS paths, out-of-scope writes, hallucinated content)
+7. Create PR (`createPR`: branch + multi-file commit + PR open) — only when at least one file changed
+
+Registry: `SCHEDULED_HANDLERS` (const) + `registerScheduledHandler` / `getAllScheduledHandlers`.
+
+Config consumed from `src/lib/config/scheduled-config.js` (`loadScheduledConfig`, `getTasksToRun`, `getGistUrl`, `validateAgentsConfig`).
+
+Scoping config (all optional, per-task in `.zai-scheduled.yml`): `context_paths`, `target_paths`, `exclude_paths`, `max_context_chars`, `max_file_chars`, `max_files_to_fetch`, `allow_create_new`, `update_existing_only`.
+
+Test seam: `handleUpdateAgentsTask` exposes `__callZaiForTest` for mocking Z.ai responses in unit tests.
+
+## Safe change rules
+
+- Keep command argument parsing explicit; reject invalid formats early.
 - Always use threaded replies (`replyToId`) for command results.
-- Reactions should reflect lifecycle: acknowledge -> work -> success/failure.
-- Keep prompts bounded via context truncation helpers; never pass raw unbounded patches.
-- Return user-safe failures; log internal details through shared logging helpers.
+- Reactions reflect lifecycle: acknowledge (`eyes`) → work (`eyes`) → success (`rocket`) / failure (`-1`).
+- Keep prompts bounded via context truncation; never pass raw unbounded patches.
+- Return user-safe failures; log internal details through `src/lib/logging.js`.
+- When changing parsing or output contracts, update both unit and integration tests.
 
-## TESTING
-- Local handler unit coverage exists in `tests/handlers/`: `ask.test.js`, `explain.test.js`, `impact.test.js`, `review.test.js`, `scheduled.test.js`.
-- Scheduled pipeline coverage: `tests/handlers/scheduled.test.js` (registry, PR creation, parse, grounded `handleUpdateAgentsTask` flow incl. hallucination rejection), `tests/scheduled-config.test.js` (config + `validateAgentsConfig` scoping fields), `tests/repository-context.test.js` (tree/AGENTS.md discovery/budgets/globs), `tests/agents-validation.test.js` (path/hallucination/target-path guards incl. PR #15 regression).
-- End-to-end command pipeline behavior is validated in `tests/integration/command-pipeline.test.js`.
-- When changing parsing or output contracts, update both unit and integration assertions.
+## Anti-patterns
 
-## ANTI-PATTERNS
 - Parsing arguments with loose heuristics that silently alter user intent.
 - Posting top-level comments for command replies (breaks conversational threading).
 - Bypassing `auth.checkForkAuthorization` in a handler.
 - Embedding duplicate parser/auth logic that already exists upstream.
 
-## NOTES
-- Prefer adding helper functions within a handler module before introducing cross-handler coupling.
-- Keep marker constants stable once tests depend on them.
+## Validation
+
+```bash
+npm test    # vitest run --coverage
+```
+
+Key test files: `tests/handlers/ask.test.js`, `tests/handlers/explain.test.js`, `tests/handlers/impact.test.js`, `tests/handlers/review.test.js`, `tests/handlers/scheduled.test.js`, `tests/describe.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`, `tests/integration/command-pipeline.test.js`.
+
+## Nearby docs
+
+- Scheduled-tasks configuration reference → `docs/scheduled-tasks.md`
+- Service-layer module guide → `src/lib/AGENTS.md`
+- Architecture and request flows → `ARCHITECTURE.md`
