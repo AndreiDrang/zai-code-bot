@@ -46,3 +46,4 @@ Command handlers implement `/zai` behavior only after parsing + authorization; e
 ## NOTES
 - Prefer adding helper functions within a handler module before introducing cross-handler coupling.
 - Keep marker constants stable once tests depend on them.
+- The authorization gate (`enforceCommandAuthorization` → `checkForkAuthorization`) is structurally enforced before handler dispatch. Current `src/lib/auth.js` policy is permissive (any identifiable user authorized); see root `AGENTS.md` for details.
