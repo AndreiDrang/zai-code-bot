@@ -2,10 +2,12 @@
 
 **Generated:** 2025-01-20T00:00:00Z
 **Branch:** main
-**Refresh:** reconciled against actual file tree and `plans/*`; verified scheduled event routing, config loader, handler symbols, manual `/zai update-agents` command, action.yml inputs, and test coverage. Fixed stale workflow filenames (replaced nonexistent `code-review.yml` with actual `zai-code-bot.yml`, `zai-agents-init-example.yml`). Confirmed: scheduled test coverage exists (`tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js`); `docs/scheduled-tasks.md` present; README updated with scheduled-tasks section and `/zai update-agents` command.
+**Refresh:** reconciled against actual file tree, source code, action.yml, and test suite. Updated auth policy descriptions to reflect current permissive implementation in `src/lib/auth.js`. Fixed CODE MAP entries: replaced nonexistent `calculateTokenBudget` with actual `extractEnclosingBlock`/`extractWindow` from `code-scope.js`; replaced `saveContinuityState` with actual `loadContinuityState`/`createCommentWithState` from `continuity.js`. Completed CONVENTIONS, ANTI-PATTERNS, and NOTES sections from observable code evidence. Verified all file paths, handler symbols, test references, and workflow filenames against repository tree.
 
 ## OVERVIEW
-JavaScript GitHub Action with three event flows: (1) PR auto-review, (2) collaborator-gated `/zai` PR comment commands, and (3) cron-triggered scheduled tasks (`.zai-scheduled.yml`) that regenerate AGENTS.md files and open PRs. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
+JavaScript GitHub Action with three event flows: (1) PR auto-review on `opened`/`synchronize`, (2) authorization-gated `/zai` PR comment commands (`ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`), and (3) cron-triggered scheduled tasks (`.zai-scheduled.yml`) that regenerate AGENTS.md files and open PRs. Runtime executes bundled `dist/index.js`; maintained logic lives in `src/index.js` plus modular services in `src/lib/*`.
+
+> **Auth implementation note:** `src/lib/auth.js` currently implements a permissive policy — `checkAuthorization` and `checkForkAuthorization` return `authorized: true` for any identifiable GitHub user. Fork PR commenters without an identifiable login are silently blocked (`reason: null`). The collaborator-checking infrastructure (`isCollaborator`, `AUTHORIZED_PERMISSIONS`, `AUTHORIZED_ASSOCIATIONS`) remains exported but is not called by the main authorization path. `SECURITY.md` documents the intended collaborator-based policy.
 
 ## STRUCTURE
 ```text
@@ -17,7 +19,7 @@ zai-code-bot/
 ├── src/lib/auto-review.js            # Large PR batching and synthesis
 ├── src/lib/changed-files.js          # Paginated changed-files fetch (3000 file limit)
 ├── src/lib/pr-context.js             # Shared PR context fetch (files, content at ref, refs)
-├── src/lib/code-scope.js             # Token-budget calculation for prompt sizing
+├── src/lib/code-scope.js             # Window/enclosing-block extraction for prompt scoping
 ├── src/lib/context.js                # Changed-file fetch + truncation/range helpers
 ├── src/lib/config/scheduled-config.js # Scheduled-task config loader (.zai-scheduled.yml)
 ├── src/lib/repository-context.js     # Real repo context collection (tree + AGENTS.md discovery + key files)
@@ -49,13 +51,13 @@ zai-code-bot/
 | Route events and command execution | `src/index.js` | `run()`, pull_request path, issue_comment command path, schedule path |
 | Schedule event detection | `src/lib/events.js` | `getEventType` returns `schedule`; `shouldProcessEvent` always processes cron events |
 | Parse commands and enforce allowlist | `src/lib/commands.js` | `/zai` parser, command normalization, help fallback; `update-agents` in allowlist |
-| Authorization and fork policy | `src/lib/auth.js` | Collaborator checks and fork-safe behavior |
+| Authorization and fork policy | `src/lib/auth.js` | Currently permissive (authorizes any identifiable user); fork PR unidentified users silently blocked. Collaborator-check infrastructure present but not exercised |
 | Comment/reaction behavior | `src/lib/comments.js` | Marker-based upsert, threaded reply (`replyToId`), reactions |
 | API retry/error handling | `src/lib/api.js`, `src/lib/logging.js` | Retry policy, categorized safe errors |
 | Large PR batching and synthesis | `src/lib/auto-review.js` | Batch creation, context limit handling, synthesis prompt |
 | Paginated changed-files fetch | `src/lib/changed-files.js` | Handles GitHub's 3000 file API limit |
 | Shared PR context fetch | `src/lib/pr-context.js` | `fetchPrFiles`, `fetchFileAtRef`, `resolvePrRefs`; user-safe fallbacks, size limits |
-| Token budget calculation | `src/lib/code-scope.js` | Window extraction, enclosing block detection for prompt sizing |
+| Prompt scoping | `src/lib/code-scope.js` | `extractWindow`, `extractEnclosingBlock`, `extractTargetBlock` |
 | Scheduled-task config loading | `src/lib/config/scheduled-config.js` | `loadScheduledConfig`, `getTasksToRun`, `validateAndNormalizeConfig`, `validateAgentsConfig`, `getGistUrl`; scoping fields (`context_paths`/`target_paths`/`exclude_paths`/budgets) |
 | Scheduled-task execution | `src/lib/handlers/scheduled.js` | `handleScheduledEvent`, `handleUpdateAgentsTask` (grounded flow: context→prompt→validate→PR), `SCHEDULED_HANDLERS`; see child `src/lib/handlers/AGENTS.md` |
 | Repository context for AGENTS.md gen | `src/lib/repository-context.js` | `collectRepositoryContext` (git tree + existing AGENTS.md discovery + key files, budgeted), `renderRepositoryContext` |
@@ -80,18 +82,21 @@ zai-code-bot/
 | `dispatchCommand` | function | `src/index.js` | high | Handler selection and response management |
 | `enforceCommandAuthorization` | function | `src/index.js` | medium | Auth gate before command dispatch |
 | `parseCommand` | function | `src/lib/commands.js` | high | Command extraction and validation |
-| `checkForkAuthorization` | function | `src/lib/auth.js` | medium | Fork-aware security policy |
+| `checkForkAuthorization` | function | `src/lib/auth.js` | medium | Fork-aware auth gate (currently permissive: any identifiable user) |
 | `buildHandlerContext` | function | `src/lib/context.js` | medium | Shared context for handlers |
 | `upsertComment` | function | `src/lib/comments.js` | high | Marker idempotency + threaded reply support |
-| `callWithRetry` | function | `src/lib/api.js` | medium | API retry/backoff wrapper |
-| `saveContinuityState` | function | `src/lib/continuity.js` | medium | Hidden state persistence across turns |
+| `createApiClient` | function | `src/lib/api.js` | medium | Factory for API client with retry/timeout config |
+| `callWithRetry` | function | `src/lib/api.js` | medium | API retry/backoff wrapper with progressive timeout |
+| `loadContinuityState` | function | `src/lib/continuity.js` | medium | Hidden state loading across turns |
+| `createCommentWithState` | function | `src/lib/continuity.js` | low | Comment creation with embedded continuity state |
 | `createReviewBatches` | function | `src/lib/auto-review.js` | medium | Large PR file chunking |
 | `fetchAllChangedFiles` | function | `src/lib/changed-files.js` | medium | Paginated file list (3000 limit) |
 | `fetchPrFiles` | function | `src/lib/pr-context.js` | medium | PR file list with size limits + fallbacks |
 | `fetchFileAtRef` | function | `src/lib/pr-context.js` | medium | File content at base/head ref, sliding-window scoping |
 | `resolvePrRefs` | function | `src/lib/pr-context.js` | low | Resolves base/head refs for diff context |
 | `MAX_PR_FILES_API_LIMIT` | constant | `src/lib/changed-files.js` | low | GitHub API ceiling (3000) |
-| `calculateTokenBudget` | function | `src/lib/code-scope.js` | medium | Token/char budget sizing for prompts |
+| `extractEnclosingBlock` | function | `src/lib/code-scope.js` | medium | Enclosing function/class block detection for prompt scoping |
+| `extractWindow` | function | `src/lib/code-scope.js` | low | Surrounding window extraction for prompt scoping |
 | `getEventType` | function | `src/lib/events.js` | low | Event-type detection for routing (incl. `schedule`) |
 | `shouldProcessEvent` | function | `src/lib/events.js` | low | Event filter; always-process gate for cron events |
 | `loadScheduledConfig` | function | `src/lib/config/scheduled-config.js` | low | Parses `.zai-scheduled.yml` task config |
@@ -117,35 +122,26 @@ zai-code-bot/
 - After source changes, run `npm run build` and commit `dist/index.js` + `dist/licenses.txt`.
 - Use marker-based idempotent comments; preserve marker constants and update semantics.
 - Command responses should stay threaded to the invoking comment via `replyToId`.
-- Keep security posture strict: collaborator/fork checks before command execution, no secret leakage.
+- Keep prompts bounded via `src/lib/code-scope.js` and `src/lib/context.js`; never pass raw unbounded patches.
+- Route external I/O (Z.ai, GitHub) through `src/lib/api.js` and `src/lib/pr-context.js`, not ad-hoc calls in handlers.
+- Return user-safe error messages; route internal details through `src/lib/logging.js`.
+- All generated AGENTS.md content must pass `src/lib/agents-validation.js` before PR creation.
+- The services layer (`src/lib/*.js`) stays policy-centric; command-specific logic goes in `src/lib/handlers/`.
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Bypassing authorization/fork checks for command handlers.
-- Executing command logic for non-PR issue comments.
-- Allowing unbounded context payloads into prompts.
-- Asking an LLM to "scan the repo" without providing real repo context (causes hallucinated AGENTS.md — PR #15 bug).
-- Committing AGENTS.md output that references files/languages not present in the repo.
-- Editing `dist/` manually or shipping source changes without rebuilt artifacts.
-- Confusing consumer-facing workflow examples (README snippet) with this repo's own `.github/workflows/` runtime logic.
-
-## UNIQUE STYLES
-- Event-first architecture: `src/index.js` orchestrates; `src/lib/*` isolates concerns.
-- Reactions communicate command lifecycle (`eyes`/`thinking`/`rocket`/`x`).
-- Continuity is encoded with hidden markers in comments, not external storage.
-
-## COMMANDS
-```bash
-npm install
-npm test            # vitest run --coverage
-npm run build       # ncc build src/index.js -o dist --license licenses.txt
-npm audit --audit-level=moderate   # security audit gate (CI)
-```
-After source changes: run `npm run build` and commit `dist/index.js` + `dist/licenses.txt` (CI fails on dist drift).
+## ANTI-PATTERNS
+- Hand-editing `dist/index.js` instead of `src/` (CI `dist-drift` gate will fail).
+- Running handler logic before `enforceCommandAuthorization` in `src/index.js`.
+- Returning raw exception details or secrets in PR comments.
+- Passing unbounded diffs/patches into prompts.
+- Bypassing `src/lib/agents-validation.js` for generated AGENTS.md content.
+- Introducing coupling between handlers and Octokit details directly (use shared context pattern).
 
 ## NOTES
-- CI (`.github/workflows/ci.yml`) enforces tests, build, dist drift, and security audit across Node 20 + 22.
-- No linting/formatting configs (ESLint, Prettier) — rely on code review and CI gates.
-- 7 command handlers + scheduled pipeline: `ask`, `review`, `explain`, `describe`, `impact`, `help`, plus `scheduled` (largest handler, drives cron tasks via `.zai-scheduled.yml`).
-- Scheduled test coverage: `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` (unit-level); end-to-end schedule integration test is still a gap.
-- Scheduled-tasks configuration reference: `docs/scheduled-tasks.md`.
-- Architecture and invariants catalog: `ARCHITECTURE.md`.
+- Test command: `npm test` → `vitest run --coverage`.
+- Build command: `npm run build` → `ncc build src/index.js -o dist --license licenses.txt`.
+- The runtime is event-driven (not a server); GitHub Actions runner invokes `dist/index.js` per webhook event.
+- Marker constants in `src/index.js`: `<!-- zai-code-review -->`, `<!-- zai-progress -->`, `<!-- zai-guidance -->`, `<!-- zai-auth -->`.
+- Z.ai API endpoint: `https://api.z.ai/api/coding/paas/v4/chat/completions`.
+- Default model: `glm-5.2` (overridable via `ZAI_MODEL` input).
+- `REACTIONS.THINKING` in `src/lib/comments.js` maps to `'eyes'`, not `'thinking'`; both `EYES` and `THINKING` produce the `eyes` reaction.
+- Coverage uploaded to Codecov.
