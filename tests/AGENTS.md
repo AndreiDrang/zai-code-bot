@@ -1,46 +1,62 @@
-# TEST SUITE GUIDE
+# AGENTS.md
 
-## OVERVIEW
-Repository test coverage mixes module-focused tests in `tests/*.test.js` and scenario-driven flows in `tests/integration/*`.
+## Scope and inheritance
 
-## STRUCTURE
+Applies to: `tests/` (unit + integration test suite).
+
+Inherits repository-wide guidance from `AGENTS.md`. This file defines only local differences for the test suite.
+
+## What lives here
+
 ```text
 tests/
-├── *.test.js        # Module-level tests for lib/runtime units
-├── handlers/        # Handler-focused test cases (ask, explain, impact, review, scheduled)
-├── helpers/         # Shared mocks and fixtures utilities
-├── lib/             # Shared test helpers + code-scope tests
-├── fixtures/        # Static test payloads (issue-comment-event.json, pr-event.json)
-└── integration/     # End-to-end command/review pipeline checks
+├── *.test.js                 # Module-level tests for lib/runtime units
+├── handlers/                 # Handler-focused tests (ask, explain, impact, review, scheduled)
+├── helpers/                  # Shared mocks and fixtures utilities
+├── lib/                      # Shared test helpers + code-scope tests
+├── fixtures/                 # Static payloads (issue-comment-event.json, pr-event.json)
+└── integration/              # End-to-end pipelines — see child AGENTS.md
 ```
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-|------|----------|-------|
-| Parser/auth/comment unit behavior | `tests/commands.test.js`, `tests/auth.test.js`, `tests/comments.test.js` | Fast regression checks |
-| Runtime orchestration checks | `tests/action.test.js`, `tests/handlers.test.js`, `tests/index.test.js` | Entry flow and dispatch behavior |
-| API and logging resilience | `tests/api.test.js`, `tests/logging.test.js` | Retry/error categorization |
-| Context, PR fetch, and batching | `tests/context.test.js`, `tests/pr-context.test.js`, `tests/changed-files.test.js`, `tests/auto-review.test.js` | Diff scoping, file-at-ref fetch, paginated/batched review |
-| Continuity and events | `tests/continuity.test.js`, `tests/events.test.js` | Hidden-marker state, event-type detection |
-| Code scope and window extraction | `tests/lib/code-scope.test.js` | Token budget, enclosing block, window extraction |
-| Describe handler | `tests/describe.test.js` | PR description generation |
-| Scheduled pipeline | `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` | Config load + `validateAgentsConfig` scoping; `parseFileUpdatesFromResponse`; grounded `handleUpdateAgentsTask` flow incl. hallucination rejection; repo-context collection (tree/budgets/globs); validation guards incl. PR #15 regression |
-| Scheduled pipeline (integration) | (pending) | End-to-end schedule event → context → Z.ai mock → validated PR is still a gap; unit coverage of the grounded flow exists via the `handleUpdateAgentsTask` seam (`__callZaiForTest`). |
-| Full command pipeline | `tests/integration/command-pipeline.test.js` | Parse -> auth -> handler -> output contract |
-| PR auto-review behavior | `tests/integration/pr-auto-review.test.js` | Marker upsert and PR event lifecycle |
+## Local boundaries and invariants
 
-## CONVENTIONS
-- Test framework: Vitest v3 (uses vitest globals: describe/test/expect); configured via `vitest.config.js`.
-- Keep tests deterministic with explicit mock payloads and marker assertions.
+- Framework: **Vitest v3** with globals (`describe` / `test` / `expect`); configured via `vitest.config.js`.
+- Keep tests deterministic: explicit mock payloads, no real network, marker-based assertions for comment lifecycle.
 - Prefer scenario names that encode trigger + expected visible outcome.
-- When changing comment markers or command UX, update integration snapshots/assertions immediately.
+- Integration tests are the safety net for command threading and marker idempotency — do not delete their assertions to make a change pass.
+- Reuse existing fixtures (`tests/fixtures/`, `tests/integration/fixtures/events.js`, `tests/helpers/mocks.js`) instead of inlining large payloads.
+- Validate user-visible output, not only internal call sequences.
 
-## ANTI-PATTERNS
-- Deleting integration assertions to make behavior changes pass.
-- Asserting only internal calls without validating user-visible output.
-- Duplicating large fixtures inline when reusable fixtures already exist.
+## Test map
 
-## NOTES
-- Test command: `npm test` → `vitest run --coverage`.
-- Coverage uploaded to Codecov.
-- Integration tests are the safety net for command threading and marker idempotency.
+| Area | File(s) |
+|------|---------|
+| Parser / help text | `tests/commands.test.js` |
+| Auth + fork policy | `tests/auth.test.js` |
+| Comment lifecycle / markers | `tests/comments.test.js` |
+| Runtime dispatch | `tests/action.test.js`, `tests/handlers.test.js`, `tests/index.test.js` |
+| API retry / error categorization | `tests/api.test.js` |
+| Safe error mapping | `tests/logging.test.js` |
+| Diff scoping / file-at-ref | `tests/context.test.js`, `tests/pr-context.test.js` |
+| Paginated file fetch | `tests/changed-files.test.js` |
+| Large-PR batching | `tests/auto-review.test.js` |
+| Continuity state / event detection | `tests/continuity.test.js`, `tests/events.test.js` |
+| Token budget / window extraction | `tests/lib/code-scope.test.js` |
+| Describe handler | `tests/describe.test.js` |
+| Handler units | `tests/handlers/{ask,explain,impact,review,scheduled}.test.js` |
+| Scheduled config + scoping | `tests/scheduled-config.test.js` |
+| Repo-context collection | `tests/repository-context.test.js` |
+| AGENTS.md validation guards | `tests/agents-validation.test.js` |
+| Full command pipeline | `tests/integration/command-pipeline.test.js` |
+| PR auto-review pipeline | `tests/integration/pr-auto-review.test.js` |
+
+## Validation
+
+- Run: `npm test` → `vitest run --coverage`.
+- Coverage is uploaded to Codecov.
+- Known gap: end-to-end schedule event → context → Z.ai mock → validated PR is not yet an integration test; the grounded `handleUpdateAgentsTask` flow is exercised via the `__callZaiForTest` seam in `tests/handlers/scheduled.test.js`.
+
+## Nearby docs
+
+- Integration pipeline detail → `tests/integration/AGENTS.md`.
+- Handler behavior under test → `src/lib/handlers/AGENTS.md`.
