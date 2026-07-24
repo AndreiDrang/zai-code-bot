@@ -28,7 +28,7 @@ action.yml                           # Action inputs + node20 contract
 dist/index.js                        # Generated ncc bundle (CI executes this)
 ```
 
-## Architecture boundaries
+## Architecture and boundaries
 
 Three layers, strictly downward dependency:
 
@@ -56,6 +56,7 @@ Read only when relevant:
 - Service-module details → `src/lib/AGENTS.md`
 - Handler-specific behavior → `src/lib/handlers/AGENTS.md`
 - Test strategy and coverage map → `tests/AGENTS.md`
+- Integration test pipelines → `tests/integration/AGENTS.md`
 
 ## Code map
 
@@ -127,7 +128,7 @@ npm run build      # ncc build src/index.js -o dist --license licenses.txt
 
 CI gates (`.github/workflows/ci.yml`): test → build → dist-drift → security-audit.
 
-## Gotchas
+## Repository-specific gotchas
 
 - `dist/index.js` must be committed; the GitHub Actions runner does not run `npm install` or build steps.
 - `REACTIONS.THINKING` maps to `'eyes'` in `src/lib/comments.js` — it is not a distinct emoji.
