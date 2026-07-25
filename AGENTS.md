@@ -7,25 +7,25 @@
 
 JavaScript GitHub Action (Node 20 runtime, `dist/index.js` entrypoint) with three event flows:
 
-1. **PR auto-review** — `pull_request` `opened`/`synchronize`; large PRs are batched and synthesized.
-2. **`/zai` commands** — collaborator-gated PR comment commands: `ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`.
-3. **Scheduled tasks** — cron-triggered `.zai-scheduled.yml` tasks that regenerate AGENTS.md files and open PRs.
+1. **PR auto-review** — `pull_request` `opened`/`synchronize`; large PRs are batched, per-batch reviewed, then synthesized.
+2. **`/zai` commands** — collaborator-gated PR comment commands: `ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`. Prefix `@zai-bot` is normalized to `/zai`.
+3. **Scheduled tasks** — cron-triggered `.zai-scheduled.yml` tasks that regenerate `AGENTS.md` files and open PRs.
 
 GitHub executes the bundled `dist/index.js` (ncc bundle); maintained source lives in `src/`.
 
 ## Where to work
 
 ```text
-src/index.js                         # Event dispatch + pipelines
-src/lib/                             # Services (auth, api, comments, context, commands)
+src/index.js                         # Event dispatch + pipelines (only module reading github.context)
+src/lib/                             # Services (auth, api, comments, context, commands, ...)
 src/lib/handlers/                    # Per-command + scheduled handlers
 src/lib/config/scheduled-config.js   # .zai-scheduled.yml loader
-src/lib/repository-context.js        # Repo context collection for AGENTS.md gen
+src/lib/repository-context.js        # Repo context collection for AGENTS.md generation
 src/lib/agents-validation.js         # Hallucination guard for generated files
 tests/                               # Vitest v3 unit + integration suites
 action.yml                           # Action inputs + node20 contract
 .zai-scheduled.yml                   # This repo's scheduled-task config
-dist/index.js                        # Generated ncc bundle (CI executes this)
+dist/index.js                        # Generated ncc bundle (CI executes this; never hand-edit)
 ```
 
 ## Architecture boundaries
@@ -36,13 +36,14 @@ Three layers, strictly downward dependency:
 2. **Services** (`src/lib/*.js`) — command-agnostic infrastructure.
 3. **Handlers** (`src/lib/handlers/*.js`) — per-command logic; receive shared context, never own GitHub I/O directly.
 
-Invariants (detailed rationale in `ARCHITECTURE.md`):
+Invariants (full rationale in `ARCHITECTURE.md`):
 
 - `dist/index.js` is the sole runtime artifact; `src/` is source-of-truth.
 - `enforceCommandAuthorization` always precedes command dispatch.
 - Comments are marker-idempotent and threaded (`replyToId`).
-- No raw exception internals or secrets surfaced in PR comments.
+- No raw exception internals or secrets are surfaced in PR comments.
 - External I/O is funneled through `src/lib/api.js` and `src/lib/pr-context.js`.
+- Auto-review diffs are bounded via `src/lib/auto-review.js` and `src/lib/code-scope.js`.
 
 ## Context routing
 
@@ -52,7 +53,7 @@ Read only when relevant:
 - Scheduled-tasks configuration, cron syntax, troubleshooting → `docs/scheduled-tasks.md`
 - Rollback or incident response → `RUNBOOK.md`
 - Authorization model and permission rules → `SECURITY.md`
-- Contribution workflow and review checklists → `CONTRIBUTING.md`
+- Contribution workflow, release process, review checklists → `CONTRIBUTING.md`
 - Service-module details → `src/lib/AGENTS.md`
 - Handler-specific behavior → `src/lib/handlers/AGENTS.md`
 - Test strategy and coverage map → `tests/AGENTS.md`
@@ -68,7 +69,7 @@ Read only when relevant:
 | `dispatchCommand` | `src/index.js` | Handler selection + response management |
 | `enforceCommandAuthorization` | `src/index.js` | Auth gate before dispatch |
 | `getReviewConfig` | `src/index.js` | Reads auto-review thresholds from action inputs |
-| `executeReviewBatch` | `src/index.js` | Per-batch review execution with context-limit sub-splitting |
+| `executeReviewBatch` | `src/index.js` | Per-batch review with context-limit sub-splitting |
 | `runLargePrReview` | `src/index.js` | Batched review loop + final synthesis |
 | `callZaiApi` | `src/index.js` | Direct Z.ai HTTP call (auto-review path) |
 | `parseCommand` / `isValid` | `src/lib/commands.js` | `/zai` parser + allowlist enforcement |
@@ -86,6 +87,7 @@ Read only when relevant:
 | `isLargePr` | `src/lib/auto-review.js` | File-count threshold check |
 | `buildSynthesisPrompt` | `src/lib/auto-review.js` | Final batch-merge prompt |
 | `buildCoverageNotes` | `src/lib/auto-review.js` | Coverage summary for review output |
+| `buildFallbackReview` | `src/lib/auto-review.js` | Concatenated fallback when synthesis fails |
 | `fetchAllChangedFiles` | `src/lib/changed-files.js` | Paginated file list (3000-file API ceiling) |
 | `MAX_PR_FILES_API_LIMIT` | `src/lib/changed-files.js` | GitHub API ceiling constant (3000) |
 | `extractWindow` | `src/lib/code-scope.js` | Surrounding-window line extraction |
@@ -134,5 +136,5 @@ CI gates (`.github/workflows/ci.yml`): test → build → dist-drift → securit
 - `checkAuthorization` currently authorizes any identifiable user (permissive policy). Silent fork-block applies only when no commenter can be identified (`reason: null`).
 - GitHub's changed-files API ceiling is 3000 files (`MAX_PR_FILES_API_LIMIT`); review output includes coverage notes when this limit is reached.
 - `ZAI_MODEL` default is `glm-5.2`; Z.ai endpoint is `https://api.z.ai/api/coding/paas/v4/chat/completions`.
-- The command dispatch `switch` lives in `src/index.js` (`dispatchCommand`), not in `src/lib/handlers/index.js`. The handler registry in `index.js` is consumed by the runtime but `scheduled` is exported separately and not in the `/zai` HANDLERS map.
+- The command dispatch `switch` lives in `src/index.js` (`dispatchCommand`), not in `src/lib/handlers/index.js`. The handler registry in `handlers/index.js` is consumed by the runtime but `scheduled` is exported separately and not part of the `/zai` HANDLERS map.
 - `@zai-bot` prefix is normalized to `/zai` by `normalizeInput` in `src/lib/commands.js`.
