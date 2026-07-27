@@ -1,9 +1,19 @@
 # TEST SUITE GUIDE
 
-## OVERVIEW
+## Scope and inheritance
+
+Applies to: `tests/` and descendants.
+
+Inherits repository-wide guidance from `../AGENTS.md`.
+
+This file defines only local deltas for the test suite. End-to-end integration specifics live in the child file `tests/integration/AGENTS.md`.
+
+## Overview
+
 Repository test coverage mixes module-focused tests in `tests/*.test.js` and scenario-driven flows in `tests/integration/*`.
 
-## STRUCTURE
+## Structure
+
 ```text
 tests/
 ├── *.test.js        # Module-level tests for lib/runtime units
@@ -11,10 +21,11 @@ tests/
 ├── helpers/         # Shared mocks and fixtures utilities
 ├── lib/             # Shared test helpers + code-scope tests
 ├── fixtures/        # Static test payloads (issue-comment-event.json, pr-event.json)
-└── integration/     # End-to-end command/review pipeline checks
+└── integration/     # End-to-end command/review pipeline checks (see child AGENTS)
 ```
 
-## WHERE TO LOOK
+## Where to look
+
 | Task | Location | Notes |
 |------|----------|-------|
 | Parser/auth/comment unit behavior | `tests/commands.test.js`, `tests/auth.test.js`, `tests/comments.test.js` | Fast regression checks |
@@ -24,23 +35,26 @@ tests/
 | Continuity and events | `tests/continuity.test.js`, `tests/events.test.js` | Hidden-marker state, event-type detection |
 | Code scope and window extraction | `tests/lib/code-scope.test.js` | Token budget, enclosing block, window extraction |
 | Describe handler | `tests/describe.test.js` | PR description generation |
-| Scheduled pipeline | `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` | Config load + `validateAgentsConfig` scoping; `parseFileUpdatesFromResponse`; grounded `handleUpdateAgentsTask` flow incl. hallucination rejection; repo-context collection (tree/budgets/globs); validation guards incl. PR #15 regression |
+| Scheduled pipeline (units) | `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` | Config load + `validateAgentsConfig` scoping; `parseFileUpdatesFromResponse`; grounded `handleUpdateAgentsTask` flow incl. hallucination rejection; repo-context collection (tree/budgets/globs); validation guards incl. PR #15 regression |
 | Scheduled pipeline (integration) | (pending) | End-to-end schedule event → context → Z.ai mock → validated PR is still a gap; unit coverage of the grounded flow exists via the `handleUpdateAgentsTask` seam (`__callZaiForTest`). |
-| Full command pipeline | `tests/integration/command-pipeline.test.js` | Parse -> auth -> handler -> output contract |
+| Full command pipeline | `tests/integration/command-pipeline.test.js` | Parse → auth → handler → output contract |
 | PR auto-review behavior | `tests/integration/pr-auto-review.test.js` | Marker upsert and PR event lifecycle |
 
-## CONVENTIONS
+## Conventions
+
 - Test framework: Vitest v3 (uses vitest globals: describe/test/expect); configured via `vitest.config.js`.
 - Keep tests deterministic with explicit mock payloads and marker assertions.
 - Prefer scenario names that encode trigger + expected visible outcome.
 - When changing comment markers or command UX, update integration snapshots/assertions immediately.
 
-## ANTI-PATTERNS
+## Anti-patterns
+
 - Deleting integration assertions to make behavior changes pass.
 - Asserting only internal calls without validating user-visible output.
 - Duplicating large fixtures inline when reusable fixtures already exist.
 
-## NOTES
+## Notes
+
 - Test command: `npm test` → `vitest run --coverage`.
 - Coverage uploaded to Codecov.
 - Integration tests are the safety net for command threading and marker idempotency.
