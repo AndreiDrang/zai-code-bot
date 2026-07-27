@@ -3,6 +3,8 @@
 **Scope:** Repository-wide.
 **Child files:** `src/lib/AGENTS.md`, `src/lib/handlers/AGENTS.md`, `tests/AGENTS.md`, `tests/integration/AGENTS.md`.
 
+Child files define only local deltas; they inherit this file and do not override repository-wide rules unless they say so explicitly.
+
 ## Repository overview
 
 JavaScript GitHub Action (Node 20 runtime, `dist/index.js` entrypoint) with three event flows:
