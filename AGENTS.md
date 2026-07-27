@@ -7,9 +7,9 @@
 
 JavaScript GitHub Action (Node 20 runtime, `dist/index.js` entrypoint) with three event flows:
 
-1. **PR auto-review** — `pull_request` `opened`/`synchronize`; large PRs are batched and synthesized.
-2. **`/zai` commands** — collaborator-gated PR comment commands: `ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`.
-3. **Scheduled tasks** — cron-triggered `.zai-scheduled.yml` tasks that regenerate AGENTS.md files and open PRs.
+1. **PR auto-review** — `pull_request` `opened`/`synchronize`; large PRs are batched, reviewed per-batch, then synthesized.
+2. **`/zai` commands** — collaborator-gated PR comment commands: `ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`. Also valid as `@zai-bot`.
+3. **Scheduled tasks** — cron-triggered `.zai-scheduled.yml` tasks that regenerate `AGENTS.md` files and open PRs.
 
 GitHub executes the bundled `dist/index.js` (ncc bundle); maintained source lives in `src/`.
 
@@ -32,11 +32,11 @@ dist/index.js                        # Generated ncc bundle (CI executes this)
 
 Three layers, strictly downward dependency:
 
-1. **Orchestration** (`src/index.js`) — event routing, auto-review pipeline, command dispatch. Only module reading `github.context`.
+1. **Orchestration** (`src/index.js`) — event routing, auto-review pipeline, command dispatch. Only module reading `github.context` directly.
 2. **Services** (`src/lib/*.js`) — command-agnostic infrastructure.
 3. **Handlers** (`src/lib/handlers/*.js`) — per-command logic; receive shared context, never own GitHub I/O directly.
 
-Invariants (detailed rationale in `ARCHITECTURE.md`):
+Invariants (full rationale in `ARCHITECTURE.md`):
 
 - `dist/index.js` is the sole runtime artifact; `src/` is source-of-truth.
 - `enforceCommandAuthorization` always precedes command dispatch.
@@ -65,10 +65,10 @@ Read only when relevant:
 | `handlePullRequestEvent` | `src/index.js` | PR auto-review flow |
 | `handleIssueCommentEvent` | `src/index.js` | Command parse → auth → dispatch |
 | `handlePullRequestReviewCommentEvent` | `src/index.js` | Inline review comment command flow |
-| `dispatchCommand` | `src/index.js` | Handler selection + response management |
+| `dispatchCommand` | `src/index.js` | Handler selection `switch` + response management |
 | `enforceCommandAuthorization` | `src/index.js` | Auth gate before dispatch |
 | `getReviewConfig` | `src/index.js` | Reads auto-review thresholds from action inputs |
-| `executeReviewBatch` | `src/index.js` | Per-batch review execution with context-limit sub-splitting |
+| `executeReviewBatch` | `src/index.js` | Per-batch review with context-limit sub-splitting |
 | `runLargePrReview` | `src/index.js` | Batched review loop + final synthesis |
 | `callZaiApi` | `src/index.js` | Direct Z.ai HTTP call (auto-review path) |
 | `parseCommand` / `isValid` | `src/lib/commands.js` | `/zai` parser + allowlist enforcement |
@@ -134,5 +134,5 @@ CI gates (`.github/workflows/ci.yml`): test → build → dist-drift → securit
 - `checkAuthorization` currently authorizes any identifiable user (permissive policy). Silent fork-block applies only when no commenter can be identified (`reason: null`).
 - GitHub's changed-files API ceiling is 3000 files (`MAX_PR_FILES_API_LIMIT`); review output includes coverage notes when this limit is reached.
 - `ZAI_MODEL` default is `glm-5.2`; Z.ai endpoint is `https://api.z.ai/api/coding/paas/v4/chat/completions`.
-- The command dispatch `switch` lives in `src/index.js` (`dispatchCommand`), not in `src/lib/handlers/index.js`. The handler registry in `index.js` is consumed by the runtime but `scheduled` is exported separately and not in the `/zai` HANDLERS map.
+- The command dispatch `switch` lives in `src/index.js` (`dispatchCommand`), not in `src/lib/handlers/index.js`. The handler registry in `index.js` is consumed by the runtime, but `scheduled` is exported separately and is not in the `/zai` HANDLERS map.
 - `@zai-bot` prefix is normalized to `/zai` by `normalizeInput` in `src/lib/commands.js`.
