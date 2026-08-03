@@ -11,7 +11,7 @@ JavaScript GitHub Action (Node 20 runtime, `dist/index.js` entrypoint) with thre
 2. **`/zai` commands** — collaborator-gated PR comment commands: `ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`.
 3. **Scheduled tasks** — cron-triggered `.zai-scheduled.yml` tasks that regenerate AGENTS.md files and open PRs.
 
-GitHub executes the bundled `dist/index.js` (ncc bundle); maintained source lives in `src/`.
+GitHub executes the bundled `dist/index.js` (ncc bundle); maintained source lives in `src/`. This is an event-driven webhook processor, not a long-running service (`Observed`: `action.yml` declares `using: "node20"`, `main: "dist/index.js"`; `package.json` has no `start` script).
 
 ## Where to work
 
@@ -136,3 +136,4 @@ CI gates (`.github/workflows/ci.yml`): test → build → dist-drift → securit
 - `ZAI_MODEL` default is `glm-5.2`; Z.ai endpoint is `https://api.z.ai/api/coding/paas/v4/chat/completions`.
 - The command dispatch `switch` lives in `src/index.js` (`dispatchCommand`), not in `src/lib/handlers/index.js`. The handler registry in `index.js` is consumed by the runtime but `scheduled` is exported separately and not in the `/zai` HANDLERS map.
 - `@zai-bot` prefix is normalized to `/zai` by `normalizeInput` in `src/lib/commands.js`.
+- Action inputs (see `action.yml`): `ZAI_API_KEY` (required), `ZAI_MODEL`, `GITHUB_TOKEN`, `ZAI_TIMEOUT`, `ZAI_AUTO_REVIEW_LARGE_PR_FILE_THRESHOLD` (default `50`), `ZAI_AUTO_REVIEW_MAX_BATCH_CHARS` (default `120000`), `ZAI_AUTO_REVIEW_MAX_FILES_PER_BATCH` (default `40`), `ZAI_AUTO_REVIEW_MAX_PATCH_CHARS` (default `18000`), `ZAI_SCHEDULED_ENABLED` (default `true`), `ZAI_SCHEDULED_CONFIG_PATH` (default `.zai-scheduled.yml`), `ZAI_AGENTS_GIST_URL`.
