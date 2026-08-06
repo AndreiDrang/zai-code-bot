@@ -23,6 +23,10 @@ service = "zai-heavy-worker"
 pattern = "zai-worker.tokenbel.info/*"
 zone_name = "tokenbel.info"
 
+[[routes]]
+pattern = "zai-worker.tokenbel.info"
+custom_domain = true
+
 [vars]
 NODE_ENV = "development"
 ZAI_MODEL = "glm-5.2"
