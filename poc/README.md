@@ -34,7 +34,8 @@ lifetime budget.
 
 ```text
 poc/
-├── package.json                      # root: test + per-worker dev/deploy scripts
+├── package.json                      # root: test (vitest+coverage) + dev/deploy scripts
+├── vitest.config.js                  # Vitest config: globals, miniflare env, v8 coverage (80%)
 ├── README.md
 └── workers/
     ├── shared/                       # shared lib — imported by BOTH workers (relative paths)
@@ -67,8 +68,14 @@ poc/
     │           ├── review.js         #   /zai review  (stub)
     │           └── impact.js         #   /zai impact  (stub)
     │
-    └── tests/
-        └── test.js                   #   pure-module tests (commands, crypto, router, logger)
+    └── tests/                        #   Vitest suite — one file per shared module
+        ├── commands.test.js          #   parseCommand / isCommand / formatHelp
+        ├── crypto.test.js            #   HMAC fixture + webhook signature verify (Web Crypto)
+        ├── secrets.test.js           #   Secrets Store binding resolver (string|get()|Promise)
+        ├── github.test.js            #   GitHubClient: 204/200/non-JSON/404 + REST helpers
+        ├── auth.test.js              #   authorizeCommenter (collaborator policy)
+        ├── logging.test.js           #   structured JSON logger + correlation id
+        └── router.test.js            #   classifyCommand: light | heavy | unsupported
 ```
 
 ## Request lifecycle
@@ -211,8 +218,9 @@ This exposes `env.HEAVY_WORKER.fetch(...)` inside the main worker.
 ```bash
 cd poc
 
-# Run the unit test suite (pure modules only — no live API calls)
-npm test
+# Run the Vitest unit-test suite with coverage (no live API calls)
+npm test            # vitest run --coverage
+npm run test:watch  # vitest (watch mode)
 
 # Dev servers (run each in its own terminal)
 ( cd workers/zai-main-worker  && wrangler dev )   # :8787
@@ -282,10 +290,20 @@ Then point the GitHub webhook at the main worker's public route —
 
 ## Testing
 
+The POC ships the same Vitest + coverage stack used by the production
+`tbel/cf_workers` workers (adapted to JavaScript rather than TypeScript):
+**Vitest** with `vitest-environment-miniflare` (Workers-runtime fidelity) and
+`@vitest/coverage-v8`, enforcing **80%** thresholds on the shared lib + router.
+
 ```bash
-cd poc && npm test        # 36 assertions: parsing, allowlist, help format,
-                          # GitHubClient, Web Crypto, router, logger regression
+cd poc && npm test        # vitest run --coverage  →  99 tests, ~100% coverage
+npm run test:watch        # vitest in watch mode
 ```
+
+The suite mirrors `tb-bcse-securities-collector`'s layout — one `.test.js`
+file per shared module (`describe`/`it`/`expect`, `vi.spyOn(globalThis,'fetch')`)
+— covering command parsing, Web Crypto HMAC, the Secrets Store binding resolver,
+`GitHubClient` (incl. the 204 empty-body regression), auth, logging and routing.
 
 ## Related
 
