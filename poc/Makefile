@@ -4,12 +4,13 @@ SHELL := /bin/sh
 WORKER_MAIN  := workers/zai-main-worker
 WORKER_HEAVY := workers/zai-heavy-worker
 
-.PHONY: help dependencies test refactor-js format-check deploy-dry-run deploy dev-main dev-heavy tail-main tail-heavy clean
+.PHONY: help dependencies test test-watch refactor-js format-check deploy-dry-run deploy dev-main dev-heavy tail-main tail-heavy clean
 
 help:
 	@printf '%s\n' \
-		'make dependencies    Install Node.js dev dependencies (prettier, etc.)' \
-		'make test            Run the worker unit-test suite' \
+		'make dependencies    Install Node.js dev dependencies (prettier, vitest, etc.)' \
+		'make test            Run the Vitest unit-test suite with v8 coverage' \
+		'make test-watch      Run Vitest in watch mode (re-runs on file change)' \
 		'make refactor-js     Install ALL deps, then auto-format worker JavaScript' \
 		'make format-check    Check JS formatting without writing (CI-style)' \
 		'make deploy-dry-run  Bundle + validate both Workers locally (no API calls). Order: heavy, then main' \
@@ -24,9 +25,13 @@ help:
 dependencies:
 	@npm install
 
-# Run the worker unit-test suite (pure modules, no live API calls).
+# Run the Vitest unit-test suite with coverage (globals + miniflare env).
 test:
 	@npm test
+
+# Run Vitest in watch mode (re-runs on file change).
+test-watch:
+	@npm run test:watch
 
 # Mirror of tbel/Makefile refactor-js: install ALL dependencies, then format JS.
 refactor-js: dependencies

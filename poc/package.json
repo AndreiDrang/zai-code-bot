@@ -5,7 +5,8 @@
   "description": "Hybrid Cloudflare Workers for Z.ai Code Bot: main (light) + heavy (offloaded) workers sharing a common lib layer",
   "type": "module",
   "scripts": {
-    "test": "node workers/tests/test.js",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
     "format:js": "prettier --write \"workers/**/*.js\"",
     "format:js:check": "prettier --check \"workers/**/*.js\"",
     "dev:main": "cd workers/zai-main-worker && wrangler dev",
@@ -21,6 +22,9 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
-    "prettier": "^3.3.0"
+    "prettier": "^3.3.0",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8",
+    "vitest-environment-miniflare": "^2.14.4"
   }
 }
