@@ -57,7 +57,23 @@ export class GitHubClient {
       throw err;
     }
 
-    return opts.returnText ? response.text() : response.json();
+    // 204 No Content (e.g. the collaborator check) and other empty 2xx bodies
+    // have no JSON to parse — calling response.json() throws
+    // "Unexpected end of JSON input". Read once as text and short-circuit.
+    const text = await response.text();
+    if (text === '') return null;
+    if (opts.returnText) return text;
+    try {
+      return JSON.parse(text);
+    } catch (parseErr) {
+      // Preserve the request() error contract (callers check error.status)
+      // and surface a debuggable error instead of a bare SyntaxError.
+      const err = new Error(`GitHub API returned ${response.status} with non-JSON body`);
+      err.status = response.status;
+      err.body = text.slice(0, 500);
+      err.cause = parseErr;
+      throw err;
+    }
   }
 
   /** Repository metadata. */

@@ -11,6 +11,7 @@
 
 import { GitHubClient } from '../../shared/github.js';
 import { verifyWebhookSignature } from '../../shared/crypto.js';
+import { resolveSecretValue } from '../../shared/secrets.js';
 import { parseCommand, isCommand, formatCommandNotAvailable } from '../../shared/commands.js';
 import { authorizeCommenter } from '../../shared/auth.js';
 import { createLogger, logPerformance, generateCorrelationId } from '../../shared/logging.js';
@@ -37,7 +38,11 @@ export default {
       }
 
       // --- Gate 3: webhook signature (Web Crypto, no compat flag) ---
-      const signatureOk = await verifyWebhookSignature(request, env.GITHUB_WEBHOOK_SECRET);
+      // Secrets Store bindings can surface as string | {get()} | Promise;
+      // resolve to a plain string before HMAC (else it stringifies to
+      // "[object Object]" and every signature check fails).
+      const webhookSecret = await resolveSecretValue(env.GITHUB_WEBHOOK_SECRET);
+      const signatureOk = await verifyWebhookSignature(request, webhookSecret);
       if (!signatureOk) {
         logger.warn('Invalid GitHub webhook signature', { correlationId });
         return new Response('Unauthorized', { status: 401 });
@@ -69,7 +74,7 @@ export default {
       }
 
       // --- Gate 5: authorization (collaborator check) ---
-      const github = new GitHubClient(env.GITHUB_TOKEN);
+      const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
       const { owner, name, full_name } = repoCoordinates(webhookData.repository);
       const username = webhookData.comment?.user?.login;
 

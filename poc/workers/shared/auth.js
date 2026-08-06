@@ -8,6 +8,7 @@
  */
 
 import { GitHubClient } from './github.js';
+import { resolveSecretValue } from './secrets.js';
 
 /**
  * Authorizes a commenter as a repository collaborator.
@@ -33,6 +34,6 @@ export async function authorizeCommenter(github, owner, repo, username) {
  * Useful from the heavy worker, which rebuilds a client per invocation.
  */
 export async function isAuthorized(env, owner, repo, username) {
-  const github = new GitHubClient(env.GITHUB_TOKEN);
+  const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
   return authorizeCommenter(github, owner, repo, username);
 }

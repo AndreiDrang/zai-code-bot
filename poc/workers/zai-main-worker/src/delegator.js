@@ -12,6 +12,7 @@
 
 import { INTERNAL_TOKEN_HEADER, INTERNAL_PATH } from '../../shared/constants.js';
 import { createLogger } from '../../shared/logging.js';
+import { resolveSecretValue } from '../../shared/secrets.js';
 
 /**
  * Builds the JSON body forwarded to the heavy worker.
@@ -53,16 +54,19 @@ export function buildDelegationPayload(parsed, webhookData) {
 export function delegateToHeavy(env, ctx, payload) {
   // Service bindings accept an arbitrary hostname; only the path is read.
   const url = `https://zai-heavy-worker.internal${INTERNAL_PATH}`;
-  const init = {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      [INTERNAL_TOKEN_HEADER]: env.ZAI_INTERNAL_TOKEN || '',
-    },
-    body: JSON.stringify(payload),
-  };
 
   const send = async () => {
+    // Resolve the Secrets Store binding to a string (it may arrive as an
+    // object/Promise depending on the runtime version).
+    const internalToken = (await resolveSecretValue(env.ZAI_INTERNAL_TOKEN)) || '';
+    const init = {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [INTERNAL_TOKEN_HEADER]: internalToken,
+      },
+      body: JSON.stringify(payload),
+    };
     try {
       return await env.HEAVY_WORKER.fetch(url, init);
     } catch (err) {

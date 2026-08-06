@@ -17,6 +17,7 @@
 import { GitHubClient } from '../../shared/github.js';
 import { createLogger, generateCorrelationId } from '../../shared/logging.js';
 import { INTERNAL_TOKEN_HEADER } from '../../shared/constants.js';
+import { resolveSecretValue } from '../../shared/secrets.js';
 import { getHeavyHandler } from './handlers/index.js';
 
 export default {
@@ -26,7 +27,10 @@ export default {
 
     // --- Internal auth (defense-in-depth; service binding is already private) ---
     const token = request.headers.get(INTERNAL_TOKEN_HEADER);
-    if (!token || token !== env.ZAI_INTERNAL_TOKEN) {
+    // Resolve the binding: a raw object/Promise would make `token !== env.X`
+    // always true and reject every delegated call.
+    const expectedToken = await resolveSecretValue(env.ZAI_INTERNAL_TOKEN);
+    if (!token || !expectedToken || token !== expectedToken) {
       logger.warn('Rejected internal call: bad token', { correlationId });
       return new Response('Unauthorized', { status: 401 });
     }
@@ -74,7 +78,7 @@ export default {
  * PR comment).
  */
 async function runHeavy(env, handler, payload, correlationId, logger) {
-  const github = new GitHubClient(env.GITHUB_TOKEN);
+  const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
   const startedAt = Date.now();
 
   try {

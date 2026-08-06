@@ -9,6 +9,7 @@
 import { parseCommand, isCommand, getAvailableCommands, formatHelp } from '../shared/commands.js';
 import { GitHubClient } from '../shared/github.js';
 import { hmacSha256Hex, timingSafeEqualStr } from '../shared/crypto.js';
+import { resolveSecretValue } from '../shared/secrets.js';
 import { createLogger } from '../shared/logging.js';
 import { classifyCommand, getAllCommands } from '../zai-main-worker/src/router.js';
 
@@ -102,12 +103,54 @@ function testGitHubClient() {
   console.log();
 }
 
+// --- GitHubClient (204 empty-body regression) -----------------------------
+async function testGitHubClientEmptyBody() {
+  console.log('📝 GitHubClient (204 empty-body regression)');
+  const originalFetch = globalThis.fetch;
+  const client = new GitHubClient('tok');
+  try {
+    // 204 No Content — body is empty; must return null, NOT throw
+    // "Unexpected end of JSON input".
+    globalThis.fetch = async () => new Response(null, { status: 204 });
+    assert(
+      (await client.request('GET', '/repos/o/r/collaborators/u')) === null,
+      '204 No Content → null (no JSON parse error)',
+    );
+    // 200 with a JSON body still parses.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    assert((await client.request('GET', '/x')).ok === true, '200 JSON body parses');
+    // returnText still returns the raw body.
+    globalThis.fetch = async () => new Response('raw', { status: 200 });
+    assert(
+      (await client.request('GET', '/x', null, { returnText: true })) === 'raw',
+      'returnText returns raw body',
+    );
+    // non-ok throws with error.status set (callers depend on this).
+    globalThis.fetch = async () => new Response('nope', { status: 404 });
+    let threw = false;
+    try {
+      await client.request('GET', '/x');
+    } catch (e) {
+      threw = true;
+      assert(e.status === 404, '404 throws with error.status');
+    }
+    assert(threw, 'non-ok response throws');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  console.log();
+}
+
 // --- Web Crypto (webhook signature) ---------------------------------------
 function testCrypto() {
   console.log('📝 shared/crypto (Web Crypto)');
   const hex = hmacSha256Hex('secret', 'payload');
   // Known fixture: HMAC-SHA256("secret","payload")
-  hex.then((d) => {
+  hex.then(async (d) => {
     assert(
       d === 'b82fcb791acec57859b989b430a826488ce2e479fdf92326bd0a2e8375a42ba4',
       'HMAC-SHA256 matches known fixture',
@@ -119,10 +162,42 @@ function testCrypto() {
     );
     assert(timingSafeEqualStr('abc', 'abd') === false, 'timingSafeEqualStr diff → false');
     console.log();
+    await testSecrets();
+    await testGitHubClientEmptyBody();
     testRouter();
     testLogger();
     finish();
   });
+}
+
+// --- Secrets Store binding resolver --------------------------------------
+async function testSecrets() {
+  console.log('📝 shared/secrets (Secrets Store binding resolver)');
+  assert((await resolveSecretValue('hunter2')) === 'hunter2', 'plain string → string');
+  assert((await resolveSecretValue('  hunter2 ')) === 'hunter2', 'trims whitespace');
+  assert((await resolveSecretValue('')) === undefined, 'empty string → undefined');
+  assert((await resolveSecretValue('   ')) === undefined, 'whitespace-only → undefined');
+  assert((await resolveSecretValue(undefined)) === undefined, 'undefined → undefined');
+  assert((await resolveSecretValue(null)) === undefined, 'null → undefined');
+  assert((await resolveSecretValue(123)) === undefined, 'number → undefined');
+  assert((await resolveSecretValue({})) === undefined, 'plain object → undefined');
+  assert(
+    (await resolveSecretValue({ get: async () => 'tok-from-get' })) === 'tok-from-get',
+    '{get(): Promise<string>} → string',
+  );
+  assert(
+    (await resolveSecretValue({ get: async () => '' })) === undefined,
+    '{get()} empty → undefined',
+  );
+  assert(
+    (await resolveSecretValue(Promise.resolve('tok-from-promise'))) === 'tok-from-promise',
+    'Promise<string> → string',
+  );
+  assert(
+    (await resolveSecretValue(Promise.resolve(''))) === undefined,
+    'Promise empty → undefined',
+  );
+  console.log();
 }
 
 // --- Router classification -------------------------------------------------

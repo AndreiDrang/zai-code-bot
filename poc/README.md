@@ -151,8 +151,23 @@ exceeding the ack budget), move it between the two arrays — nothing else chang
 
 All secrets live in one shared [Secrets Store](https://developers.cloudflare.com/secrets-store/)
 and are bound into each worker via `[[secrets_store_secrets]]` in `wrangler.toml`.
-To the code they are plain `env.*` strings (e.g. `env.GITHUB_TOKEN`); only the
-source differs — the store, **not** `wrangler secret put`.
+
+> ⚠️ **A binding is not always a plain string at runtime.** Depending on the
+> wrangler/workerd version, `env.<binding>` can surface as a `string`, an
+> object with a `.get()` method, **or** a `Promise`. Passing it straight into
+> `TextEncoder.encode()` (webhook HMAC) or an `Authorization` header
+> stringifies it to `"[object Object]"` and silently breaks every signature
+> check / API call. **Always** resolve it first with
+> [`resolveSecretValue`](workers/shared/secrets.js) (`workers/shared/secrets.js`):
+>
+> ```js
+> import { resolveSecretValue } from '../../shared/secrets.js';
+> const token = await resolveSecretValue(env.GITHUB_TOKEN);
+> ```
+>
+> This mirrors the proven pattern in `cf_workers/common/utils.ts`. The webhook
+> secret, `GITHUB_TOKEN`, and `ZAI_INTERNAL_TOKEN` are all resolved this way in
+> both workers.
 
 Store id: `629e5dd6594845a889e6ddabb26cc009` (shared by both workers).
 
