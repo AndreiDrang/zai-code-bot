@@ -1,0 +1,33 @@
+# Cloudflare Workers configuration for Z.ai Code Bot POC
+name = "zai-code-bot-poc"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Enable Computer API for future use
+[computer]
+enabled = true
+
+# KV Namespaces for state and cache
+# Uncomment and configure after creating namespaces:
+# [[kv_namespaces]]
+# binding = "STATE"
+# id = "your-state-namespace-id"
+
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "your-cache-namespace-id"
+
+# Environment variables for development
+[vars]
+NODE_ENV = "development"
+ZAI_MODEL = "glm-5.2"
+
+# Secrets (configure via: wrangler secret put KEY)
+# Required secrets:
+# - GITHUB_TOKEN: GitHub Personal Access Token
+# - GITHUB_WEBHOOK_SECRET: Webhook signature secret
+# - ZAI_API_KEY: Z.ai API key (not needed for POC)
+
+# Observability
+[observability]
+enabled = true

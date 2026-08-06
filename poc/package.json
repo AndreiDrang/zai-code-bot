@@ -1,0 +1,22 @@
+{
+  "name": "zai-code-bot-poc",
+  "version": "0.1.0",
+  "description": "Proof-of-Concept: Z.ai Code Bot /zai help command on Cloudflare Computer",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "test": "node tests/test.js",
+    "logs": "wrangler logs"
+  },
+  "dependencies": {
+    "@cloudflare/workers": "^4.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
