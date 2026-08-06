@@ -1,0 +1,46 @@
+# zai-main-worker — receives GitHub webhooks, runs light commands,
+# delegates heavy commands to zai-heavy-worker via a Service Binding.
+name = "zai-main-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-05"
+
+# Worker-to-Worker delegation (internal to the Cloudflare account).
+# `env.HEAVY_WORKER.fetch(...)` is available inside the worker.
+[[services]]
+binding = "HEAVY_WORKER"
+service = "zai-heavy-worker"
+
+# Public ingress for GitHub webhooks.
+#   • Adding a route INFERS workers_dev=false on the next deploy → the
+#     *.workers.dev URL disappears. Point the GitHub webhook at
+#     https://zai-worker.tokenbel.info (Payload URL).
+#   • A route (pattern+zone_name) requires a PROXIED DNS record for
+#     zai-worker.tokenbel.info to already exist in the tokenbel.info zone.
+#     If you'd rather have Cloudflare auto-create the DNS record + TLS cert,
+#     replace this block with:  pattern = "zai-worker.tokenbel.info",
+#     custom_domain = true   (no zone_name, no /* path).
+[[routes]]
+pattern = "zai-worker.tokenbel.info/*"
+zone_name = "tokenbel.info"
+
+[vars]
+NODE_ENV = "development"
+ZAI_MODEL = "glm-5.2"
+
+# Secrets (configure once per worker via: wrangler secret put KEY):
+#   GITHUB_TOKEN            — GitHub PAT (repo + read:org)
+#   GITHUB_WEBHOOK_SECRET   — HMAC-SHA256 webhook secret
+#   ZAI_INTERNAL_TOKEN      — shared secret for main→heavy calls
+#   (ZAI_API_KEY            — only needed once ask/explain/review/impact call the LLM)
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+
+[placement]
+mode = "smart"

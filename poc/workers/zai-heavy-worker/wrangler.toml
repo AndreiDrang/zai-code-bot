@@ -1,0 +1,31 @@
+# zai-heavy-worker — receives delegated heavy commands (review, impact)
+# from zai-main-worker via a Service Binding. Not exposed publicly.
+name = "zai-heavy-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-05"
+
+# No public route: this worker is reached ONLY through the HEAVY_WORKER service
+# binding from zai-main-worker (which works without any public URL). Disable the
+# default workers.dev route so it has no public ingress at all.
+workers_dev = false
+
+[vars]
+NODE_ENV = "development"
+ZAI_MODEL = "glm-5.2"
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+
+[placement]
+mode = "smart"
+
+# Secrets (configure via: wrangler secret put KEY):
+#   GITHUB_TOKEN            — GitHub PAT for posting result comments
+#   ZAI_INTERNAL_TOKEN      — shared secret (must match zai-main-worker)
+#   ZAI_API_KEY             — Z.ai API key (required once review/impact call the LLM)

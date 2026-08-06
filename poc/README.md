@@ -1,503 +1,265 @@
-# zai-code-bot-poc
+# zai-code-bot · hybrid Workers (POC v0.2)
 
-Cloudflare Worker that receives GitHub webhook events and handles the `/zai help` command — a **Proof-of-Concept (POC)** validating the migration of `zai-code-bot` from GitHub Actions to Cloudflare Computer.
+Cloudflare **Workers** reimplementation of `zai-code-bot`, architected for scale
+by splitting work across two workers: a **main worker** that ingests GitHub
+webhooks and runs *light* commands, and a **heavy worker** that runs
+*resource-heavy* commands (code review, impact analysis) offloaded via a
+**Service Binding**.
 
-## Overview
-
-`zai-code-bot-poc` is an **HTTP webhook-driven Cloudflare Worker** (a `fetch` handler, not a queue or cron Worker). It is triggered by GitHub `issue_comment` / `pull_request` webhooks, verifies the webhook signature, authorizes the commenter as a repository collaborator, and posts a help message back to the issue/PR via the GitHub REST API.
+This evolves the flat single-Worker POC (`poc/src/...`, v0.1) into a structure
+that scales: heavy commands can no longer block webhook acknowledgement, and the
+two workers can be tuned, scaled, and rolled independently.
 
 ```text
-GitHub Webhook (POST) → Cloudflare Worker → GitHub REST API → Comment posted
+GitHub Webhook ──▶ zai-main-worker ──light──▶ inline (help/describe/…)
+                   (gates, parse, auth) │
+                                       └──heavy──▶ zai-heavy-worker ──▶ review/impact
+                                                  (Service Binding)      (posts comment)
 ```
 
-### Scope
-
-This POC implements **only** the `/zai help` command to validate the Cloudflare Computer architecture and measure performance (latency, cost, reliability) relative to the GitHub Actions runtime. All other `/zai` commands (`review`, `ask`, `explain`, `describe`, `impact`) are recognized but respond with a "not available in POC" notice rather than executing.
-
-- **Trigger**: GitHub webhook HTTP request (POST, `application/json`)
-- **Runtime**: Cloudflare Workers (Node 18+ compatible)
-- **Focus command**: `/zai help`
-- **Target performance**: ~5–10s response time (vs 30–60s on GitHub Actions)
-
-## Business Logic
-
-### Message Flow
-
-1. **HTTP Receive**: Worker `fetch(request, env, ctx)` receives a POST from GitHub
-2. **Method Gate**: Rejects non-POST requests with `405 Method Not Allowed`
-3. **Content-Type Gate**: Rejects non-`application/json` requests with `415 Unsupported Media Type`
-4. **Signature Verification**: Verifies the `X-Hub-Signature-256` HMAC-SHA256 against `GITHUB_WEBHOOK_SECRET`; rejects with `401 Unauthorized` on mismatch (`GitHubClient.verifyWebhookSignature`)
-5. **Payload Parsing**: `parseGitHubWebhook` extracts `event`, `action`, `repository`, `pull_request`, `issue`, `comment`, `sender`, `installation`
-6. **Event Routing**: `getEventType` normalizes the raw GitHub event into an internal type
-7. **Process Gate**: `shouldProcessEvent` only proceeds for comment events whose body contains a `/zai` command; everything else returns `200 OK` and is skipped
-8. **Command Parse**: `parseCommand` extracts `{type, args, raw, isValid}` from the comment body
-9. **Authorization**: `checkRepositoryAccess` checks collaborator status via `GET /repos/{owner}/{repo}/collaborators/{username}`; posts an "Authorization Required" comment and returns `403` on failure
-10. **Dispatch**: `help` → posts the help message; any other command → posts a "not available in POC" notice
-11. **Result**: Returns `200 OK` with a JSON result object; performance metrics logged
-
-### Request Validation Gate
-
-The Worker enforces a strict, ordered gate before any business logic runs:
-
-- **Purpose**: Reject malformed or unauthenticated requests as early as possible
-- **Input**: Raw `Request` (method, headers, body)
-- **Output**: HTTP error response or control flow to parsing
-- **Key Operations**:
-  - Method check: `request.method !== 'POST'` → `405`
-  - Content-Type check: `!== 'application/json'` → `415`
-  - Signature verification: HMAC-SHA256 constant-time compare → `401`
-- **Performance**: Negligible cost; rejects invalid traffic before any I/O
-
-### Event Routing
-
-`getEventType` maps raw GitHub events to internal types:
-
-| GitHub `x-github-event` | Condition | Internal Type |
-| ------------------------- | ----------- | --------------- |
-| `pull_request` | any action | `pull_request_{action}` |
-| `issue_comment` | `issue.pull_request` present | `pull_request_comment` |
-| `issue_comment` | otherwise | `issue_comment` |
-| `pull_request_review_comment` | — | `pull_request_review_comment` |
-| other | — | passthrough (raw event name) |
-
-`shouldProcessEvent` then proceeds **only** when the internal type is a comment event **and** `isCommand(comment.body)` is true. PR-opened / push / other events are ignored in this POC.
-
-### Command Parsing
-
-`parseCommand` (`src/lib/commands.js`) recognizes three invocation forms:
-
-- `/zai <command> [args]`
-- `/zai-bot <command> [args]`
-- `@zai-bot <command> [args]`
-
-Returns `{ type, args, raw, isValid }`, where `isValid` is true only for the allowlisted commands: `help`, `ask`, `review`, `explain`, `describe`, `impact`. Non-command text returns `null` and is skipped by `shouldProcessEvent`.
-
-### Authorization Gate
-
-- **Purpose**: Ensure only repository collaborators can trigger bot commands
-- **Check**: `GET /repos/{owner}/{repo}/collaborators/{username}` — a `200` means collaborator, a `404` means not
-- **Failure**: Posts a "⚠️ Authorization Required" comment and returns `403`
-
-> **Note:** This POC uses a stricter collaborator check than the parent GitHub Actions bot, which authorizes any identifiable user. See [Known Limitations](#known-limitations--poc-caveats).
-
-### Command Dispatch
-
-| Command | POC Behavior |
-| --------- | -------------- |
-| `help` | `handleHelpCommand` → posts formatted help message |
-| `ask` / `review` / `explain` / `describe` / `impact` | `handleUnsupportedCommand` → posts "not available in POC" notice |
-| unknown but matches `/zai …` | `handleUnsupportedCommand` → posts "not available in POC" notice |
-
-All posted comments embed the hidden marker `<!-- zai-code-review -->` (`COMMENT_MARKER`) for future idempotency / lookup.
-
-### Error Handling
-
-- **Caught errors** during command processing: the Worker attempts to post an "❌ Internal Error" comment to the issue/PR with the error message, then returns `500` with a JSON `{ status, error }` body.
-- **Outer handler errors** (parse/fetch failures before a GitHub client is available): returns a bare `500 Internal Server Error`.
-- **Authorization failure**: handled as a normal `403` + comment path (not an exception).
-- **Non-comment / non-command events**: silently acknowledged with `200 OK` — no comment is posted.
-
-> **Security note:** the error-comment path currently surfaces `error.message` in the PR. This is acceptable for a POC but should be replaced with a generic, sanitized message before any production use (no exception internals or secrets should ever reach PR comments).
-
-## Webhook Payload Contracts
-
-### Input: GitHub `issue_comment` Webhook
-
-The Worker consumes the standard GitHub webhook payload. The fields actually read by the code:
-
-```typescript
-interface IssueCommentWebhook {
-  action: string;                       // e.g. "created"
-  repository: {
-    owner: { login: string };
-    name: string;
-    full_name: string;
-  };
-  issue: {
-    number: number;
-    pull_request?: unknown;            // presence ⇒ treated as a PR comment
-  };
-  comment: {
-    body: string;                       // parsed for /zai commands
-    user: { login: string };
-  };
-  sender?: { login: string };
-  installation?: unknown;
-}
-```
-
-| Field | Type | Description |
-| ------- | ------ | ------------- |
-| `action` | `string` | Webhook action (e.g. `created`, `edited`) |
-| `repository.owner.login` / `repository.name` | `string` | Target repo coordinates for API calls |
-| `repository.full_name` | `string` | Used in logging |
-| `issue.number` | `number` | Issue/PR number to comment back on |
-| `issue.pull_request` | `object?` | If present, event is treated as a PR comment |
-| `comment.body` | `string` | Command source — parsed by `parseCommand` |
-| `comment.user.login` | `string` | Commenter — checked for collaborator access |
-
-The same shape applies to `pull_request_review_comment` events; `pull_request` events are recognized but skipped (not processed in POC).
-
-### Output Actions
-
-| Outcome | HTTP Status | Side Effect |
-| --------- | ------------- | ------------- |
-| Non-POST / bad Content-Type | `405` / `415` | — |
-| Invalid signature | `401` | — |
-| Non-command / ignored event | `200` | — (skipped) |
-| Unauthorized commenter | `403` | "Authorization Required" comment posted |
-| `help` processed | `200` | Help comment posted; JSON result body |
-| Unsupported command | `200` | "Not available in POC" comment posted; JSON result body |
-| Processing error | `500` | "Internal Error" comment posted; JSON error body |
-
-## Service Bindings
-
-### Cloudflare Infrastructure
-
-| Binding Type | Name | Purpose |
-| ------------- | ------ | --------- |
-| HTTP Worker | `zai-code-bot-poc` (fetch handler) | Trigger: receives GitHub webhook POSTs |
-| Secret | `GITHUB_TOKEN` | GitHub PAT for REST API auth + comment posting |
-| Secret | `GITHUB_WEBHOOK_SECRET` | HMAC-SHA256 webhook signature verification |
-| KV Namespace | `STATE` / `CACHE` | **Optional / disabled** in POC (commented out in `wrangler.toml`) |
-| Observability | `enabled = true` | Structured logs via `console.log` → Workers Logs |
-
-> **Note on Computer API:** `wrangler.toml` declares an `[computer]` section (`enabled = true`) for future use. The POC runs as a standard Workers `fetch` handler and does not currently use Cloudflare Computer-specific APIs.
-
-### External Service Dependencies
-
-| Service | Endpoint | Purpose |
-| --------- | ---------- | --------- |
-| GitHub Webhooks | `POST <worker-url>` (inbound) | Webhook delivery trigger |
-| GitHub REST API | `GET /repos/{owner}/{repo}/collaborators/{username}` | Authorization check (`checkRepositoryAccess`) |
-| GitHub REST API | `POST /repos/{owner}/{repo}/issues/{number}/comments` | Post reply/error comments (`postComment`) |
-| GitHub REST API | `GET /repos/{owner}/{repo}` | Fetch repository info (`getRepository`) |
-| GitHub REST API | `GET /users/{username}` | Fetch user info (`getUser`) |
-| GitHub REST API | `GET /repos/{owner}/{repo}/issues/{number}` | Fetch issue info (`getIssue`) |
-| GitHub REST API | `GET /repos/{owner}/{repo}/pulls/{number}` | Fetch PR info (`getPullRequest`) |
-
-All GitHub API calls go through `GitHubClient` (`src/lib/github.js`) with `Authorization: token <GITHUB_TOKEN>`, `Accept: application/vnd.github+json`, and `X-GitHub-Api-Version: 2022-11-28`.
-
-## Configuration
-
-### wrangler.toml
-
-```toml
-name = "zai-code-bot-poc"
-main = "src/index.js"
-compatibility_date = "2024-01-01"
-
-[computer]
-enabled = true                       # reserved for future use
-
-# Optional KV namespaces (disabled in POC):
-# [[kv_namespaces]]
-# binding = "STATE"
-# id = "your-state-namespace-id"
-# [[kv_namespaces]]
-# binding = "CACHE"
-# id = "your-cache-namespace-id"
-
-[vars]
-NODE_ENV = "development"
-ZAI_MODEL = "glm-5.2"                # reserved — no AI calls in POC
-
-[observability]
-enabled = true
-
-# Secrets (configure via: wrangler secret put KEY)
-# - GITHUB_TOKEN          (required)
-# - GITHUB_WEBHOOK_SECRET (required)
-# - ZAI_API_KEY           (not needed for POC)
-```
-
-### Environment Variables
-
-| Variable | Default | Description | Required |
-| ---------- | --------- | ------------- | ---------- |
-| `GITHUB_TOKEN` | (secret) | GitHub Personal Access Token for REST API calls + comment posting | ✅ Yes |
-| `GITHUB_WEBHOOK_SECRET` | (secret) | Shared secret for HMAC-SHA256 webhook signature verification | ✅ Yes |
-| `NODE_ENV` | `development` | Environment name; drives logger verbosity (`debug` only in `development`) | ❌ No |
-| `ZAI_MODEL` | `glm-5.2` | Z.ai model identifier — **reserved**, no AI calls occur in the POC | ❌ No |
-| `ZAI_API_KEY` | (secret) | Z.ai API key — not needed for the `help`-only POC | ❌ No |
-
-### GitHub Token Scopes
-
-`GITHUB_TOKEN` must have:
-
-- `repo` — read repo metadata, read collaborators, post comments
-- `read:org` — read org/team membership (recommended)
-
-## Commands Supported
-
-### Functional in POC ✅
-
-- `/zai help` — Show help message with available commands
-
-### Recognized but unavailable in POC
-
-These commands are parsed and recognized as valid, but respond with a "not available" notice rather than executing:
-
-- `/zai review` — Full code review
-- `/zai ask <question>` — Q&A about the code
-- `/zai explain <lines>` — Explain specific lines (e.g. `/zai explain 10-20`)
-- `/zai describe` — Generate PR description
-- `/zai impact` — Analyze change impact
-
-## Data Flow Summary
-
-```mermaid
-flowchart TD
-    WH[GitHub Webhook\nPOST application/json] --> METHOD{Method == POST?}
-    METHOD -- No --> R405[405 Method Not Allowed]
-    METHOD -- Yes --> CT{Content-Type\napplication/json?}
-    CT -- No --> R415[415 Unsupported Media Type]
-    CT -- Yes --> SIG{Verify HMAC-SHA256\nGITHUB_WEBHOOK_SECRET}
-    SIG -- Invalid --> R401[401 Unauthorized]
-    SIG -- Valid --> PARSE[parseGitHubWebhook\nextract event/action/comment]
-
-    PARSE --> GATE1{shouldProcessEvent?\ncomment event + isCommand}
-    GATE1 -- No --> R200A[200 OK — skipped]
-    GATE1 -- Yes --> CMD[parseCommand\n/zai · /zai-bot · @zai-bot]
-
-    CMD --> AUTH{checkRepositoryAccess\ncollaborator?}
-    AUTH -- No --> UA[403 + 'Authorization Required' comment]
-    AUTH -- Yes --> ROUTE{command.type}
-
-    ROUTE -- help --> HELP[handleHelpCommand\nPOST help comment]
-    ROUTE -- other --> UNSUP[handleUnsupportedCommand\nPOST 'not available' comment]
-    HELP --> DONE[200 OK + JSON result]
-    UNSUP --> DONE
-    UA --> DONE
-
-    CMD -. error .-> ERR[Post 'Internal Error' comment\n500 + JSON error]
-```
-
-### Service Integration
-
-```mermaid
-flowchart TD
-    subgraph GitHub
-        GH[GitHub.com\nWebhooks + REST API]
-    end
-    subgraph Cloudflare
-        WH[zai-code-bot-poc\nfetch handler]
-        SEC[Secrets\nGITHUB_TOKEN\nGITHUB_WEBHOOK_SECRET]
-        KV[(KV STATE / CACHE\noptional · disabled)]
-        OBS[Workers Logs\nobservability: enabled]
-    end
-
-    GH -->|POST webhook| WH
-    SEC --> WH
-    WH -. optional .-> KV
-    WH -->|GET /collaborators/{user}| GH
-    WH -->|POST /issues/{n}/comments| GH
-    WH -->|structured JSON logs| OBS
-```
-
-## Project Structure
+## Why two workers?
+
+GitHub webhooks time out if a `200` isn't returned within ~10 seconds. Commands
+like `/zai review` and `/zai impact` do large-diff fetches + long LLM calls
+(30–60s+) and **cannot** complete inline. Splitting lets the main worker
+acknowledge instantly while the heavy worker runs to completion on its own
+lifetime budget.
+
+| Worker | Owns | Commands | Typical latency |
+| --- | --- | --- | --- |
+| `zai-main-worker` | webhook ingress, gates, parse, auth, routing | `help`, `ask`, `explain`, `describe` (light) | < 1–5s inline |
+| `zai-heavy-worker` | offloaded long-running analysis | `review`, `impact` (heavy) | acks in ms; work runs async |
+
+## Hybrid layout
 
 ```text
 poc/
-├── src/
-│   ├── index.js                 # Main Worker: fetch handler, gates, routing, dispatch
-│   ├── config/
-│   │   └── constants.js         # Comment markers, command/event types, default config, messages
-│   └── lib/
-│       ├── github.js            # GitHubClient: API wrapper + webhook signature verification
-│       ├── commands.js          # parseCommand / isCommand / formatHelp / formatCommandNotAvailable
-│       ├── logging.js           # createLogger, generateCorrelationId, logPerformance
-│       └── handlers/
-│           └── help.js          # handleHelpCommand / handleUnsupportedCommand
-├── tests/
-│   └── test.js                  # Unit tests (plain Node runner)
-├── wrangler.toml                # Cloudflare Workers configuration
-├── package.json
-└── README.md
+├── package.json                      # root: test + per-worker dev/deploy scripts
+├── README.md
+└── workers/
+    ├── shared/                       # shared lib — imported by BOTH workers (relative paths)
+    │   ├── constants.js              #   markers, command classification, internal-token header
+    │   ├── commands.js               #   parseCommand / isCommand / formatHelp
+    │   ├── github.js                 #   GitHubClient (REST I/O only)
+    │   ├── crypto.js                 #   Web Crypto webhook-signature verify (no compat flag)
+    │   ├── auth.js                   #   authorizeCommenter (collaborator policy)
+    │   └── logging.js                #   structured JSON logger (this-binding bug fixed)
+    │
+    ├── zai-main-worker/
+    │   ├── wrangler.toml             #   declares HEAVY_WORKER service binding
+    │   ├── package.json
+    │   └── src/
+    │       ├── index.js              #   fetch handler: gates → parse → auth → route
+    │       ├── router.js             #   classifyCommand(): light | heavy | unsupported
+    │       ├── delegator.js          #   buildDelegationPayload() + delegateToHeavy(ctx.waitUntil)
+    │       └── handlers/
+    │           ├── index.js          #   getLightHandler()
+    │           ├── help.js           #   /zai help  (working)
+    │           └── describe.js       #   /zai describe (stub)
+    │
+    ├── zai-heavy-worker/
+    │   ├── wrangler.toml
+    │   ├── package.json
+    │   └── src/
+    │       ├── index.js              #   internal fetch: token gate → 202 ack → ctx.waitUntil
+    │       └── handlers/
+    │           ├── index.js          #   getHeavyHandler()
+    │           ├── review.js         #   /zai review  (stub)
+    │           └── impact.js         #   /zai impact  (stub)
+    │
+    └── tests/
+        └── test.js                   #   pure-module tests (commands, crypto, router, logger)
 ```
 
-| File | Role |
-| ------ | ------ |
-| `src/index.js` | `fetch` entrypoint: validation gates, webhook parse, event routing, command dispatch |
-| `src/lib/github.js` | `GitHubClient` — REST API wrapper + `verifyWebhookSignature` |
-| `src/lib/commands.js` | Command parsing, allowlist, help/unsupported message formatters |
-| `src/lib/handlers/help.js` | `help` + unsupported command handlers (post comments via `GitHubClient`) |
-| `src/lib/logging.js` | Structured JSON logger + performance timing |
-| `src/config/constants.js` | Markers, command/event enums, default config, message strings |
+## Request lifecycle
 
-## Dependencies
+### Light command (e.g. `/zai help`)
 
-### npm Packages
+```mermaid
+flowchart LR
+  WH[GitHub webhook] --> MAIN[zai-main-worker]
+  MAIN -->|gates + parse + auth| ROUTE{classify}
+  ROUTE -->|light| HANDLER[handler runs inline]
+  HANDLER -->|postComment| GH[GitHub REST API]
+  MAIN -->|200 + JSON result| GH
+```
 
-| Package | Purpose |
-|---------|---------|
-| `@cloudflare/workers` | Cloudflare Workers types/runtime |
-| `wrangler` (dev) | Local dev, deploy, tailing |
+### Heavy command (e.g. `/zai review`)
 
-### Shared Utilities
+```mermaid
+flowchart LR
+  WH[GitHub webhook] --> MAIN[zai-main-worker]
+  MAIN -->|gates + parse + auth| ROUTE{classify}
+  ROUTE -->|heavy| DEL[delegateToHeavy\nctx.waitUntil]
+  MAIN -->|202 accepted\nGitHub acked fast| GH[GitHub]
+  DEL -. service binding .-> HEAVY[zai-heavy-worker]
+  HEAVY -->|token gate\n202 + own ctx.waitUntil| MAIN
+  HEAVY -->|runHeavy: review work\nfetch files + LLM| GH2[GitHub REST API]
+  HEAVY -->|postComment| GH2
+```
 
-This POC is self-contained and does **not** share modules with the parent `zai-code-bot` GitHub Action (`src/`). It re-implements command parsing, GitHub API access, and logging in Worker-native style. The production bot's logic lives in the repository root `src/`.
+The double-`ctx.waitUntil` is intentional and **decoupled**:
 
-## Testing
+1. **Main** schedules `env.HEAVY_WORKER.fetch(...)` in its `ctx.waitUntil` and
+   returns `202` to GitHub. Main's only job is to *send* the delegation.
+2. **Heavy** verifies the internal token, schedules `runHeavy(...)` in **its own**
+   `ctx.waitUntil`, and returns `202` to main. The heavy worker then runs the
+   long work within its own CPU/wall-time budget — main is never held alive for
+   the duration of the review.
 
-Run the unit test suite (plain Node runner, no test framework):
+### Delegation protocol (main → heavy)
+
+```text
+POST  https://zai-heavy-worker.internal/handle
+      x-zai-internal-token: <ZAI_INTERNAL_TOKEN>     (defense-in-depth)
+      content-type: application/json
+      {
+        "command": { "type": "review", "args": "...", "isValid": true },
+        "repository": { "owner", "name", "full_name" },
+        "issue": { "number" },
+        "prNumber": <number|null>,
+        "comment": { "id", "body", "user" },
+        "sender": "<login>|null"
+      }
+```
+
+The heavy worker is **not** exposed publicly — it is reachable only through the
+`HEAVY_WORKER` service binding from the main worker. The shared token header is
+defense-in-depth in case the binding is ever reconfigured.
+
+## Command routing (single source of truth)
+
+Classification lives in [`workers/shared/constants.js`](workers/shared/constants.js)
+(`LIGHT_COMMANDS` / `HEAVY_COMMANDS`) and is applied by
+[`workers/zai-main-worker/src/router.js`](workers/zai-main-worker/src/router.js):
+
+```js
+classifyCommand('help')     // → 'light'
+classifyCommand('describe') // → 'light'
+classifyCommand('ask')      // → 'light'   (handler TODO)
+classifyCommand('explain')  // → 'light'   (handler TODO)
+classifyCommand('review')   // → 'heavy'
+classifyCommand('impact')   // → 'heavy'
+```
+
+To reclassify a command (e.g. move `explain` to heavy once you measure it
+exceeding the ack budget), move it between the two arrays — nothing else changes.
+
+## Configuration
+
+### Secrets (set on **both** workers)
+
+```bash
+wrangler secret put GITHUB_TOKEN           --env …   # PAT: repo + read:org
+wrangler secret put GITHUB_WEBHOOK_SECRET  --env …   # only main worker
+wrangler secret put ZAI_INTERNAL_TOKEN     --env …   # must MATCH on both
+wrangler secret put ZAI_API_KEY            --env …   # once LLM calls are wired
+```
+
+### Service binding
+
+Declared in [`workers/zai-main-worker/wrangler.toml`](workers/zai-main-worker/wrangler.toml):
+
+```toml
+[[services]]
+binding  = "HEAVY_WORKER"
+service  = "zai-heavy-worker"
+```
+
+This exposes `env.HEAVY_WORKER.fetch(...)` inside the main worker.
+
+### `wrangler.toml` gotchas carried over from the POC
+
+- The old POC `[computer]` section was **removed** — it isn't a valid wrangler
+  key and would fail `wrangler deploy`. (It was always "reserved".)
+- Webhook signature verification no longer needs `nodejs_compat`: it uses the
+  Web Crypto API (`crypto.subtle`) in `shared/crypto.js`.
+
+## Local development
 
 ```bash
 cd poc
+
+# Run the unit test suite (pure modules only — no live API calls)
 npm test
+
+# Dev servers (run each in its own terminal)
+( cd workers/zai-main-worker  && wrangler dev )   # :8787
+( cd workers/zai-heavy-worker && wrangler dev )   # :8788
 ```
 
-The suite (`tests/test.js`) covers:
+> **Service bindings + `wrangler dev`:** `wrangler dev` (local mode) supports
+> service bindings only when running against the Cloudflare backend
+> (`wrangler dev --remote`). For pure local testing of the delegation path, mock
+> `env.HEAVY_WORKER` in a test harness.
 
-1. **Command parsing** — `/zai`, `/zai-bot`, `@zai-bot` forms, args, unknown commands, non-command text, null/empty input
-2. **`isCommand`** — boolean detection
-3. **`getAvailableCommands`** — allowlist membership
-4. **`formatHelp`** — output shape and required markers
-5. **`GitHubClient`** — instantiation and token storage
-
-Tests exercise only pure modules (`commands.js`, `github.js`); no live API calls are made.
-
-## Local Development
+### Smoke test (main worker, local)
 
 ```bash
-cd poc
-npm install
-npm run dev          # wrangler dev — serves the Worker on http://localhost:8787
-```
+SECRET=your-webhook-secret
+PAYLOAD='{"action":"created","issue":{"number":1,"pull_request":{}},
+          "comment":{"body":"/zai help","user":{"login":"you"}},
+          "repository":{"owner":{"login":"o"},"name":"r","full_name":"o/r"}}'
+SIG="sha256=$(node -e "console.log(require('crypto').createHmac('sha256','$SECRET').update('$PAYLOAD').digest('hex'))")"
 
-Test locally with `curl` (compute a valid `X-Hub-Signature-256` for your `GITHUB_WEBHOOK_SECRET`):
-
-```bash
-curl -X POST http://localhost:8787 \
+curl -sX POST http://localhost:8787 \
   -H "Content-Type: application/json" \
   -H "X-GitHub-Event: issue_comment" \
-  -H "X-Hub-Signature-256: sha256=<computed-hmac>" \
-  -d '{
-    "action": "created",
-    "issue": { "number": 123 },
-    "comment": { "body": "/zai help", "user": { "login": "testuser" } },
-    "repository": { "owner": { "login": "testowner" }, "name": "test-repo", "full_name": "testowner/test-repo" }
-  }'
-```
-
-Tail live logs:
-
-```bash
-npm run tail         # wrangler tail
+  -H "X-Hub-Signature-256: $SIG" \
+  -d "$PAYLOAD"
 ```
 
 ## Deployment
 
 ```bash
 cd poc
-
-# 1. Configure secrets (one-time)
-wrangler secret put GITHUB_TOKEN
-wrangler secret put GITHUB_WEBHOOK_SECRET
-
-# 2. (Optional) create + wire up KV namespaces, then uncomment in wrangler.toml
-# wrangler kv namespace create STATE
-# wrangler kv namespace create CACHE
-
-# 3. Deploy
-npm run deploy       # wrangler deploy
+npm run deploy:heavy   # deploy heavy FIRST (main's binding must resolve)
+npm run deploy:main
 ```
 
-### Configure the GitHub Webhook
+Then point the GitHub webhook at the main worker URL:
+`https://zai-main-worker.<account>.workers.dev`, content-type `application/json`,
+with `GITHUB_WEBHOOK_SECRET` as the secret.
 
-1. Test repository → **Settings → Webhooks → Add webhook**
-2. **Payload URL**: `https://zai-code-bot-poc.<your-account>.workers.dev`
-3. **Content type**: `application/json`
-4. **Secret**: the same value as `GITHUB_WEBHOOK_SECRET`
-5. **Events**: `Issue comments` (and optionally `Pull requests`, `Pull request review comments`)
-6. **Active** ✅ → **Add webhook**
+## Bug fixes folded into the restructure
 
-## Monitoring & Observability
+| POC bug | Fix |
+| --- | --- |
+| `verifyWebhookSignature` used Node `crypto.createHmac` / `Buffer` → needs `nodejs_compat` | New `shared/crypto.js` uses Web Crypto `crypto.subtle` (verified against Node `createHmac` fixture) |
+| `createLogger` `info/warn/error/debug` lost `this` and threw at runtime | Methods now close over `log` directly — no `this` dependency |
+| Error comments leaked raw `error.message` into PRs | Error comments now post a sanitized generic message |
 
-- **Logs**: `[observability] enabled = true` in `wrangler.toml`; the logger (`src/lib/logging.js`) emits structured JSON (`timestamp`, `level`, `context`, `env`, `message`, …) via `console.log`, visible in `wrangler tail` and the Cloudflare dashboard → Workers → Logs.
-- **Performance**: `logPerformance` records `durationMs` for `webhook_processing`, `help_command`, and `unsupported_command` operations.
-- **Correlation IDs**: `generateCorrelationId()` is available but not yet wired into the request lifecycle.
+## Migration roadmap (POC → full bot)
 
-## Known Limitations & POC Caveats
+1. **Light handlers** — implement `handlers/ask.js`, `handlers/explain.js` in the
+   main worker (port from repo-root `src/lib/handlers/`, re-pointing shared deps
+   to `workers/shared/`). Measure latency; if >~5s, reclassify to heavy.
+2. **Heavy handlers** — implement `handlers/review.js`, `handlers/impact.js`:
+   paginated file fetch (`GitHubClient.getPrFiles`), bounded prompt, Z.ai API
+   call with retry/backoff, threaded marker-idempotent comment.
+3. **Shared API client** — port `src/lib/api.js` (Z.ai client + retry) into
+   `workers/shared/zai-api.js`; add `ZAI_API_KEY` secret.
+4. **Comment idempotency** — port `findCommentByMarker` / `upsertComment` from
+   `src/lib/comments.js` into `workers/shared/comments.js`.
+5. **Scheduled tasks** — add a third worker (or a Cron Trigger on the heavy
+   worker) for `.zai-scheduled.yml` regeneration flows.
+6. **Auto-review** — wire `pull_request` `opened`/`synchronize` events on the
+   main worker to delegate to the heavy worker's review handler.
 
-These are intentional POC boundaries and items to address before a production migration:
+## Testing
 
-- **Only `/zai help` is functional.** All other commands respond with a "not available in POC" notice.
-- **Webhook signature verification uses Node-style crypto APIs.** `GitHubClient.verifyWebhookSignature` calls `crypto.createHmac`, `crypto.timingSafeEqual`, and `Buffer` — these require the `nodejs_compat` compatibility flag (not currently set in `wrangler.toml`) or a port to the Web Crypto API (`crypto.subtle.importKey` / `sign`). Add `compatibility_flags = ["nodejs_compat"]` or rewrite to Web Crypto before relying on this gate.
-- **Logger `this`-binding bug.** `createLogger` returns an object whose `info`/`warn`/`error`/`debug` methods call `this.log(...)`, but because they are defined as arrow-function properties the `this` context is lost, so `logger.info(...)` will throw at runtime. The `log(...)` method itself works; fix the method bindings (regular methods or capture `log` in a closure) before production use.
-- **Error comments leak `error.message`.** The error path posts the raw exception message into a PR comment — acceptable for a POC, but must be sanitized before production (never surface internals/secrets in comments).
-- **Authorization is stricter than the parent bot.** This POC requires collaborator status; the production GitHub Actions bot (`src/lib/auth.js`) authorizes any identifiable user with a silent fork-block.
-- **`ZAI_MODEL` / `ZAI_API_KEY` are reserved.** No AI calls occur in the POC.
-- **KV (`STATE`/`CACHE`) is disabled.** Comment idempotency and caching are not active.
-
-## Troubleshooting
-
-### Webhook not received / `401 Unauthorized`
-
-- Verify `GITHUB_WEBHOOK_SECRET` matches the GitHub webhook **Secret** field exactly.
-- Verify the `X-Hub-Signature-256` header is being computed over the raw request body.
-- Confirm the webhook is **Active** and the payload URL is correct.
-
-```javascript
-// Compute a signature for local testing
-const crypto = require('crypto');
-const secret = 'your-secret';
-const payload = '{"action":"created",...}';
-const hmac = crypto.createHmac('sha256', secret).update(payload);
-console.log(`sha256=${hmac.digest('hex')}`);
+```bash
+cd poc && npm test        # 36 assertions: parsing, allowlist, help format,
+                          # GitHubClient, Web Crypto, router, logger regression
 ```
 
-### Bot not responding
+## Related
 
-- `npm run tail` — check for parse/auth errors.
-- Confirm `GITHUB_TOKEN` is valid and has `repo` scope.
-- Confirm the commenter is a repository collaborator (auth check).
-- Watch for GitHub API rate limits.
-
-### `405` / `415` errors
-
-- `405` → the request was not `POST`.
-- `415` → `Content-Type` was not `application/json`.
-
-## Performance Expectations (POC Goals)
-
-| Metric | GitHub Actions | Cloudflare Computer (target) | Improvement |
-| -------- | ---------------- | ------------------------------ | ------------- |
-| Response time | 30–60s | 5–10s | ⬇️ 6–12× |
-| Cost per request | ~$0.02/min | ~$0.005 | ⬇️ ~75% |
-| Scalability | Limited | Automatic | ⬆️ ∞ |
-| Reliability | 99.9% | 99.99% | ⬆️ |
-
-Measure via Cloudflare Analytics → Workers → Metrics (latency, success rate) and Billing (cost).
-
-### POC acceptance checklist
-
-- [ ] Worker deployed and receiving webhooks
-- [ ] `/zai help` processed and a comment posted back
-- [ ] Webhook signature verification passing
-- [ ] Authorization (collaborator check) working
-- [ ] Response time < 5s
-- [ ] Unit tests passing
-- [ ] Cost measured and documented
-
-## Related Code
-
-- **Parent project** — `zai-code-bot` GitHub Action: `../src/` (production logic), `../src/lib/commands.js` (canonical command parser), `../src/lib/auth.js` (authorization model), `../src/lib/comments.js` (marker-idempotent comments).
-- **Implementation plan** — `../plans/POC_HELP_COMMAND.md`
-- **Quick start guide** — `../plans/POC_QUICK_START.md`
-
-## Next Steps (Post-POC)
-
-1. Measure performance and compare with GitHub Actions.
-2. Fix [Known Limitations](#known-limitations--poc-caveats) (crypto compat flag, logger binding, error sanitization).
-3. Decide on full migration.
-4. Implement remaining commands (`review`, `ask`, `explain`, `describe`, `impact`).
-5. Migrate scheduled tasks and CI/CD.
-
-## Version History
-
-- **0.1.0** — Initial POC: webhook-driven Worker handling `/zai help` only.
+- Parent GitHub Action source: `../src/` (canonical handlers to port)
+- Command parser reference: `../src/lib/commands.js`
+- Authorization model: `../src/lib/auth.js`
+- Original flat POC: replaced by this hybrid layout (v0.1 → v0.2)
 
 ---
 
-**Status**: Ready for deployment · **Version**: 0.1.0
+**Status**: hybrid scaffold ready · `/zai help` functional · heavy path delegated (stubs) · **Version**: 0.2.0
