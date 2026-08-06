@@ -27,11 +27,33 @@ zone_name = "tokenbel.info"
 NODE_ENV = "development"
 ZAI_MODEL = "glm-5.2"
 
-# Secrets (configure once per worker via: wrangler secret put KEY):
-#   GITHUB_TOKEN            — GitHub PAT (repo + read:org)
-#   GITHUB_WEBHOOK_SECRET   — HMAC-SHA256 webhook secret
-#   ZAI_INTERNAL_TOKEN      — shared secret for main→heavy calls
-#   (ZAI_API_KEY            — only needed once ask/explain/review/impact call the LLM)
+# Secrets — sourced from Cloudflare Secrets Store (NOT per-worker secrets).
+# One store is shared across both workers; `binding` is the env var the code
+# reads (env.<binding>) and `secret_name` is the key inside the store.
+# Store id: 629e5dd6594845a889e6ddabb26cc009
+#   GITHUB_WEBHOOK_SECRET  <- secret ZAI_GITHUB_WEBHOOK_KEY  (HMAC-SHA256 webhook secret)
+#   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT: repo + read:org)
+#   ZAI_INTERNAL_TOKEN     <- secret ZAI_INTERNAL_TOKEN       (shared main<->heavy auth)
+#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once LLM calls land)
+[[secrets_store_secrets]]
+binding = "GITHUB_WEBHOOK_SECRET"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_WEBHOOK_KEY"
+
+[[secrets_store_secrets]]
+binding = "GITHUB_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_INTERNAL_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_INTERNAL_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_API_KEY"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_API_KEY"
 
 [observability.logs]
 enabled = true

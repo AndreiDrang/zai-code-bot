@@ -2,8 +2,8 @@
 
 Cloudflare **Workers** reimplementation of `zai-code-bot`, architected for scale
 by splitting work across two workers: a **main worker** that ingests GitHub
-webhooks and runs *light* commands, and a **heavy worker** that runs
-*resource-heavy* commands (code review, impact analysis) offloaded via a
+webhooks and runs _light_ commands, and a **heavy worker** that runs
+_resource-heavy_ commands (code review, impact analysis) offloaded via a
 **Service Binding**.
 
 This evolves the flat single-Worker POC (`poc/src/...`, v0.1) into a structure
@@ -25,10 +25,10 @@ like `/zai review` and `/zai impact` do large-diff fetches + long LLM calls
 acknowledge instantly while the heavy worker runs to completion on its own
 lifetime budget.
 
-| Worker | Owns | Commands | Typical latency |
-| --- | --- | --- | --- |
-| `zai-main-worker` | webhook ingress, gates, parse, auth, routing | `help`, `ask`, `explain`, `describe` (light) | < 1–5s inline |
-| `zai-heavy-worker` | offloaded long-running analysis | `review`, `impact` (heavy) | acks in ms; work runs async |
+| Worker             | Owns                                         | Commands                                     | Typical latency             |
+| ------------------ | -------------------------------------------- | -------------------------------------------- | --------------------------- |
+| `zai-main-worker`  | webhook ingress, gates, parse, auth, routing | `help`, `ask`, `explain`, `describe` (light) | < 1–5s inline               |
+| `zai-heavy-worker` | offloaded long-running analysis              | `review`, `impact` (heavy)                   | acks in ms; work runs async |
 
 ## Hybrid layout
 
@@ -101,7 +101,7 @@ flowchart LR
 The double-`ctx.waitUntil` is intentional and **decoupled**:
 
 1. **Main** schedules `env.HEAVY_WORKER.fetch(...)` in its `ctx.waitUntil` and
-   returns `202` to GitHub. Main's only job is to *send* the delegation.
+   returns `202` to GitHub. Main's only job is to _send_ the delegation.
 2. **Heavy** verifies the internal token, schedules `runHeavy(...)` in **its own**
    `ctx.waitUntil`, and returns `202` to main. The heavy worker then runs the
    long work within its own CPU/wall-time budget — main is never held alive for
@@ -134,12 +134,12 @@ Classification lives in [`workers/shared/constants.js`](workers/shared/constants
 [`workers/zai-main-worker/src/router.js`](workers/zai-main-worker/src/router.js):
 
 ```js
-classifyCommand('help')     // → 'light'
-classifyCommand('describe') // → 'light'
-classifyCommand('ask')      // → 'light'   (handler TODO)
-classifyCommand('explain')  // → 'light'   (handler TODO)
-classifyCommand('review')   // → 'heavy'
-classifyCommand('impact')   // → 'heavy'
+classifyCommand('help'); // → 'light'
+classifyCommand('describe'); // → 'light'
+classifyCommand('ask'); // → 'light'   (handler TODO)
+classifyCommand('explain'); // → 'light'   (handler TODO)
+classifyCommand('review'); // → 'heavy'
+classifyCommand('impact'); // → 'heavy'
 ```
 
 To reclassify a command (e.g. move `explain` to heavy once you measure it
@@ -147,14 +147,30 @@ exceeding the ack budget), move it between the two arrays — nothing else chang
 
 ## Configuration
 
-### Secrets (set on **both** workers)
+### Secrets — Cloudflare Secrets Store (not per-worker secrets)
 
-```bash
-wrangler secret put GITHUB_TOKEN           --env …   # PAT: repo + read:org
-wrangler secret put GITHUB_WEBHOOK_SECRET  --env …   # only main worker
-wrangler secret put ZAI_INTERNAL_TOKEN     --env …   # must MATCH on both
-wrangler secret put ZAI_API_KEY            --env …   # once LLM calls are wired
-```
+All secrets live in one shared [Secrets Store](https://developers.cloudflare.com/secrets-store/)
+and are bound into each worker via `[[secrets_store_secrets]]` in `wrangler.toml`.
+To the code they are plain `env.*` strings (e.g. `env.GITHUB_TOKEN`); only the
+source differs — the store, **not** `wrangler secret put`.
+
+Store id: `629e5dd6594845a889e6ddabb26cc009` (shared by both workers).
+
+| `binding` (env var code reads) | store `secret_name`      | main | heavy | purpose                               |
+| ------------------------------ | ------------------------ | :--: | :---: | ------------------------------------- |
+| `GITHUB_WEBHOOK_SECRET`        | `ZAI_GITHUB_WEBHOOK_KEY` |  ✓   |   —   | HMAC-SHA256 webhook secret            |
+| `GITHUB_TOKEN`                 | `ZAI_GITHUB_TOKEN`       |  ✓   |   ✓   | GitHub PAT (repo + read:org)          |
+| `ZAI_INTERNAL_TOKEN`           | `ZAI_INTERNAL_TOKEN`     |  ✓   |   ✓   | shared main<->heavy auth (must match) |
+| `ZAI_API_KEY`                  | `ZAI_API_KEY`            |  ✓   |   ✓   | Z.ai key (once LLM calls land)        |
+
+> A `secrets_store_secrets` binding requires its `secret_name` to already exist
+> in the store, or `wrangler deploy` fails. Populate the store via the Cloudflare
+> dashboard (Workers & Pages → Secrets Store) or the wrangler `secrets-store`
+> commands. `ZAI_API_KEY` and `ZAI_GITHUB_WEBHOOK_KEY` already exist; add
+> `ZAI_GITHUB_TOKEN` and `ZAI_INTERNAL_TOKEN` before first deploy.
+
+Local dev: `cp workers/<worker>/.dev.vars.example workers/<worker>/.dev.vars`
+and fill in values (never commit `.dev.vars`); `wrangler dev` reads them.
 
 ### Service binding
 
@@ -217,17 +233,19 @@ npm run deploy:heavy   # deploy heavy FIRST (main's binding must resolve)
 npm run deploy:main
 ```
 
-Then point the GitHub webhook at the main worker URL:
-`https://zai-main-worker.<account>.workers.dev`, content-type `application/json`,
-with `GITHUB_WEBHOOK_SECRET` as the secret.
+Then point the GitHub webhook at the main worker's public route —
+`https://zai-worker.tokenbel.info` (the custom route in `wrangler.toml`;
+`workers.dev` is inferred off once a route is set) — content-type
+`application/json`, with the webhook secret = the value stored as
+`ZAI_GITHUB_WEBHOOK_KEY`.
 
 ## Bug fixes folded into the restructure
 
-| POC bug | Fix |
-| --- | --- |
+| POC bug                                                                                   | Fix                                                                                                 |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `verifyWebhookSignature` used Node `crypto.createHmac` / `Buffer` → needs `nodejs_compat` | New `shared/crypto.js` uses Web Crypto `crypto.subtle` (verified against Node `createHmac` fixture) |
-| `createLogger` `info/warn/error/debug` lost `this` and threw at runtime | Methods now close over `log` directly — no `this` dependency |
-| Error comments leaked raw `error.message` into PRs | Error comments now post a sanitized generic message |
+| `createLogger` `info/warn/error/debug` lost `this` and threw at runtime                   | Methods now close over `log` directly — no `this` dependency                                        |
+| Error comments leaked raw `error.message` into PRs                                        | Error comments now post a sanitized generic message                                                 |
 
 ## Migration roadmap (POC → full bot)
 
@@ -238,7 +256,8 @@ with `GITHUB_WEBHOOK_SECRET` as the secret.
    paginated file fetch (`GitHubClient.getPrFiles`), bounded prompt, Z.ai API
    call with retry/backoff, threaded marker-idempotent comment.
 3. **Shared API client** — port `src/lib/api.js` (Z.ai client + retry) into
-   `workers/shared/zai-api.js`; add `ZAI_API_KEY` secret.
+   `workers/shared/zai-api.js`; the `ZAI_API_KEY` binding already resolves from
+   the Secrets Store.
 4. **Comment idempotency** — port `findCommentByMarker` / `upsertComment` from
    `src/lib/comments.js` into `workers/shared/comments.js`.
 5. **Scheduled tasks** — add a third worker (or a Cron Trigger on the heavy

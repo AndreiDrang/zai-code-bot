@@ -25,7 +25,24 @@ enabled = true
 [placement]
 mode = "smart"
 
-# Secrets (configure via: wrangler secret put KEY):
-#   GITHUB_TOKEN            — GitHub PAT for posting result comments
-#   ZAI_INTERNAL_TOKEN      — shared secret (must match zai-main-worker)
-#   ZAI_API_KEY             — Z.ai API key (required once review/impact call the LLM)
+# Secrets — sourced from Cloudflare Secrets Store (NOT per-worker secrets).
+# Same store as zai-main-worker (shared). `binding` = env var the code reads;
+# `secret_name` = key inside the store.
+# Store id: 629e5dd6594845a889e6ddabb26cc009
+#   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT for result comments)
+#   ZAI_INTERNAL_TOKEN     <- secret ZAI_INTERNAL_TOKEN       (must match zai-main-worker)
+#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once review/impact call the LLM)
+[[secrets_store_secrets]]
+binding = "GITHUB_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_INTERNAL_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_INTERNAL_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_API_KEY"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_API_KEY"
