@@ -6,9 +6,9 @@
 
 import { COMMENT_MARKER, AVAILABLE_COMMANDS } from './constants.js';
 
-// Invocation forms: /zai, /zai-bot, @zai-bot
-const COMMAND_REGEX = /^\/(zai|zai-bot)\s+([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/;
-const MENTION_REGEX = /^@zai-bot\s+([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/;
+// Invocation form: /zai only. The @zai-bot mention and /zai-bot slash forms
+// were removed — callers must invoke the bot with "/zai <command>".
+const COMMAND_REGEX = /^\/zai\s+([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/;
 
 /**
  * Parses a command from comment text.
@@ -20,18 +20,7 @@ export function parseCommand(text) {
 
   const trimmed = text.trim();
 
-  let match = trimmed.match(COMMAND_REGEX);
-  if (match) {
-    const type = match[2].toLowerCase();
-    return {
-      type,
-      args: (match[3] || '').trim(),
-      raw: trimmed,
-      isValid: AVAILABLE_COMMANDS.includes(type),
-    };
-  }
-
-  match = trimmed.match(MENTION_REGEX);
+  const match = trimmed.match(COMMAND_REGEX);
   if (match) {
     const type = match[1].toLowerCase();
     return {
@@ -83,13 +72,12 @@ Available commands:
 - \`/zai help\` — Show this help message
 
 ### Usage Notes
-- Commands can be triggered with \`/zai\` or @zai-bot
-- Example: \`/zai review\` or @zai-bot review
+- Example: \`/zai review\`
 - For line-specific commands, specify line numbers or ranges
 - *(heavy)* commands run on the dedicated heavy worker
 
 ---
-*Powered by [Z.ai](https://z.ai) and [Cloudflare Workers](https://cloudflare.com)*
+*Powered by [AndreiDrang](https://github.com/AndreiDrang), [Z.ai](https://z.ai) and [Cloudflare Workers](https://cloudflare.com)*
 
 ${COMMENT_MARKER}`;
 }

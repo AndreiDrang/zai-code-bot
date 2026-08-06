@@ -31,8 +31,8 @@ function testCommandParsing() {
   console.log('📝 Command parsing');
   const cases = [
     { input: '/zai help', expect: { type: 'help', isValid: true } },
-    { input: '/zai-bot help', expect: { type: 'help', isValid: true } },
-    { input: '@zai-bot help', expect: { type: 'help', isValid: true } },
+    { input: '/zai-bot help', expect: null }, // slash-bot form no longer accepted
+    { input: '@zai-bot help', expect: null }, // mention form no longer accepted
     { input: '/zai review', expect: { type: 'review', isValid: true } },
     { input: '/zai impact', expect: { type: 'impact', isValid: true } },
     { input: '/zai describe', expect: { type: 'describe', isValid: true } },
@@ -66,7 +66,7 @@ function testCommandParsing() {
 function testIsCommand() {
   console.log('📝 isCommand');
   assert(isCommand('/zai help') === true, '/zai help → true');
-  assert(isCommand('@zai-bot review') === true, '@zai-bot review → true');
+  assert(isCommand('@zai-bot review') === false, '@zai-bot review → false (mention removed)');
   assert(isCommand('random text') === false, 'random text → false');
   assert(isCommand('') === false, 'empty → false');
   assert(isCommand(null) === false, 'null → false');
@@ -91,6 +91,10 @@ function testFormatHelp() {
   assert(help.includes('/zai help'), 'contains /zai help');
   assert(help.includes('/zai review'), 'contains /zai review');
   assert(help.includes('<!-- zai-code-review -->'), 'contains comment marker');
+  assert(
+    help.includes('[AndreiDrang](https://github.com/AndreiDrang)'),
+    'footer credits AndreiDrang with GitHub link',
+  );
   console.log();
 }
 
