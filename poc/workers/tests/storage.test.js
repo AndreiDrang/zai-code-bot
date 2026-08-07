@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { deliveryArtifactKey, repoConfigCacheKey, runArtifactKey } from '../shared/storage/keys.js';
+import {
+  deliveryArtifactKey,
+  prCardKey,
+  prContextKey,
+  repoConfigCacheKey,
+  runArtifactKey,
+} from '../shared/storage/keys.js';
 import { renderPrPreview, renderPrClosed } from '../shared/pr-preview.js';
 import {
   extractPullRequestEvent,
@@ -15,8 +21,22 @@ describe('storage key contracts', () => {
     expect(repoConfigCacheKey(10)).toBe('v1:repo-config:10');
   });
 
-  it('rejects unsafe key components', () => {
+  it('builds deterministic pr-card (KV) and pr-context (R2) keys', () => {
+    // pr-card is keyed by (repo, pr) ONLY — so a command handler reads the
+    // latest gathered shape without knowing the head SHA upfront.
+    expect(prCardKey(10, 7)).toBe('v1:pr-card:10:7');
+    // context keys are deterministic per (repo, pr, head, kind).
+    expect(prContextKey(10, 7, 'abc', 'manifest')).toBe('v1/prs/10/7/abc/context/manifest.json');
+    expect(prContextKey(10, 7, 'abc', 'diff')).toBe('v1/prs/10/7/abc/context/diff.diff');
+    expect(prContextKey(10, 7, 'abc', 'description')).toBe(
+      'v1/prs/10/7/abc/context/description.md',
+    );
+  });
+
+  it('rejects unsafe key components and unknown context kinds', () => {
     expect(() => runArtifactKey('1/2', 'run', 'result', 'md')).toThrow('storage key component');
+    expect(() => prCardKey('../x', 7)).toThrow('storage key component');
+    expect(() => prContextKey(10, 7, 'abc', 'bogus')).toThrow('Invalid PR context kind');
   });
 });
 

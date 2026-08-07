@@ -122,6 +122,53 @@ export class GitHubClient {
     );
   }
 
+  /** Raw unified diff of a PR (Accept: GitHub diff media type). */
+  getPrDiff(owner, repo, prNumber) {
+    return this.request('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`, null, {
+      accept: 'application/vnd.github.v3.diff',
+      returnText: true,
+    });
+  }
+
+  /** Commits on a PR (paginated by the caller). */
+  getPrCommits(owner, repo, prNumber, page = 1, perPage = 100) {
+    return this.request(
+      'GET',
+      `/repos/${owner}/${repo}/pulls/${prNumber}/commits?page=${page}&per_page=${perPage}`,
+    );
+  }
+
+  /** Inline review comments on a PR (paginated by the caller). */
+  getReviewComments(owner, repo, prNumber, page = 1, perPage = 100) {
+    return this.request(
+      'GET',
+      `/repos/${owner}/${repo}/pulls/${prNumber}/comments?page=${page}&per_page=${perPage}`,
+    );
+  }
+
+  /** PR description (the `body` of the pull request). */
+  async getPrDescription(owner, repo, prNumber) {
+    const pr = await this.getPullRequest(owner, repo, prNumber);
+    return pr?.body ?? '';
+  }
+
+  /**
+   * Conversation on a PR: issue-level comments (top of thread) + inline review
+   * comments. Each list is capped at `maxComments`; the caller budgets bytes.
+   * Returns `{ issue: [...], review: [...] }`.
+   */
+  async getPrComments(owner, repo, prNumber, { maxComments = 100 } = {}) {
+    const perPage = Math.min(Math.max(Number(maxComments) || 100, 1), 100);
+    const [issue, review] = await Promise.all([
+      this.getIssueComments(owner, repo, prNumber, 1, perPage).catch(() => []),
+      this.getReviewComments(owner, repo, prNumber, 1, perPage).catch(() => []),
+    ]);
+    return {
+      issue: Array.isArray(issue) ? issue.slice(0, perPage) : [],
+      review: Array.isArray(review) ? review.slice(0, perPage) : [],
+    };
+  }
+
   /** Raw file content at a ref (returns text). */
   getFileContent(owner, repo, path, ref) {
     const qs = ref ? `?ref=${encodeURIComponent(ref)}` : '';

@@ -153,5 +153,72 @@ describe('shared/github (GitHubClient)', () => {
       expect(opts.headers.Accept).toBe('application/vnd.github.raw');
       expect(result).toBe('file body');
     });
+
+    it('getPrDiff requests the diff media type and returns raw text', async () => {
+      fetchSpy.mockResolvedValue(new Response('@@ diff @@', { status: 200 }));
+      const result = await client.getPrDiff('o', 'r', 7);
+      const [url, opts] = fetchSpy.mock.calls[0];
+      expect(url).toBe('https://api.github.com/repos/o/r/pulls/7');
+      expect(opts.headers.Accept).toBe('application/vnd.github.v3.diff');
+      expect(result).toBe('@@ diff @@');
+    });
+
+    it('getPrCommits and getReviewComments build the expected paginated paths', async () => {
+      await client.getPrCommits('o', 'r', 7, 2, 50);
+      await client.getReviewComments('o', 'r', 7, 3, 25);
+      const urls = fetchSpy.mock.calls.map((c) => c[0]);
+      expect(urls).toEqual([
+        'https://api.github.com/repos/o/r/pulls/7/commits?page=2&per_page=50',
+        'https://api.github.com/repos/o/r/pulls/7/comments?page=3&per_page=25',
+      ]);
+    });
+
+    it('getPrDescription returns the PR body', async () => {
+      fetchSpy.mockResolvedValue(
+        new Response(JSON.stringify({ body: '## hello' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      expect(await client.getPrDescription('o', 'r', 7)).toBe('## hello');
+      expect(fetchSpy.mock.calls[0][0]).toBe('https://api.github.com/repos/o/r/pulls/7');
+    });
+
+    it('getPrComments merges issue and review comments, capped by maxComments', async () => {
+      fetchSpy
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify([{ id: 1, body: 'issue' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify([{ id: 2, body: 'review' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      const result = await client.getPrComments('o', 'r', 7, { maxComments: 10 });
+      expect(result).toEqual({
+        issue: [{ id: 1, body: 'issue' }],
+        review: [{ id: 2, body: 'review' }],
+      });
+      const urls = fetchSpy.mock.calls.map((c) => c[0]);
+      expect(urls[0]).toContain('/issues/7/comments');
+      expect(urls[1]).toContain('/pulls/7/comments');
+      expect(urls[0]).toContain('per_page=10');
+    });
+
+    it('getPrComments degrades to empty lists when a slice errors', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('boom', { status: 500 })).mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: 2 }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const result = await client.getPrComments('o', 'r', 7);
+      expect(result.issue).toEqual([]);
+      expect(result.review).toEqual([{ id: 2 }]);
+    });
   });
 });
