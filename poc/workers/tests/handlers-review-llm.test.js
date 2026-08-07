@@ -49,7 +49,7 @@ function makeEnv({
 } = {}) {
   const bucket = {
     get: vi.fn(async (key) => {
-      if (key === prContextKey(REPO_ID, PR, HEAD, 'manifest'))
+      if (key === prContextKey(REPO_ID, PR, 'manifest'))
         return {
           text: async () =>
             JSON.stringify({
@@ -58,11 +58,11 @@ function makeEnv({
               aggregates: { additions: 5, deletions: 1 },
             }),
         };
-      if (withDiff && key === prContextKey(REPO_ID, PR, HEAD, 'diff'))
+      if (withDiff && key === prContextKey(REPO_ID, PR, 'diff'))
         return { text: async () => 'diff --git a/f b/f\n+line' };
-      if (withFiles && key === prContextKey(REPO_ID, PR, HEAD, 'files'))
+      if (withFiles && key === prContextKey(REPO_ID, PR, 'files'))
         return { text: async () => JSON.stringify([{ filename: 'a/f' }, { filename: 'b/g' }]) };
-      if (withDescription && key === prContextKey(REPO_ID, PR, HEAD, 'description'))
+      if (withDescription && key === prContextKey(REPO_ID, PR, 'description'))
         return { text: async () => 'A feature' };
       return null;
     }),

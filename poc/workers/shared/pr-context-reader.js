@@ -26,15 +26,16 @@ export async function readPrCard(cache, repositoryId, prNumber) {
 }
 
 /**
- * Reads the R2 context manifest for a specific head — the index of what the
- * gather captured (counts, aggregates, context prefix). Returns null when the
- * gather has not yet run for this head.
+ * Reads the PR's context manifest — the index of what the gather captured
+ * (counts, aggregates, which headSha it describes). Keyed per PR (not per head),
+ * so this always returns the LATEST gathered snapshot. Returns null when no
+ * gather has run for this PR yet.
  * @returns {Promise<Object|null>}
  */
-export async function readContextManifest(bucket, repositoryId, prNumber, headSha) {
-  if (!bucket?.get || !headSha) return null;
+export async function readContextManifest(bucket, repositoryId, prNumber) {
+  if (!bucket?.get || repositoryId == null || prNumber == null) return null;
   try {
-    const object = await bucket.get(prContextKey(repositoryId, prNumber, headSha, 'manifest'));
+    const object = await bucket.get(prContextKey(repositoryId, prNumber, 'manifest'));
     if (!object) return null;
     return JSON.parse(await object.text());
   } catch {
@@ -43,16 +44,16 @@ export async function readContextManifest(bucket, repositoryId, prNumber, headSh
 }
 
 /**
- * Reads a single gathered context slice from R2. `diff` and `description`
- * are stored as text; the other kinds (files, commits, comments) are JSON.
- * Best-effort: a miss or outage returns null so the caller falls back to a
- * live fetch rather than failing.
+ * Reads a single gathered context slice from R2 (the PR's latest snapshot).
+ * `diff` and `description` are stored as text; the other kinds (files, commits,
+ * comments) are JSON. Best-effort: a miss or outage returns null so the caller
+ * falls back to a live fetch rather than failing.
  * @returns {Promise<string|Object|null>}
  */
-export async function readContextSlice(bucket, repositoryId, prNumber, headSha, kind) {
-  if (!bucket?.get || !headSha) return null;
+export async function readContextSlice(bucket, repositoryId, prNumber, kind) {
+  if (!bucket?.get || repositoryId == null || prNumber == null) return null;
   try {
-    const object = await bucket.get(prContextKey(repositoryId, prNumber, headSha, kind));
+    const object = await bucket.get(prContextKey(repositoryId, prNumber, kind));
     if (!object) return null;
     const text = await object.text();
     return kind === 'diff' || kind === 'description' ? text : JSON.parse(text);

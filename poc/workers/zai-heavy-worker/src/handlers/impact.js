@@ -28,9 +28,7 @@ export async function handleImpactCommand({ github, env, payload }) {
 
   const card = await readPrCard(env.BOT_CACHE, repoId, prNumber);
   const headSha = card?.headSha ?? null;
-  const manifest = headSha
-    ? await readContextManifest(env.BOT_ARTIFACTS, repoId, prNumber, headSha)
-    : null;
+  const manifest = await readContextManifest(env.BOT_ARTIFACTS, repoId, prNumber);
 
   const summary = renderContextSummary(manifest);
   const body = summary

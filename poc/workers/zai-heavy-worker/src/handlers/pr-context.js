@@ -5,14 +5,15 @@ import { createLogger } from '../../../shared/logging.js';
 /**
  * Eager PR-context gather job.
  *
- * Writes the PR's TASK CONTEXT to R2 under deterministic keys
- * (`v1/prs/{repo}/{pr}/{head}/context/{kind}`) and a small PR "card" to KV
- * (`v1:pr-card:{repo}:{pr}`). R2 context is the blob tier reused by the heavy
- * review/impact handlers (no re-fetch); the KV card lets command handlers read
- * the PR's shape without calling getPullRequest.
+ * Writes the PR's TASK CONTEXT to R2 under per-PR keys
+ * (`v1/prs/{repo}/{pr}/context/{kind}` — keyed per PR, not per head) and a
+ * small PR "card" to KV (`v1:pr-card:{repo}:{pr}`). R2 context is the blob tier
+ * reused by the heavy review/impact handlers (no re-fetch); the KV card lets
+ * command handlers read the PR's shape without calling getPullRequest.
  *
- * No LLM, no comment. Idempotent per head: a manifest already present for this
- * headSha short-circuits a redelivery before any fetch.
+ * No LLM, no comment. Idempotent per PR head: the per-PR manifest is read and a
+ * gather for the SAME headSha short-circuits a redelivery; a newer head
+ * overwrites the snapshot in place.
  */
 
 const PR_CARD_TTL_SECONDS = 30 * 24 * 60 * 60; // 30d — matches the R2 context lifecycle
@@ -24,12 +25,25 @@ export async function handlePrContextJob({ github, env, db, job }) {
   const bucket = env.BOT_ARTIFACTS;
   const cache = env.BOT_CACHE;
   const { repository_id: repoId, pr_number: prNumber, head_sha: headSha } = job;
-  const manifestKey = prContextKey(repoId, prNumber, headSha, 'manifest');
+  const manifestKey = prContextKey(repoId, prNumber, 'manifest');
 
-  // Idempotency: a manifest for this head means a prior gather already won.
-  if (bucket?.head) {
-    const present = await bucket.head(manifestKey).catch(() => null);
-    if (present) return { status: 'skipped', action: 'pr_context', reason: 'manifest_exists' };
+  // Idempotency: the context is keyed per PR, so we read the existing manifest
+  // and skip only if it describes THIS SAME head (a redelivery). A different
+  // head means a newer commit landed → overwrite the snapshot. `get` (not
+  // `head`) because we need the headSha stamp inside the manifest.
+  let existingHead = null;
+  if (bucket?.get) {
+    const existing = await bucket.get(manifestKey).catch(() => null);
+    if (existing) {
+      try {
+        existingHead = (JSON.parse(await existing.text()) || {}).headSha ?? null;
+      } catch {
+        /* corrupt manifest → re-gather */
+      }
+    }
+  }
+  if (existingHead && existingHead === headSha) {
+    return { status: 'skipped', action: 'pr_context', reason: 'same_head_manifest_exists' };
   }
 
   const config = await getRepositoryConfig(db, cache, repoId);
@@ -61,12 +75,16 @@ export async function handlePrContextJob({ github, env, db, job }) {
     deletions: f.deletions,
     changes: f.changes,
   }));
-  const commitsPayload = (Array.isArray(commits) ? commits : []).slice(0, COMMIT_CAP).map((c) => ({
-    sha: c.sha,
-    message: String(c.commit?.message || '').split('\n')[0],
-    author: c.commit?.author?.name || c.author?.login || null,
-    date: c.commit?.author?.date || null,
-  }));
+  const commitsPayload = (Array.isArray(commits) ? commits : []).slice(0, COMMIT_CAP).map((c) => {
+    const message = String(c.commit?.message || '');
+    return {
+      sha: c.sha,
+      title: message.split('\n')[0],
+      message, // full commit message (subject + body), not just the subject line
+      author: c.commit?.author?.name || c.author?.login || null,
+      date: c.commit?.author?.date || null,
+    };
+  });
   const commentsPayload = {
     issue: (comments.issue || []).map((c) => ({
       user: c.user?.login,
@@ -100,7 +118,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
   // LAST so a crash before it leaves the gather retryable (no false "already
   // gathered" marker); on retry every slice is re-fetched and overwritten.
   if (bucket?.put) {
-    const k = (kind) => prContextKey(repoId, prNumber, headSha, kind);
+    const k = (kind) => prContextKey(repoId, prNumber, kind);
     await Promise.all([
       putJson(bucket, k('files'), files),
       putText(bucket, k('diff'), diffText, 'text/x-diff'),
@@ -116,7 +134,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
       title: pullRequest?.title ?? job.title ?? null,
       authorLogin: pullRequest?.user?.login ?? job.author_login ?? null,
       gatheredAt,
-      contextPrefix: `v1/prs/${repoId}/${prNumber}/${headSha}/context`,
+      contextPrefix: `v1/prs/${repoId}/${prNumber}/context`,
       aggregates,
       counts: {
         files: files.length,
@@ -143,7 +161,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
       additions: pullRequest?.additions ?? aggregates.additions,
       deletions: pullRequest?.deletions ?? aggregates.deletions,
       contextReady: true,
-      contextPrefix: `v1/prs/${repoId}/${prNumber}/${headSha}/context`,
+      contextPrefix: `v1/prs/${repoId}/${prNumber}/context`,
       gatheredAt,
     };
     await cache

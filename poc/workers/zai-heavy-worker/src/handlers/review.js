@@ -60,22 +60,14 @@ export async function handleReviewCommand({ github, env, db, job, runId }) {
   const config = await getRepositoryConfig(db, env?.BOT_CACHE, repoId);
   const maxBytes = Number(config.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
 
-  // --- Resolve context: gathered first, live fallback for the diff. ---
-  const manifest = headSha
-    ? await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber, headSha)
-    : null;
-  let diff = headSha
-    ? await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, headSha, 'diff')
-    : null;
+  // --- Resolve context: gathered first (per-PR latest), live fallback for diff. ---
+  const manifest = await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber);
+  let diff = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'diff');
   if (diff == null) diff = await github.getPrDiff(owner, name, prNumber).catch(() => '');
   diff = typeof diff === 'string' ? diff.slice(0, maxBytes) : '';
 
-  const description = headSha
-    ? await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, headSha, 'description')
-    : null;
-  const filesSlice = headSha
-    ? await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, headSha, 'files')
-    : null;
+  const description = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'description');
+  const filesSlice = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'files');
   const fileNames = Array.isArray(filesSlice)
     ? filesSlice.map((f) => f?.filename).filter(Boolean)
     : null;

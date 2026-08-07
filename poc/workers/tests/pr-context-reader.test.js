@@ -32,19 +32,18 @@ describe('readPrCard — KV pr-card', () => {
 });
 
 describe('readContextManifest — R2 manifest', () => {
-  it('parses the manifest object for a head', async () => {
+  it('parses the manifest object (per-PR latest)', async () => {
     const manifest = { headSha: 'abc', counts: { files: 2 } };
     const bucket = {
       get: vi.fn().mockResolvedValue({ text: () => Promise.resolve(JSON.stringify(manifest)) }),
     };
-    await expect(readContextManifest(bucket, 10, 7, 'abc')).resolves.toEqual(manifest);
-    expect(bucket.get).toHaveBeenCalledWith(prContextKey(10, 7, 'abc', 'manifest'));
+    await expect(readContextManifest(bucket, 10, 7)).resolves.toEqual(manifest);
+    expect(bucket.get).toHaveBeenCalledWith(prContextKey(10, 7, 'manifest'));
   });
 
-  it('returns null when no manifest exists and when headSha is absent', async () => {
+  it('returns null when no manifest exists', async () => {
     const bucket = { get: vi.fn().mockResolvedValue(null) };
-    await expect(readContextManifest(bucket, 10, 7, 'abc')).resolves.toBeNull();
-    await expect(readContextManifest(bucket, 10, 7, null)).resolves.toBeNull();
+    await expect(readContextManifest(bucket, 10, 7)).resolves.toBeNull();
   });
 });
 

@@ -25,18 +25,16 @@ describe('storage key contracts', () => {
     // pr-card is keyed by (repo, pr) ONLY — so a command handler reads the
     // latest gathered shape without knowing the head SHA upfront.
     expect(prCardKey(10, 7)).toBe('v1:pr-card:10:7');
-    // context keys are deterministic per (repo, pr, head, kind).
-    expect(prContextKey(10, 7, 'abc', 'manifest')).toBe('v1/prs/10/7/abc/context/manifest.json');
-    expect(prContextKey(10, 7, 'abc', 'diff')).toBe('v1/prs/10/7/abc/context/diff.diff');
-    expect(prContextKey(10, 7, 'abc', 'description')).toBe(
-      'v1/prs/10/7/abc/context/description.md',
-    );
+    // context keys are keyed per PR (repo, pr, kind) — NOT per head.
+    expect(prContextKey(10, 7, 'manifest')).toBe('v1/prs/10/7/context/manifest.json');
+    expect(prContextKey(10, 7, 'diff')).toBe('v1/prs/10/7/context/diff.diff');
+    expect(prContextKey(10, 7, 'description')).toBe('v1/prs/10/7/context/description.md');
   });
 
   it('rejects unsafe key components and unknown context kinds', () => {
     expect(() => runArtifactKey('1/2', 'run', 'result', 'md')).toThrow('storage key component');
     expect(() => prCardKey('../x', 7)).toThrow('storage key component');
-    expect(() => prContextKey(10, 7, 'abc', 'bogus')).toThrow('Invalid PR context kind');
+    expect(() => prContextKey(10, 7, 'bogus')).toThrow('Invalid PR context kind');
   });
 });
 

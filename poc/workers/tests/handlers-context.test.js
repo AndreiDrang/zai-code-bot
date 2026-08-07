@@ -48,7 +48,7 @@ function makeEnv({ withCard = false, withManifest = false } = {}) {
   };
   const bucket = {
     get: vi.fn(async (key) =>
-      key === prContextKey(REPO_ID, PR, HEAD, 'manifest') && withManifest
+      key === prContextKey(REPO_ID, PR, 'manifest') && withManifest
         ? { text: async () => JSON.stringify(manifest) }
         : null,
     ),

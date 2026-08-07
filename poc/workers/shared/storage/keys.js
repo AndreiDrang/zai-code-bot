@@ -8,9 +8,10 @@ export const PR_CONTEXT_JOB_KIND = 'pr_context';
 export const SUPPORTED_JOB_KINDS = [PR_PREVIEW_JOB_KIND, PR_CONTEXT_JOB_KIND, 'review', 'impact'];
 
 /**
- * R2 context kinds gathered per PR head. Each maps to a deterministic object
- * under `v1/prs/{repo}/{pr}/{head}/context/{kind}.{ext}`. The `manifest` is
- * the idempotency marker (written last) + the index the consumers read first.
+ * R2 context kinds gathered per PR. Each maps to a deterministic object under
+ * `v1/prs/{repo}/{pr}/context/{kind}.{ext}` (keyed per PR, not per head). The
+ * `manifest` is the idempotency marker (written last) + the index consumers
+ * read first; manifest.headSha records which head the snapshot describes.
  */
 export const PR_CONTEXT_KINDS = Object.freeze([
   'manifest',
@@ -64,14 +65,16 @@ export function prCardKey(repositoryId, prNumber) {
 }
 
 /**
- * R2 key for one gathered context object, deterministic from
- * (repositoryId, prNumber, headSha, kind). Determinism gives PR↔R2 linking in
- * both directions without a D1 index table; retention is an R2 lifecycle rule
- * on the `v1/prs/` prefix (see wrangler.toml), NOT the D1 artifact sweep.
+ * R2 key for one gathered context object, keyed per PR
+ * (repositoryId, prNumber, kind) — NOT per headSha. The PR's context is a
+ * living snapshot: each new head overwrites it (skip-same-head / overwrite-newer
+ * is handled by the gather). Which head the context describes lives INSIDE the
+ * manifest (manifest.headSha), mirroring the per-PR pr-card pattern. Retention
+ * is an R2 lifecycle rule on the `v1/prs/` prefix (see wrangler.toml).
  */
-export function prContextKey(repositoryId, prNumber, headSha, kind) {
+export function prContextKey(repositoryId, prNumber, kind) {
   if (!PR_CONTEXT_KINDS.includes(kind)) {
     throw new TypeError(`Invalid PR context kind: ${kind}`);
   }
-  return `v${STORAGE_SCHEMA_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/${component(headSha, 'head sha')}/context/${kind}.${CONTEXT_KIND_EXTENSION[kind]}`;
+  return `v${STORAGE_SCHEMA_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/${kind}.${CONTEXT_KIND_EXTENSION[kind]}`;
 }
