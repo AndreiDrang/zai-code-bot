@@ -91,12 +91,16 @@ poc/
     │           ├── review.js         #   /zai review   (stub — LLM)
     │           └── impact.js         #   /zai impact   (stub — LLM)
     │
-    └── tests/                        #   Vitest suite — 13 files, 133 tests
+    └── tests/                        #   Vitest suite — 16 files, 154 tests
         ├── commands / crypto / secrets / github / auth / logging / router .test.js
-        ├── storage.test.js           #     schema + key builders + artifact expiry
+        ├── storage.test.js           #     schema + key builders + artifact expiry + render
         ├── storage-state.test.js     #     claimJob / retry / fail / lease recovery / publications
         ├── storage-runtime.test.js   #     createPrPreviewJob duplicate + outbox replay
         ├── github-storage.test.js    #     GitHubClient over D1-backed fixtures
+        ├── pr-preview-sync.test.js   #     generate-once + update-on-sync (real D1 fake)
+        ├── pr-preview-closed.test.js #     closed lifecycle → pr_closed comment, no supersede GET
+        ├── comments-upsert.test.js   #     upsertComment PAT-bot regression (real path)
+        ├── pr-events.test.js         #     supported-action gate + event extraction
         └── queue.test.js             #     retry budget (3 attempts) + terminal failure → ack
 ```
 
@@ -105,7 +109,8 @@ poc/
 ### Durable PR-preview path (the primary flow)
 
 Every supported `pull_request` event (`opened`, `reopened`, `synchronize`,
-`ready_for_review`) is recorded durably and processed asynchronously — the
+`ready_for_review`, `edited` title changes, `closed`) is recorded durably and
+processed asynchronously — the
 webhook returns `202` before any analysis runs.
 
 ```mermaid
@@ -117,7 +122,11 @@ flowchart TD
   MAIN -->|202 accepted| GH[GitHub acked in <1s]
   Q --> HEAVY[zai-heavy-worker\nqueue consumer]
   HEAVY -->|claimJob\nlease_expires_at=+10min\nattempt_count++| D1
-  HEAVY -->|getPullRequest\nhead.sha == job.head_sha?| CHK{fresh?}
+  HEAVY --> ST{job.state?}
+  ST -- closed --> CLOSED[renderPrClosed - PR closed by @sender]
+  CLOSED --> CLOSEDPUB[upsertComment kind: pr_closed marker: zai-pr-closed]
+  CLOSEDPUB --> GH2
+  ST -- open --> CHK{getPullRequest head.sha fresh?}
   CHK -- no, superseded --> SKIP[return superseded\nno comment written]
   CHK -- yes --> REND[renderPrPreview\nmetadata-only brief]
   REND --> R2W[writeArtifact\nresult.md\n30-day expiry]
@@ -347,7 +356,7 @@ To reclassify a command, move it between the two arrays — nothing else changes
 cd poc
 
 # Run the Vitest unit-test suite with coverage (no live API calls)
-npm test            # vitest run --coverage  →  130 tests, ~96% coverage
+npm test            # vitest run --coverage  →  154 tests, ~96% coverage
 npm run test:watch  # vitest (watch mode)
 
 # Dev servers (run each in its own terminal)
@@ -435,4 +444,4 @@ state machine, queue retry budget, and runtime duplicate-delivery handling.
 
 ---
 
-**Version**: 0.3.2 · PR preview is metadata-only (per-file stats and the `files` manifest artifact removed); unified `BOT_FOOTER` on every comment
+**Version**: 0.3.3 · `closed` PRs post an idempotent "PR closed by @X" lifecycle comment (migration 0003 adds `pull_requests.closed_by`); `edited` title changes refresh the preview; preview stays metadata-only; unified `BOT_FOOTER` on every comment
