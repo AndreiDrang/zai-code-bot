@@ -41,8 +41,9 @@ protection).
   the message.
 - **Idempotency**: duplicate deliveries of the same `{ jobId }` are safe because
   `claimJob()` is atomic — only one consumer wins the lease.
-- **Large data location**: rendered results live in R2 as immutable
-  artifacts referenced by the [storage authority model](/architecture/storage-authority-model.md).
+- **Large data location**: PR task context lives in R2 under deterministic
+  keys (see [storage authority model](/architecture/storage-authority-model.md));
+  the queue never carries it.
 
 # Versioning
 
@@ -53,5 +54,6 @@ consumers. The current version is `1` (`STORAGE_SCHEMA_VERSION`).
 
 - Produced by the [transactional outbox](/contracts/transactional-outbox.md)
   after the D1 commit.
-- Consumed by the [PR-preview pipeline](/workflows/pr-preview-pipeline.md).
+- Consumed by the [PR-preview pipeline](/workflows/pr-preview-pipeline.md) and
+  the [PR-context gather pipeline](/workflows/pr-context-pipeline.md).
 - The job it references follows the [job lifecycle](/state/job-lifecycle.md).

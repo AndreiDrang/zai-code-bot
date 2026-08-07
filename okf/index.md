@@ -5,9 +5,7 @@ okf_version: "0.1"
 # Knowledge Bundle
 
 OKF knowledge bundle for the **Z.ai Code Bot Cloudflare Workers POC** (`poc/`).
-Documents the durable PR-preview storage architecture: a two-worker split with
-D1 as the source of truth, R2 for immutable artifacts, a Queue for async
-processing, and KV as a non-authoritative cache.
+Documents the durable PR-preview and PR-context storage architecture: a two-worker split with D1 as the source of truth, R2 as the PR-context blob tier, a Queue for async processing, and KV as a read-through cache.
 
 - [Architecture](architecture/) — Foundational design decisions: the worker split and the storage authority model.
 - [Workflows](workflows/) — End-to-end flows: webhook ingress, command routing, the durable PR-preview pipeline, and the cron self-healing sweep.

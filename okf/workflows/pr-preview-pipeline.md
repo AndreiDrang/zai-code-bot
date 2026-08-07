@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Durable PR-preview pipeline
-description: End-to-end flow from a pull_request webhook through D1 job creation, queue publish, heavy-worker processing, R2 artifact writes, and one-live-comment publication.
+description: End-to-end flow from a pull_request webhook through D1 job creation, queue publish, heavy-worker processing, and one-live-comment publication. The preview is metadata-only and touches neither R2 nor KV.
 source_paths:
   - poc/workers/zai-main-worker/src/index.js
   - poc/workers/zai-main-worker/src/pr-events.js
@@ -43,8 +43,13 @@ routed directly to storage.
 3. Call `createPrPreviewJob()` — atomically insert the `webhook_deliveries`
    row, the `jobs` row, and the `job_outbox` row in a single D1 batch. If the
    delivery ID already exists, the job is returned as a duplicate (idempotent).
-4. Publish a minimal [queue message](/contracts/queue-message.md) `{ jobId }`.
-5. Return `202 Accepted` with `{ jobId, duplicate }`.
+   For head-producing actions (`opened` / `reopened` / `synchronize` /
+   `ready_for_review`) a `createPrContextJob()` is called alongside it — a
+   second job (kind `pr_context`) on the same delivery that drives the
+   [PR-context gather pipeline](/workflows/pr-context-pipeline.md).
+4. Publish a minimal [queue message](/contracts/queue-message.md) `{ jobId }`
+   for each created job.
+5. Return `202 Accepted` with `{ jobId, contextJobId, duplicate }`.
 
 **Heavy worker (on its own lifetime):**
 
@@ -59,12 +64,13 @@ routed directly to storage.
 4. Render the **metadata-only** preview body via `renderPrPreview()` — just
    repository, PR number, title, author, and head SHA, terminated by the
    [unified bot comment footer](/rules/comment-footer.md).
-5. Write the `result` artifact (the rendered markdown) to R2 (immutable,
-   30-day retention) and link it to the run.
-6. [Publish or update the one-live comment](/state/comment-publication.md)
+5. [Publish or update the one-live comment](/state/comment-publication.md)
    via a D1 publication lease.
-7. Cache the body in KV (best-effort, TTL 1h).
-8. Mark the job succeeded and `ack` the queue message.
+6. Mark the job succeeded and `ack` the queue message.
+
+The preview writes **nothing** to R2 or KV — the brief is drawn entirely from
+the job row. Per-file context for heavy review is the separate
+[PR-context gather pipeline](/workflows/pr-context-pipeline.md).
 
 # Closed lifecycle
 

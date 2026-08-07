@@ -1,11 +1,12 @@
 ---
 type: Dataset
 title: D1 storage schema
-description: The nine authoritative D1 tables (migrations 0001–0003) that hold all job, delivery, run, artifact, publication, and configuration state.
+description: The nine authoritative D1 tables (migrations 0001–0004) that hold all job, delivery, run, artifact, publication, and configuration state.
 source_paths:
   - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
   - poc/workers/zai-main-worker/migrations/0002_storage_hardening.sql
   - poc/workers/zai-main-worker/migrations/0003_pr_closed_by.sql
+  - poc/workers/zai-main-worker/migrations/0004_pr_context_kind.sql
 confidence: observed
 status: current
 tags:
@@ -55,10 +56,26 @@ webhook `sender` who closed the PR, used to render the idempotent "PR closed by
 UPSERT (GitHub's PR API does not expose `closed_by`, so it is captured once
 from the webhook).
 
+# Migration 0004 — pr_context job kind
+
+Migration `0004_pr_context_kind.sql` rebuilds the `jobs` table (SQLite cannot
+ALTER a CHECK constraint in place) for two changes:
+
+- `jobs.kind` gains `'pr_context'` (the eager [PR-context gather](/workflows/pr-context-pipeline.md)
+  job kind) → `kind ∈ ('pr_preview', 'pr_context', 'review', 'impact')`.
+- The single-column `delivery_id UNIQUE` becomes a composite
+  `UNIQUE(delivery_id, kind)` — one webhook delivery may now spawn multiple
+  job kinds (preview + context), while the same `(delivery_id, kind)` pair
+  stays race-safe. The delivery-row FK is preserved; `createPrPreviewJob` owns
+  the delivery row (plain INSERT), `createPrContextJob` reuses it (INSERT OR
+  IGNORE).
+
 # Key constraints
 
-- `jobs.delivery_id` is `UNIQUE` — one job per delivery (idempotent).
-- `jobs.kind ∈ ('pr_preview', 'review', 'impact')`.
+- `UNIQUE(delivery_id, kind)` on `jobs` — a delivery may spawn multiple job
+  kinds (pr_preview + pr_context), but the same (delivery, kind) pair is unique
+  (race-safe idempotency).
+- `jobs.kind ∈ ('pr_preview', 'pr_context', 'review', 'impact')`.
 - `jobs.status ∈ ('queued', 'running', 'retryable', 'succeeded', 'failed', 'cancelled')`.
 - `artifacts.r2_key` is `UNIQUE`.
 - `comment_publications.status ∈ ('publishing', 'published')`.

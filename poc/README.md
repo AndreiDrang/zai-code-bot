@@ -52,19 +52,22 @@ poc/
     │   ├── logging.js                #   structured JSON logger + correlation id
     │   ├── comments.js               #   upsertComment — D1 publication lease + marker lookup
 │   ├── pr-preview.js             #   renderPrPreview — metadata-only markdown brief
+    │   ├── pr-context-reader.js  #   readPrCard / readContextManifest — gather's readers
     │   └── storage/                  #   D1 / R2 / KV adapters
     │       ├── database.js           #     prepare / run / batch / first helpers
-    │       ├── keys.js               #     versioned key builders (v1/...) for R2 + KV
-    │       ├── deliveries.js         #     createPrPreviewJob — atomic delivery + job + outbox
+    │       ├── keys.js               #     versioned key builders: R2 context/run-output + KV card/config
+    │       ├── deliveries.js         #     createPrPreviewJob / createPrContextJob — atomic delivery + jobs + outbox
     │       ├── jobs.js               #     claimJob / retry / fail / lease recovery
-    │       ├── artifacts.js          #     writeArtifact / deleteExpiredArtifacts
-    │       └── config.js             #     getRepositoryConfig (KV cache, D1 authority)
+    │       ├── artifacts.js          #     writeArtifact / deleteExpiredArtifacts (run-output tier)
+    │       └── config.js             #     getRepositoryConfig (KV read-through, D1 authority)
     │
     ├── zai-main-worker/
     │   ├── wrangler.toml             #   BOT_DB / BOT_ARTIFACTS / BOT_CACHE / BOT_JOBS + cron
     │   ├── migrations/
     │   │   ├── 0001_storage_foundation.sql
-    │   │   └── 0002_storage_hardening.sql
+    │   │   ├── 0002_storage_hardening.sql
+    │   │   ├── 0003_pr_closed_by.sql
+    │   │   └── 0004_pr_context_kind.sql
     │   ├── package.json
     │   └── src/
     │       ├── index.js              #   fetch: gates → record → route ; scheduled: cron sweep
@@ -83,15 +86,16 @@ poc/
     │       ├── index.js              #   queue handler + legacy fetch (token-gated)
     │       ├── queue.js              #   processQueueMessage — claim → run → ack/retry/fail
     │       └── handlers/
-    │           ├── index.js          #   getHeavyHandler(): ask|explain|describe|review|impact|pr_preview
-    │           ├── pr-preview.js     #   durable PR preview job (implemented)
-    │           ├── ask.js            #   /zai ask      (stub — LLM)
-    │           ├── explain.js        #   /zai explain  (stub — LLM)
+    │           ├── index.js          #   getHeavyHandler(): ask|explain|describe|review|impact|pr_preview|pr_context
+    │           ├── pr-preview.js     #   durable PR preview job (metadata-only, no R2/KV)
+    │           ├── pr-context.js     #   durable PR-context gather job → R2 context + KV card
+    │           ├── ask.js            #   /zai ask      (context-aware stub — LLM)
+    │           ├── explain.js        #   /zai explain  (context-aware stub — LLM)
     │           ├── describe.js       #   /zai describe (stub — LLM)
-    │           ├── review.js         #   /zai review   (stub — LLM)
-    │           └── impact.js         #   /zai impact   (stub — LLM)
+    │           ├── review.js         #   /zai review   (context-aware stub — LLM)
+    │           └── impact.js         #   /zai impact   (context-aware stub — LLM)
     │
-    └── tests/                        #   Vitest suite — 16 files, 154 tests
+    └── tests/                        #   Vitest suite — 20 files, 188 tests
         ├── commands / crypto / secrets / github / auth / logging / router .test.js
         ├── storage.test.js           #     schema + key builders + artifact expiry + render
         ├── storage-state.test.js     #     claimJob / retry / fail / lease recovery / publications
@@ -101,6 +105,10 @@ poc/
         ├── pr-preview-closed.test.js #     closed lifecycle → pr_closed comment, no supersede GET
         ├── comments-upsert.test.js   #     upsertComment PAT-bot regression (real path)
         ├── pr-events.test.js         #     supported-action gate + event extraction
+        ├── config-cache.test.js      #     repo-config KV read-through (hit/miss/outage)
+        ├── pr-context.test.js        #     gather: deterministic keys, idempotency, budget, degrade
+        ├── pr-context-reader.test.js #     readPrCard / readContextManifest / renderers
+        ├── handlers-context.test.js  #     review/impact/ask/explain read R2/KV context
         └── queue.test.js             #     retry budget (3 attempts) + terminal failure → ack
 ```
 
@@ -116,36 +124,66 @@ webhook returns `202` before any analysis runs.
 ```mermaid
 flowchart TD
   WH[GitHub pull_request webhook] --> MAIN[zai-main-worker]
-  MAIN -->|verify signature + extract event| DB1[createPrPreviewJob\natomic batch]
-  DB1 -->|repositories + pull_requests\n+ webhook_deliveries\n+ jobs + job_outbox| D1[(D1 bot-db)]
-  MAIN -->|BOT_JOBS.send jobId| Q[[Queue bot-jobs\nschemaVersion:1, jobId]]
+  MAIN -->|verify signature + extract event| DB1[createPrPreviewJob + createPrContextJob-head-actions]
+  DB1 -->|repositories + pull_requests + webhook_deliveries + jobs + job_outbox| D1[(D1 bot-db)]
+  MAIN -->|BOT_JOBS.send jobId| Q[[Queue bot-jobs — schemaVersion:1, jobId]]
   MAIN -->|202 accepted| GH[GitHub acked in <1s]
-  Q --> HEAVY[zai-heavy-worker\nqueue consumer]
-  HEAVY -->|claimJob\nlease_expires_at=+10min\nattempt_count++| D1
-  HEAVY --> ST{job.state?}
-  ST -- closed --> CLOSED[renderPrClosed - PR closed by @sender]
-  CLOSED --> CLOSEDPUB[upsertComment kind: pr_closed marker: zai-pr-closed]
-  CLOSEDPUB --> GH2
-  ST -- open --> CHK{getPullRequest head.sha fresh?}
-  CHK -- no, superseded --> SKIP[return superseded\nno comment written]
-  CHK -- yes --> REND[renderPrPreview\nmetadata-only brief]
-  REND --> R2W[writeArtifact\nresult.md\n30-day expiry]
-  R2W --> R2[(R2 bot-storage)]
-  R2W -->|link result_artifact_id| D1
-  R2W --> PUB[upsertComment\nD1 publication lease]
-  PUB -->|one live comment\nper repository+PR+kind| GH2[GitHub REST]
-  PUB -->|optional cache| KV[(KV bot-cache)]
+  Q --> HEAVY[zai-heavy-worker queue consumer]
+  HEAVY -->|claimJob, lease +10min| D1
+  HEAVY --> ST{job.kind / state?}
+  ST -- pr_preview · closed --> CLOSED[renderPrClosed — PR closed by @sender]
+  CLOSED --> PUB2[upsertComment kind: pr_closed, marker: zai-pr-closed]
+  PUB2 --> GH2
+  ST -- pr_preview · open --> CHK{getPullRequest head.sha fresh?}
+  CHK -- no, superseded --> SKIP[return superseded, no comment]
+  CHK -- yes --> REND[renderPrPreview — metadata-only brief]
+  REND --> PUB[upsertComment — D1 lease, no R2 / no KV]
+  PUB -->|one live comment per repo+PR+kind| GH2[GitHub REST]
+  ST -- pr_context --> GATHER[gather handler — see below]
   HEAVY -->|markJobSucceeded + ack| D1
 ```
 
+`createPrContextJob` runs only on head-producing actions (`opened` /
+`reopened` / `synchronize` / `ready_for_review`); the `pr_context` job drives
+the gather flow below. The preview itself is metadata-only — it writes
+**nothing** to R2 or KV.
+
 **Why three storage resources?** D1 is the single source of truth (authority for
-deliveries, jobs, runs, artifacts, publications). R2 holds the rendered
-preview output. KV holds only derived cache — never job status or
+deliveries, jobs, runs, artifacts, publications). R2 is the **PR-context blob
+tier** — the gather job writes changed files / diff / commits / comments under
+deterministic keys for the heavy handlers to reuse. KV is a **read-through
+cache** of hot params (repo config, PR “card”) — never job status or
 idempotency state.
 
 **Why a tiny queue message?** The message carries only `{ schemaVersion, jobId }`.
-No token, no payload, no diff. The consumer re-reads everything from D1/R2. This
-keeps the queue lossless to inspect and keeps secrets out of it.
+No token, no payload, no diff. The consumer re-reads everything from D1 (and
+R2 for context). This keeps the queue lossless to inspect and keeps secrets out
+of it.
+
+### Eager PR-context gather (the context tier)
+
+For every head-producing PR event the main worker enqueues a second job
+(`pr_context`) alongside the preview. The heavy worker’s gather handler fetches
+the PR’s task context and writes it under deterministic R2 keys + a KV pr-card,
+so the heavy `/zai` handlers read context without re-fetching GitHub:
+
+```mermaid
+flowchart LR
+  JOB[pr_context job claimed] --> IDEMP{R2.head manifest exists?}
+  IDEMP -- yes --> SKIP2[skip — redelivery]
+  IDEMP -- no --> FETCH[parallel fetch: files · diff · commits · description · comments]
+  FETCH --> R2W[R2.put v1/prs/repo/pr/head/context/kind — manifest written last]
+  FETCH --> KVCARD[KV.put v1:pr-card:repo:pr — shape + contextReady, 30d TTL]
+  R2W --> R2[(R2 bot-storage)]
+  KVCARD --> KV[(KV bot-cache)]
+```
+
+Idempotent per head (the manifest is the commit marker, written last),
+best-effort per slice (a failed fetch degrades but does not abort), and
+budgeted (`maxContextBytes` truncates the diff). `review` / `impact` read the
+KV card → head → R2 manifest; `ask` / `explain` read the card for the PR shape.
+No LLM call yet — the readers post context-aware notices until the review
+pipeline lands.
 
 ### Job lifecycle and the three-attempt budget
 
@@ -254,8 +292,8 @@ with an explicit `message.ack()` or `message.retry()`. The only case it does
 | Binding type    | Name                                | Worker | Purpose                                                            |
 | --------------- | ----------------------------------- | :----: | ------------------------------------------------------------------ |
 | D1 database     | `BOT_DB`                            |  both  | Authority: deliveries, jobs, outbox, runs, artifacts, publications |
-| R2 bucket       | `BOT_ARTIFACTS` (`bot-storage`)     | heavy  | Private. Immutable rendered preview results                        |
-| KV namespace    | `BOT_CACHE` (`bot-cache`)           | heavy  | Non-authoritative config + preview cache (TTL 1h)                  |
+| R2 bucket       | `BOT_ARTIFACTS` (`bot-storage`)     | heavy  | PR task context (files/diff/commits/comments) — the blob tier      |
+| KV namespace    | `BOT_CACHE` (`bot-cache`)           | heavy  | Read-through cache: repo config + PR card                          |
 | Queue producer  | `BOT_JOBS` (`bot-jobs`)             |  main  | Publishes `{schemaVersion, jobId}`                                 |
 | Queue consumer  | — (same queue)                      | heavy  | Consumes `bot-jobs`; claims → runs → acks/retries                  |
 | Service binding | `HEAVY_WORKER` → `zai-heavy-worker` |  main  | Legacy `/zai` heavy delegation (token-gated)                       |
@@ -313,16 +351,23 @@ Store id: `629e5dd6594845a889e6ddabb26cc009` (shared by both workers).
 
 ### R2 retention
 
-All worker-created R2 objects live under the versioned `v1/` prefix and receive
-a **30-day** expiry on both the object (`expires_at`) and its D1 index row. Two
-parallel mechanisms enforce it:
+R2 objects live under the versioned `v1/` prefix and expire after **30 days**.
+The two R2 grains are retained differently:
 
-1. **App-level**: `sweepExpiredStorage` in the 5-min cron deletes expired R2
-   objects and their D1 rows together (keeps the index consistent).
-2. **Bucket-level**: an R2 lifecycle rule (`poc/infra/bot-storage-lifecycle.json`)
-   auto-expires `v1/` objects after 30 days as a backstop. Apply it via the
-   `infra/apply-bot-storage-lifecycle.sh` script with R2 S3 credentials, or
-   through the dashboard — it cannot be declared in `wrangler.toml`.
+- **PR context (`v1/prs/`)** — written by the gather job, **not** indexed in D1
+  (keys are deterministic from the PR identity). Retained solely by a
+  **bucket-level lifecycle rule** on the `v1/prs/` prefix; there is no D1 row
+  to sweep. Documented in both `wrangler.toml` files; apply via
+  `npx wrangler r2 bucket lifecycle add bot-storage --id pr-context-retention
+  --prefix "v1/prs/" --expire-days 30` (R2 lifecycle rules cannot be declared
+  in `wrangler.toml`).
+- **Run-outputs (`v1/runs/`)** — indexed by the `artifacts` table. Each object
+  gets an `expires_at`; the 5-min cron `sweepExpiredStorage` deletes the R2
+  object and its D1 row together (keeps the index consistent). The `v1/`
+  lifecycle rule acts as a backstop. Reserved for future LLM `response.json` —
+  no producer ships without a reader, so it is empty for now.
+
+The bot's published comments live on GitHub + D1, **not** in R2.
 
 ## Command routing (single source of truth)
 
@@ -356,7 +401,7 @@ To reclassify a command, move it between the two arrays — nothing else changes
 cd poc
 
 # Run the Vitest unit-test suite with coverage (no live API calls)
-npm test            # vitest run --coverage  →  154 tests, ~96% coverage
+npm test            # vitest run --coverage  →  188 tests, ~96% coverage
 npm run test:watch  # vitest (watch mode)
 
 # Dev servers (run each in its own terminal)
@@ -412,14 +457,14 @@ webhook secret = the value stored as `ZAI_GITHUB_WEBHOOK_KEY`. Subscribe to the
 ## Testing
 
 ```bash
-cd poc && npm test        # vitest run --coverage  →  130 tests, ~96% coverage
+cd poc && npm test        # vitest run --coverage  →  188 tests, ~96% coverage
 npm run test:watch        # vitest in watch mode
 ```
 
 Vitest with `vitest-environment-miniflare` (Workers-runtime fidelity) and
-`@vitest/coverage-v8`, enforcing **80%** thresholds. The 12 test files mirror
+`@vitest/coverage-v8`, enforcing **80%** thresholds. The 20 test files mirror
 the source layout — one per shared module plus dedicated suites for the storage
-state machine, queue retry budget, and runtime duplicate-delivery handling.
+state machine, queue retry budget, gather pipeline, and context readers.
 
 ## Status and roadmap
 
@@ -427,7 +472,9 @@ state machine, queue retry budget, and runtime duplicate-delivery handling.
 | ------------------------------------------------------------- | --------------------------------------------------------------- |
 | Webhook ingress + signature gate                              | ✅ implemented                                                  |
 | Light `help` handler                                          | ✅ implemented                                                  |
-| Durable PR-preview job (D1 + Queue + R2 + KV)                 | ✅ implemented                                                  |
+| Durable PR-preview job (D1 + Queue, metadata-only)            | ✅ implemented                                                  |
+| Eager PR-context gather (R2 context + KV card)               | ✅ implemented                                                  |
+| Context-aware review/impact/ask/explain                      | 🟡 stub (read gathered context; LLM pending)                    |
 | 3-attempt retry budget + lease recovery                       | ✅ implemented                                                  |
 | One-live-comment publication (D1 lease)                       | ✅ implemented                                                  |
 | 30-day retention + cron sweep                                 | ✅ implemented                                                  |
@@ -444,4 +491,4 @@ state machine, queue retry budget, and runtime duplicate-delivery handling.
 
 ---
 
-**Version**: 0.3.3 · `closed` PRs post an idempotent "PR closed by @X" lifecycle comment (migration 0003 adds `pull_requests.closed_by`); `edited` title changes refresh the preview; preview stays metadata-only; unified `BOT_FOOTER` on every comment
+**Version**: 0.4.0 · eager PR-context gather tier (R2 `v1/prs/` context + KV pr-card; migration 0004 adds the `pr_context` job kind + `UNIQUE(delivery_id, kind)`); review/impact/ask/explain read gathered context; preview stays metadata-only (no R2/KV); repo-config cache is read-through
