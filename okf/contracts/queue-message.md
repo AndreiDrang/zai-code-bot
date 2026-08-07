@@ -41,7 +41,7 @@ protection).
   the message.
 - **Idempotency**: duplicate deliveries of the same `{ jobId }` are safe because
   `claimJob()` is atomic — only one consumer wins the lease.
-- **Large data location**: manifests and results live in R2 as immutable
+- **Large data location**: rendered results live in R2 as immutable
   artifacts referenced by the [storage authority model](/architecture/storage-authority-model.md).
 
 # Versioning

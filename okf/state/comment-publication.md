@@ -53,6 +53,15 @@ verifies that the live PR's `head.sha` still matches the job's `head_sha`
 before publishing — if a newer push arrived, the job returns `superseded` and
 the newer job's publication wins.
 
+# Preview body
+
+The published preview is a **metadata-only** identity card (repository, PR
+number, title, author, head SHA) rendered by `renderPrPreview()`. No per-file
+data is computed or stored — the brief never shows files changed, additions, or
+deletions. Like every bot comment, it ends with the
+[unified bot comment footer](/rules/comment-footer.md) before the hidden
+marker.
+
 # Relationships
 
 - Used by the [PR-preview pipeline](/workflows/pr-preview-pipeline.md) as its

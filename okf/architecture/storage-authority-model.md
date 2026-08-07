@@ -27,7 +27,7 @@ immutable, a transport, or a best-effort derivative.
 | Resource | Binding | Role | Authoritative? |
 | --- | --- | --- | --- |
 | D1 database | `BOT_DB` (`bot-db`) | Jobs, deliveries, runs, publications, configs — all transactional state | **Yes** |
-| R2 bucket | `BOT_ARTIFACTS` (`bot-storage`) | Large immutable artifacts (PR manifests, preview results) | Immutable (write-once) |
+| R2 bucket | `BOT_ARTIFACTS` (`bot-storage`) | Rendered PR preview results (markdown) | Immutable (write-once) |
 | Queue | `BOT_JOBS` (`bot-jobs`) | Async transport for job IDs | No (transport only) |
 | KV namespace | `BOT_CACHE` (`bot-cache`) | Derived cache (repo config, preview bodies) | No (best-effort) |
 

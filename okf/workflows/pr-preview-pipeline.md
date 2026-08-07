@@ -10,7 +10,7 @@ source_paths:
   - poc/workers/zai-heavy-worker/src/handlers/pr-preview.js
   - poc/workers/shared/comments.js
   - poc/workers/shared/pr-preview.js
-  - poc/workers/shared/pr-stats.js
+  - poc/workers/tests/pr-preview-sync.test.js
 confidence: observed
 status: current
 tags:
@@ -49,21 +49,24 @@ parser — they are detected early and routed directly to storage.
 1. Consume the queue message and [claim](/state/job-lifecycle.md) the job via
    a bounded lease.
 2. Start an `analysis_runs` row for this attempt.
-3. Verify `head_sha` freshness — fetch the live PR and confirm
+3. Verify `head_sha` freshness — call `getPullRequest` and confirm
    `pull_request.head.sha` still matches `job.head_sha`. If a newer push
    arrived, the job returns `superseded` and succeeds without publishing
-   (the newer push's job wins).
-4. Fetch PR change stats (paginated, bounded by `config.maxFiles`).
-5. Write a `files` manifest artifact to R2 (immutable, 30-day retention).
-6. Render the preview body and write a `result` artifact to R2.
-7. [Publish or update the one-live comment](/state/comment-publication.md)
-    via a D1 publication lease.
-8. Cache the body in KV (best-effort, TTL 1h).
-9. Mark the job succeeded and `ack` the queue message.
+   (the newer push's job wins). This is the **only** GitHub fetch the preview
+   makes; no per-file data is read.
+4. Render the **metadata-only** preview body via `renderPrPreview()` — just
+   repository, PR number, title, author, and head SHA, terminated by the
+   [unified bot comment footer](/rules/comment-footer.md).
+5. Write the `result` artifact (the rendered markdown) to R2 (immutable,
+   30-day retention) and link it to the run.
+6. [Publish or update the one-live comment](/state/comment-publication.md)
+   via a D1 publication lease.
+7. Cache the body in KV (best-effort, TTL 1h).
+8. Mark the job succeeded and `ack` the queue message.
 
 # Failure handling
 
-Any exception during steps 6–14 triggers the [retry budget](/rules/retry-budget.md):
+Any exception during steps 2–6 triggers the [retry budget](/rules/retry-budget.md):
 attempts 1–2 schedule a retryable delay; attempt 3 marks the job `failed` and
 acks. If the worker crashes after claiming, the [cron self-healing sweep](/workflows/cron-self-healing.md)
 reclaims the expired lease.

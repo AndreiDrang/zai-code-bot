@@ -49,9 +49,8 @@ This complements the lifecycle rule and keeps D1 metadata in sync.
 
 # Applies to
 
-All `v1/`-prefixed objects: delivery payloads, PR file manifests, and analysis
-run results (files + rendered markdown). Nothing in the POC is retained beyond
-30 days.
+All `v1/`-prefixed objects: delivery payloads and PR preview results (rendered
+markdown). Nothing in the POC is retained beyond 30 days.
 
 # Relationships
 

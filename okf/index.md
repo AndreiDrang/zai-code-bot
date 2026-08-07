@@ -12,6 +12,6 @@ processing, and KV as a non-authoritative cache.
 - [Architecture](architecture/) — Foundational design decisions: the worker split and the storage authority model.
 - [Workflows](workflows/) — End-to-end flows: webhook ingress, command routing, the durable PR-preview pipeline, and the cron self-healing sweep.
 - [State](state/) — Stateful entities: job lifecycle with bounded leases and the one-live-comment publication.
-- [Rules](rules/) — Operational policies: the retry budget, R2 retention, and collaborator authorization.
+- [Rules](rules/) — Operational policies: the retry budget, R2 retention, collaborator authorization, and the unified comment footer.
 - [Contracts](contracts/) — Stable data contracts: the queue message format and the transactional outbox.
 - [Datasets](datasets/) — Data assets: the D1 storage schema.
