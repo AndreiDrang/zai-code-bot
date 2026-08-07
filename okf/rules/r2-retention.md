@@ -26,9 +26,10 @@ does not.
 # Grain 1 — PR context (`v1/prs/`): lifecycle rule only
 
 The gather pipeline writes PR task context under
-`v1/prs/{repo}/{pr}/{head}/context/{kind}`. These objects are **not** indexed
-in D1 (the key is deterministic from the PR identity), so there is no D1 row to
-sweep. Retention is solely an **R2 lifecycle rule** on the `v1/prs/` prefix:
+`v1/prs/{repo}/{pr}/context/{kind}` (keyed per PR — the latest snapshot is
+overwritten on each new head). These objects are **not** indexed in D1 (the key
+is deterministic from the PR identity), so there is no D1 row to sweep.
+Retention is solely an **R2 lifecycle rule** on the `v1/prs/` prefix:
 
 - 30-day expiry, applied via the Cloudflare Dashboard, R2 S3 API, or IaC.
 - It **cannot** be declared in `wrangler.toml` — both workers document the

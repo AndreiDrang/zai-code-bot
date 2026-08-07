@@ -4,9 +4,9 @@ title: One-live-comment publication
 description: Exactly one bot comment per (repository, PR, comment_kind) is kept live and updated across pushes via a D1 publication lease.
 source_paths:
   - poc/workers/shared/comments.js
-  - poc/workers/zai-main-worker/migrations/0002_storage_hardening.sql
-  - poc/workers/zai-main-worker/migrations/0003_pr_closed_by.sql
+  - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
   - poc/workers/zai-heavy-worker/src/handlers/pr-preview.js
+  - poc/workers/zai-heavy-worker/src/handlers/review.js
 confidence: observed
 status: current
 tags:
@@ -24,7 +24,7 @@ stale preview comments.
 
 # Publication state machine
 
-The `comment_publications` table (restructured in migration 0002) is keyed by
+The `comment_publications` table is keyed by
 `PRIMARY KEY (repository_id, pr_number, comment_kind)`:
 
 | Status | Meaning |
@@ -63,6 +63,7 @@ live comment:
 | --- | --- | --- | --- |
 | `pr_preview` | `<!-- zai-pr-preview -->` | PR-preview pipeline | Metadata-only identity brief, updated across pushes |
 | `pr_closed` | `<!-- zai-pr-closed -->` | [Closed lifecycle](/workflows/pr-preview-pipeline.md#closed-lifecycle) | One-time "PR closed by @X" announcement |
+| `review` | `<!-- zai-review -->` | [/zai review handler](/workflows/command-routing.md) | LLM code review, updated across re-runs on the same PR |
 
 Both share the same publication-lease machinery and the
 [unified footer](/rules/comment-footer.md).

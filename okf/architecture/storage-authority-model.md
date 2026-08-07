@@ -29,7 +29,7 @@ blob tier, a transport, or a best-effort derivative.
 | Resource | Binding | Role | Authoritative? |
 | --- | --- | --- | --- |
 | D1 database | `BOT_DB` (`bot-db`) | Jobs, deliveries, runs, publications, configs — all transactional state | **Yes** |
-| R2 bucket | `BOT_ARTIFACTS` (`bot-storage`) | **PR task context** (changed files, diff, commits, comments) per head — the blob tier | Immutable per head |
+| R2 bucket | `BOT_ARTIFACTS` (`bot-storage`) | **PR task context** (changed files, diff, commits, comments) per PR — the blob tier | Mutable (latest snapshot, overwritten on new head) |
 | Queue | `BOT_JOBS` (`bot-jobs`) | Async transport for job IDs | No (transport only) |
 | KV namespace | `BOT_CACHE` (`bot-cache`) | Read-through cache of hot PR/repo params (repo config, PR "card") | No (best-effort, derivative) |
 
@@ -41,14 +41,16 @@ heavy work consumes; the preview pipeline touches neither R2 nor KV.
 
 R2 objects split into two grains with different keying and retention:
 
-- **Context** (`v1/prs/{repo}/{pr}/{head}/context/{kind}`) — deterministic from
-  the PR identity, reused across commands, retained by an R2 lifecycle rule on
-  the `v1/prs/` prefix. **No D1 index table**: the key is computable from a
-  `pull_requests` row in both directions, so PR↔R2 linking is trivial.
+- **Context** (`v1/prs/{repo}/{pr}/context/{kind}`) — keyed per PR (NOT per
+  head); the latest snapshot is overwritten on each new head, with the head it
+  describes stamped inside `manifest.headSha`. Reused across commands, retained
+  by an R2 lifecycle rule on the `v1/prs/` prefix. **No D1 index table**: the
+  key is computable from a `pull_requests` row in both directions.
 - **Run-outputs** (`v1/runs/{job}/{run}/{kind}.{ext}`) — keyed by job/run,
-  indexed by the `artifacts` table, swept by the D1-backed retention cron.
-  Reserved for the LLM `response.json` of future review/impact handlers; the
-  anti-write-only rule keeps it empty until a reader ships alongside.
+  indexed by the `artifacts` table, swept by the D1-backed retention cron. The
+  `/zai review` handler is the first producer: it persists its Z.ai
+  `response.json` as a run-output and links it to the run via
+  `result_artifact_id` (`analysis_runs` is the reader/index). Impact will follow.
 
 # KV is a read-through cache
 

@@ -5,7 +5,6 @@ description: The durable job state machine (queued → running → succeeded/ret
 source_paths:
   - poc/workers/shared/storage/jobs.js
   - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
-  - poc/workers/zai-main-worker/migrations/0002_storage_hardening.sql
   - poc/workers/zai-heavy-worker/src/queue.js
 confidence: observed
 status: current

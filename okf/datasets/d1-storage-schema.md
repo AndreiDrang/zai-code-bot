@@ -1,12 +1,9 @@
 ---
 type: Dataset
 title: D1 storage schema
-description: The nine authoritative D1 tables (migrations 0001–0004) that hold all job, delivery, run, artifact, publication, and configuration state.
+description: The nine authoritative D1 tables created by a single consolidated migration (0001) that hold all job, delivery, run, artifact, publication, and configuration state.
 source_paths:
   - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
-  - poc/workers/zai-main-worker/migrations/0002_storage_hardening.sql
-  - poc/workers/zai-main-worker/migrations/0003_pr_closed_by.sql
-  - poc/workers/zai-main-worker/migrations/0004_pr_context_kind.sql
 confidence: observed
 status: current
 tags:
@@ -17,9 +14,9 @@ tags:
 
 # D1 storage schema
 
-D1 (`bot-db`) is the single source of truth. The schema is defined across three
-SQL migrations applied via `wrangler d1 migrations apply`. All timestamps are
-UTC ISO-8601 strings.
+D1 (`bot-db`) is the single source of truth. The entire schema is created from
+scratch by one consolidated migration, `0001_storage_foundation.sql`, applied
+via `wrangler d1 migrations apply`. All timestamps are UTC ISO-8601 strings.
 
 # Tables
 
@@ -35,40 +32,29 @@ UTC ISO-8601 strings.
 | `comment_publications` | `(repository_id, pr_number, comment_kind)` | [One-live-comment](/state/comment-publication.md) publication lease |
 | `repository_configs` | one per repo | Per-repo policy (enabled, maxFiles, retention profile) |
 
-# Migration 0002 hardening
+# Schema features
 
-Migration `0002_storage_hardening.sql` added bounded leases and restructured
-publications:
+The single migration creates every table, index, and constraint from scratch.
+The features that were once layered in incrementally (formerly migrations
+0002–0004) are all present in the initial create:
 
-- `jobs.lease_expires_at`, `jobs.last_failure_at` — bounded lease columns.
-- `idx_jobs_status_lease` — supports expired-lease reclaim.
-- `idx_runs_job_attempt` (unique) — enforces one run per `(job_id, attempt)`.
-- `comment_publications` restructured from per-`(repo, pr, kind, head_sha)` to
-  per-`(repo, pr, kind)` to enforce the one-live-comment policy, with
-  `status`, `lease_job_id`, `lease_expires_at` columns.
-
-# Migration 0003 — closed-by tracking
-
-Migration `0003_pr_closed_by.sql` added `pull_requests.closed_by TEXT` — the
-webhook `sender` who closed the PR, used to render the idempotent "PR closed by
-@X" lifecycle comment. NULL for open PRs; preserved across non-close events via
-`COALESCE(excluded.closed_by, pull_requests.closed_by)` in the `pull_requests`
-UPSERT (GitHub's PR API does not expose `closed_by`, so it is captured once
-from the webhook).
-
-# Migration 0004 — pr_context job kind
-
-Migration `0004_pr_context_kind.sql` rebuilds the `jobs` table (SQLite cannot
-ALTER a CHECK constraint in place) for two changes:
-
-- `jobs.kind` gains `'pr_context'` (the eager [PR-context gather](/workflows/pr-context-pipeline.md)
-  job kind) → `kind ∈ ('pr_preview', 'pr_context', 'review', 'impact')`.
-- The single-column `delivery_id UNIQUE` becomes a composite
-  `UNIQUE(delivery_id, kind)` — one webhook delivery may now spawn multiple
-  job kinds (preview + context), while the same `(delivery_id, kind)` pair
-  stays race-safe. The delivery-row FK is preserved; `createPrPreviewJob` owns
-  the delivery row (plain INSERT), `createPrContextJob` reuses it (INSERT OR
-  IGNORE).
+- **Bounded leases** — `jobs.lease_expires_at`, `jobs.last_failure_at`, and
+  `idx_jobs_status_lease` (expired-lease reclaim) exist from creation.
+- **One run per attempt** — `idx_runs_job_attempt` (unique) enforces
+  `(job_id, attempt)` uniqueness on `analysis_runs`.
+- **One-live-comment publications** — `comment_publications` is keyed by
+  `(repository_id, pr_number, comment_kind)` (NOT per head), with `status`,
+  `lease_job_id`, `lease_expires_at` columns.
+- **Closed-by tracking** — `pull_requests.closed_by TEXT` holds the webhook
+  `sender` who closed the PR (NULL for open PRs), captured once from the
+  webhook because GitHub's PR API does not expose `closed_by`. Preserved across
+  non-close events via `COALESCE(excluded.closed_by, pull_requests.closed_by)`
+  in the `pull_requests` UPSERT.
+- **pr_context job kind** — `jobs.kind ∈ ('pr_preview', 'pr_context', 'review', 'impact')`.
+- **Composite delivery uniqueness** — `UNIQUE(delivery_id, kind)` lets one
+  webhook delivery spawn multiple job kinds (preview + context) while keeping
+  each `(delivery_id, kind)` pair race-safe. `createPrPreviewJob` owns the
+  delivery row (plain INSERT); `createPrContextJob` reuses it (INSERT OR IGNORE).
 
 # Key constraints
 
@@ -89,6 +75,18 @@ ALTER a CHECK constraint in place) for two changes:
 | `idx_outbox_due` | Outbox replay |
 | `idx_artifacts_expiry` | Retention sweep |
 | `idx_runs_job` / `idx_runs_job_attempt` | Run history |
+
+# D1 migration notes
+
+D1 imposes two constraints that shaped the single-migration approach (both are
+documented in the migration header):
+
+- D1 rejects explicit `BEGIN`/`COMMIT`/`SAVEPOINT` in migration SQL (error
+  `[7500]`); wrangler applies each statement in sequence.
+- D1 ignores `PRAGMA foreign_keys = OFF` — FK enforcement is always active, so
+  a table-rebuild-by-copy migration must handle child-table FK references
+  directly. The consolidated migration creates from scratch (no rebuild of a
+  populated parent), so it sidesteps this footgun entirely for fresh inits.
 
 # Relationships
 

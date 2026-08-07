@@ -59,15 +59,18 @@ between buckets requires recreating the handler, not just editing the array:
 | `ask` | heavy | 🟡 stub |
 | `explain` | heavy | 🟡 stub |
 | `describe` | heavy | 🟡 stub |
-| `review` | heavy | 🟡 stub (legacy service-binding path) |
+| `review` | heavy | ✅ implemented (durable LLM job) |
 | `impact` | heavy | 🟡 stub (legacy service-binding path) |
 
-The migration plan is to route all heavy commands through the same durable
-Queue + D1 + R2 path as `pr_preview`.
+`/zai review` is the first heavy command migrated onto the durable Queue + D1
+- R2 path (a real LLM job that persists its `response.json` as a run-output and
+publishes a marker-idempotent review comment). `ask`, `explain`, `describe`,
+and `impact` remain stubs on the legacy service-binding delegation; the plan is
+to route them through the same durable path as they gain LLM implementations.
 
 # Relationships
 
 - Called by [webhook ingress](/workflows/webhook-ingress.md) after the gate
   chain.
-- Heavy commands that are still stubs use the legacy service-binding delegation
-  (part of the [two-worker split](/architecture/two-worker-split.md)).
+- The remaining heavy stubs use the legacy service-binding delegation (part of
+  the [two-worker split](/architecture/two-worker-split.md)).
