@@ -199,6 +199,31 @@ describe('handlePrContextJob — gather', () => {
     expect(commits[0].message).toBe('fix: thing\n\nBody line 1.\nBody line 2.'); // full body kept
   });
 
+  it('stores the comments slice via the shared projection (keeps updated_at for edits)', async () => {
+    const bucket = fakeR2();
+    const github = makeGithub({
+      getPrComments: vi.fn().mockResolvedValue({
+        issue: [{ user: { login: 'u' }, body: 'edited body', created_at: 't1', updated_at: 't2' }],
+        review: [{ user: { login: 'v' }, body: 'nit', path: 'f.js', line: 9, updated_at: 't3' }],
+      }),
+    });
+    await handlePrContextJob({
+      github,
+      env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
+      db: {},
+      job: baseJob,
+    });
+    const comments = parseJson(bucket.store.get(prContextKey(10, 7, 'comments')));
+    expect(comments.issue[0]).toMatchObject({ user: 'u', body: 'edited body', updated_at: 't2' });
+    expect(comments.review[0]).toMatchObject({
+      user: 'v',
+      body: 'nit',
+      path: 'f.js',
+      line: 9,
+      updated_at: 't3',
+    });
+  });
+
   it('truncates the diff to the configured byte budget', async () => {
     getRepositoryConfig.mockResolvedValueOnce({
       enabled: true,

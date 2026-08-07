@@ -1,6 +1,7 @@
 import { prContextKey, prCardKey } from '../../../shared/storage/keys.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
 import { createLogger } from '../../../shared/logging.js';
+import { projectComments } from '../../../shared/pr-comments.js';
 
 /**
  * Eager PR-context gather job.
@@ -85,19 +86,10 @@ export async function handlePrContextJob({ github, env, db, job }) {
       date: c.commit?.author?.date || null,
     };
   });
-  const commentsPayload = {
-    issue: (comments.issue || []).map((c) => ({
-      user: c.user?.login,
-      body: c.body,
-      created_at: c.created_at,
-    })),
-    review: (comments.review || []).map((c) => ({
-      user: c.user?.login,
-      body: c.body,
-      path: c.path,
-      line: c.line,
-    })),
-  };
+  // Shared projection — identical to the incremental comment-refresh path
+  // (shared/pr-comments.js), so the gather and the issue_comment refresh never
+  // drift in the stored slice shape. Includes `updated_at` so edits are visible.
+  const commentsPayload = projectComments(comments);
   // Prefer GitHub's unified diff; fall back to reconstructing it from the
   // per-file patches when the unified diff is unavailable. GitHub 406s the
   // .diff media type for PRs over 300 files ("diff too_large") and points users

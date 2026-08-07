@@ -35,6 +35,8 @@ import {
   createPrContextJob,
   createCommandJob,
 } from '../../shared/storage/deliveries.js';
+import { refreshCommentsSlice } from '../../shared/pr-comments.js';
+import { isPrCommentRefreshEvent, planCommentsRefresh } from './comment-events.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -77,6 +79,20 @@ export default {
         internalEvent,
         repo: webhookData.repository?.full_name,
       });
+
+      // --- Mirror PR conversation comments into the comments context slice ---
+      // issue_comment created/edited/deleted on a PR trigger a full re-fetch of
+      // the conversation (getPrComments) that overwrites comments.json, so the
+      // heavy review/impact/ask/explain handlers see fresh talk between gathers.
+      // Best-effort + non-blocking: GitHub is acked immediately and the slice is
+      // derivative (the next gather re-captures it from scratch). Runs for ALL
+      // PR comments, command or not — a /zai command still flows through below.
+      if (isPrCommentRefreshEvent(ghEvent, webhookData, env)) {
+        const plan = planCommentsRefresh(webhookData);
+        if (plan) {
+          ctx.waitUntil(refreshPrComments(env, plan).catch(() => {}));
+        }
+      }
 
       // --- Durable PR event path ---
       // PR events never enter the command parser. They are recorded in D1 and
@@ -338,4 +354,15 @@ async function postUnsupported(github, owner, name, issueNumber, commandType) {
   } catch {
     /* best-effort */
   }
+}
+
+/**
+ * Full-refresh of the PR `comments` context slice on an issue_comment event.
+ * Builds a throwaway GitHubClient (this path runs before the command path
+ * constructs one) and delegates to the shared refreshCommentsSlice. Errors are
+ * swallowed by the caller's ctx.waitUntil — the slice is derivative.
+ */
+async function refreshPrComments(env, plan) {
+  const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
+  return refreshCommentsSlice({ github, bucket: env.BOT_ARTIFACTS, ...plan });
 }
