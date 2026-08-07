@@ -4,6 +4,7 @@ export const SUPPORTED_PR_ACTIONS = Object.freeze([
   'synchronize',
   'ready_for_review',
   'edited',
+  'closed',
 ]);
 
 /**
@@ -24,6 +25,7 @@ export function isSupportedPullRequestEvent(event, action, payload = null) {
 export function extractPullRequestEvent(payload, deliveryId, action = payload?.action) {
   const repository = payload?.repository;
   const pullRequest = payload?.pull_request;
+  const sender = payload?.sender;
   if (!repository || !pullRequest || !deliveryId) return null;
   return {
     deliveryId,
@@ -41,5 +43,9 @@ export function extractPullRequestEvent(payload, deliveryId, action = payload?.a
     title: pullRequest.title,
     authorLogin: pullRequest.user?.login,
     state: pullRequest.state,
+    // Who closed the PR — only meaningful for `closed` (the webhook `sender`).
+    // Captured once here so the async heavy worker can render "closed by @X"
+    // without an extra API call: GitHub's PR API does not expose closed_by.
+    closedBy: action === 'closed' ? sender?.login : null,
   };
 }

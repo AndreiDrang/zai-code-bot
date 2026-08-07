@@ -6,7 +6,7 @@ import {
   repoConfigCacheKey,
   runArtifactKey,
 } from '../shared/storage/keys.js';
-import { renderPrPreview } from '../shared/pr-preview.js';
+import { renderPrPreview, renderPrClosed } from '../shared/pr-preview.js';
 import {
   extractPullRequestEvent,
   isSupportedPullRequestEvent,
@@ -31,7 +31,7 @@ describe('storage key contracts', () => {
 describe('PR storage event contract', () => {
   it('accepts only supported pull_request actions', () => {
     expect(isSupportedPullRequestEvent('pull_request', 'opened')).toBe(true);
-    expect(isSupportedPullRequestEvent('pull_request', 'closed')).toBe(false);
+    expect(isSupportedPullRequestEvent('pull_request', 'closed')).toBe(true);
     expect(isSupportedPullRequestEvent('issue_comment', 'opened')).toBe(false);
   });
 
@@ -80,5 +80,19 @@ describe('PR preview rendering', () => {
     expect(body).not.toContain('Lines added');
     expect(body).not.toContain('Lines deleted');
     expect(body).not.toContain('Changed Files');
+  });
+});
+
+describe('PR closed rendering', () => {
+  it('renders a marker-idempotent "closed by" lifecycle comment', () => {
+    const body = renderPrClosed({ closedBy: 'AndreiDrang' });
+    expect(body).toContain('## 🔒 PR Closed');
+    expect(body).toContain('PR closed by @AndreiDrang');
+    expect(body).toContain('<!-- zai-pr-closed -->');
+    expect(body).toContain('Powered by');
+  });
+
+  it('falls back to unknown when closedBy is missing', () => {
+    expect(renderPrClosed({})).toContain('@unknown');
   });
 });

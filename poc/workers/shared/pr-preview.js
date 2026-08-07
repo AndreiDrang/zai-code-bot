@@ -1,4 +1,4 @@
-import { PR_PREVIEW_MARKER, BOT_FOOTER } from './constants.js';
+import { PR_PREVIEW_MARKER, PR_CLOSED_MARKER, BOT_FOOTER } from './constants.js';
 
 function tableCell(value) {
   return String(value ?? '')
@@ -26,4 +26,19 @@ export function renderPrPreview({ repository, prNumber, headSha, title, authorLo
 
 ---
 ${BOT_FOOTER} ${PR_PREVIEW_MARKER}`;
+}
+
+/**
+ * Renders the one-time PR-closed lifecycle comment. `closedBy` is the webhook
+ * `sender` (who closed the PR), persisted on pull_requests.closed_by. Posted
+ * via the idempotent comment-publication path (commentKind 'pr_closed') so
+ * redelivery updates the same comment instead of duplicating it.
+ */
+export function renderPrClosed({ closedBy }) {
+  return `## 🔒 PR Closed
+
+PR closed by @${tableCell(closedBy || 'unknown')}.
+
+---
+${BOT_FOOTER} ${PR_CLOSED_MARKER}`;
 }

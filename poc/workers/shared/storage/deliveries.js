@@ -6,7 +6,7 @@ const JOB_SELECT = `
          j.status, j.attempt_count, j.available_at, j.claimed_at, j.lease_expires_at,
          j.completed_at, j.last_error_code, j.last_failure_at, j.config_version,
          r.owner AS repository_owner, r.name AS repository_name, r.full_name AS repository_full_name,
-         p.title, p.author_login
+         p.title, p.author_login, p.state, p.closed_by
   FROM jobs j
   JOIN repositories r ON r.repository_id = j.repository_id
   JOIN pull_requests p ON p.repository_id = j.repository_id AND p.pr_number = j.pr_number
@@ -57,12 +57,14 @@ export async function createPrPreviewJob(db, event, now = new Date().toISOString
     prepare(
       db,
       `INSERT INTO pull_requests
-       (repository_id, pr_number, head_sha, base_sha, title, author_login, state, last_event_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (repository_id, pr_number, head_sha, base_sha, title, author_login, state, closed_by, last_event_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(repository_id, pr_number) DO UPDATE SET
          head_sha = excluded.head_sha, base_sha = excluded.base_sha,
          title = excluded.title, author_login = excluded.author_login,
-         state = excluded.state, last_event_at = excluded.last_event_at,
+         state = excluded.state,
+         closed_by = COALESCE(excluded.closed_by, pull_requests.closed_by),
+         last_event_at = excluded.last_event_at,
          updated_at = excluded.updated_at`,
       repositoryId,
       prNumber,
@@ -71,6 +73,7 @@ export async function createPrPreviewJob(db, event, now = new Date().toISOString
       event.title || null,
       event.authorLogin || null,
       event.state || 'open',
+      event.closedBy || null,
       now,
       now,
       now,

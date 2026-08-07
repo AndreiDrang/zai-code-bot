@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 export const COMMENT_MARKER = '<!-- zai-code-review -->';
 export const PR_PREVIEW_MARKER = '<!-- zai-pr-preview -->';
+export const PR_CLOSED_MARKER = '<!-- zai-pr-closed -->';
 export const REVIEW_MARKER = '<!-- zai-review -->';
 export const IMPACT_MARKER = '<!-- zai-impact -->';
 export const PROGRESS_MARKER = '<!-- zai-progress -->';
