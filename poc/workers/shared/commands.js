@@ -88,14 +88,11 @@ ${COMMENT_MARKER}`;
  * @returns {string}
  */
 export function formatCommandNotAvailable(command) {
-  return `## ⚠️ Command Not Available in POC
+  return `## ⚠️ Unknown Command
 
-The command \`/zai ${command}\` is recognized but not yet implemented in this POC.
+\`/zai ${command}\` isn't a recognized command.
 
-Currently functional:
-- \`/zai help\` — Show help message
-
-Other commands will be wired up as handlers are migrated.
+Run \`/zai help\` to see the available commands.
 
 ---
 ${BOT_FOOTER}
