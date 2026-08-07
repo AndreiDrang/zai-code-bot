@@ -50,8 +50,11 @@ export async function handlePrContextJob({ github, env, db, job }) {
       .catch(() => ({ issue: [], review: [] })),
   ]);
 
-  // Compact projections — store what consumers need, not raw API blobs.
-  const files = (Array.isArray(filesPage) ? filesPage : []).slice(0, maxFiles).map((f) => ({
+  // Compact projections — store what consumers need, not raw API blobs. The
+  // raw page is kept separately so the diff can be reconstructed from the
+  // per-file patches when GitHub refuses the unified diff (PRs > 300 files).
+  const rawFiles = Array.isArray(filesPage) ? filesPage : [];
+  const files = rawFiles.slice(0, maxFiles).map((f) => ({
     filename: f.filename,
     status: f.status,
     additions: f.additions,
@@ -77,7 +80,18 @@ export async function handlePrContextJob({ github, env, db, job }) {
       line: c.line,
     })),
   };
-  const diffText = typeof diff === 'string' ? diff.slice(0, maxBytes) : '';
+  // Prefer GitHub's unified diff; fall back to reconstructing it from the
+  // per-file patches when the unified diff is unavailable. GitHub 406s the
+  // .diff media type for PRs over 300 files ("diff too_large") and points users
+  // at the List-Files API — whose `patch` field we already fetched above.
+  const unifiedDiff = typeof diff === 'string' && diff.length ? diff : '';
+  let diffSource = 'none';
+  if (unifiedDiff) {
+    diffSource = 'unified';
+  } else if (rawFiles.some((f) => typeof f.patch === 'string' && f.patch.length)) {
+    diffSource = 'reconstructed';
+  }
+  const diffText = (unifiedDiff || reconstructDiff(rawFiles.slice(0, maxFiles))).slice(0, maxBytes);
 
   const aggregates = aggregateFiles(files);
   const gatheredAt = new Date().toISOString();
@@ -110,7 +124,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
         issueComments: commentsPayload.issue.length,
         reviewComments: commentsPayload.review.length,
       },
-      truncated: { diffBytes: diffText.length, maxBytes },
+      truncated: { diffBytes: diffText.length, maxBytes, diffSource },
     };
     await putJson(bucket, manifestKey, manifest);
   }
@@ -168,6 +182,27 @@ function aggregateFiles(files) {
     deletions += Number(f.deletions) || 0;
   }
   return { changedFiles: files.length, additions, deletions };
+}
+
+/**
+ * Build a unified-diff-shaped string from the per-file `patch` fields returned
+ * by the List-Files API. This is the GitHub-recommended fallback when the PR's
+ * unified .diff media type is refused ("diff exceeded the maximum number of
+ * files (300)") or otherwise unavailable. Output is bounded by the caller via
+ * maxBytes before it reaches R2.
+ */
+function reconstructDiff(files) {
+  const parts = [];
+  for (const f of files) {
+    if (typeof f.patch !== 'string' || !f.patch) continue;
+    parts.push(
+      `diff --git a/${f.filename} b/${f.filename}`,
+      `--- a/${f.filename}`,
+      `+++ b/${f.filename}`,
+      f.patch,
+    );
+  }
+  return parts.join('\n');
 }
 
 function putJson(bucket, key, value) {

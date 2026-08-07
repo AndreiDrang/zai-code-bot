@@ -192,6 +192,44 @@ describe('handlePrContextJob — gather', () => {
     expect(manifest.truncated.diffBytes).toBe(0); // diff slice failed → ''
   });
 
+  it('reconstructs the diff from per-file patches when the unified diff is unavailable (>300-file PRs)', async () => {
+    const bucket = fakeR2();
+    const github = makeGithub({
+      getPrDiff: vi.fn().mockResolvedValue(''), // GitHub 406 "diff too_large" swallowed to ''
+      getPrFiles: vi.fn().mockResolvedValue([
+        {
+          filename: 'a.js',
+          status: 'modified',
+          additions: 5,
+          deletions: 1,
+          changes: 6,
+          patch: '@@ -1 +1 @@\n-old\n+new',
+        },
+        {
+          filename: 'b.js',
+          status: 'added',
+          additions: 5,
+          deletions: 0,
+          changes: 5,
+          patch: '@@ -0,0 +1 @@\n+added',
+        },
+      ]),
+    });
+    await handlePrContextJob({
+      github,
+      env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
+      db: {},
+      job: baseJob,
+    });
+    const storedDiff = bucket.store.get(prContextKey(10, 7, 'abc', 'diff'));
+    expect(storedDiff).toContain('a.js');
+    expect(storedDiff).toContain('b.js');
+    expect(storedDiff).toContain('@@ -1 +1 @@');
+    expect(storedDiff).toContain('+new');
+    const manifest = parseJson(bucket.store.get(prContextKey(10, 7, 'abc', 'manifest')));
+    expect(manifest.truncated.diffSource).toBe('reconstructed');
+  });
+
   it('still succeeds with no R2/KV bindings (writes are no-ops)', async () => {
     const res = await handlePrContextJob({
       github: makeGithub(),
