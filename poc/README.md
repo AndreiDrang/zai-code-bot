@@ -359,7 +359,7 @@ The two R2 grains are retained differently:
   **bucket-level lifecycle rule** on the `v1/prs/` prefix; there is no D1 row
   to sweep. Documented in both `wrangler.toml` files; apply via
   `npx wrangler r2 bucket lifecycle add bot-storage --id pr-context-retention
-  --prefix "v1/prs/" --expire-days 30` (R2 lifecycle rules cannot be declared
+--prefix "v1/prs/" --expire-days 30` (R2 lifecycle rules cannot be declared
   in `wrangler.toml`).
 - **Run-outputs (`v1/runs/`)** — indexed by the `artifacts` table. Each object
   gets an `expires_at`; the 5-min cron `sweepExpiredStorage` deletes the R2
@@ -473,8 +473,8 @@ state machine, queue retry budget, gather pipeline, and context readers.
 | Webhook ingress + signature gate                              | ✅ implemented                                                  |
 | Light `help` handler                                          | ✅ implemented                                                  |
 | Durable PR-preview job (D1 + Queue, metadata-only)            | ✅ implemented                                                  |
-| Eager PR-context gather (R2 context + KV card)               | ✅ implemented                                                  |
-| Context-aware review/impact/ask/explain                      | 🟡 stub (read gathered context; LLM pending)                    |
+| Eager PR-context gather (R2 context + KV card)                | ✅ implemented                                                  |
+| Context-aware review/impact/ask/explain                       | 🟡 stub (read gathered context; LLM pending)                    |
 | 3-attempt retry budget + lease recovery                       | ✅ implemented                                                  |
 | One-live-comment publication (D1 lease)                       | ✅ implemented                                                  |
 | 30-day retention + cron sweep                                 | ✅ implemented                                                  |
