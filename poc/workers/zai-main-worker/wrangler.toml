@@ -20,6 +20,12 @@ migrations_dir = "migrations"
 binding = "BOT_ARTIFACTS"
 bucket_name = "bot-storage"
 
+# R2 lifecycle for the PR-context tier: objects under `v1/prs/` (the gather
+# output) expire after R2_RETENTION_DAYS (30). Bucket-level rule — apply via:
+#   npx wrangler r2 bucket lifecycle add bot-storage \
+#     --id pr-context-retention --prefix "v1/prs/" --expire-days 30
+# (Mirrored in zai-heavy-worker/wrangler.toml; the rule lives on the bucket.)
+
 [[kv_namespaces]]
 binding = "BOT_CACHE"
 id = "a0fca8c009de4e57a0d241d5ebcaf055"

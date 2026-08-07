@@ -8,7 +8,7 @@ import {
   run,
   safeErrorCode,
 } from '../shared/storage/database.js';
-import { createPrPreviewJob, getJob } from '../shared/storage/deliveries.js';
+import { createPrPreviewJob, createPrContextJob, getJob } from '../shared/storage/deliveries.js';
 import { getRepositoryConfig, saveRepositoryConfig } from '../shared/storage/config.js';
 import {
   claimJob,
@@ -145,6 +145,39 @@ describe('D1 storage adapters', () => {
 
   it('reads a job by ID', async () => {
     await expect(getJob(fakeDb(), 'job-1')).resolves.toBe(job);
+  });
+
+  it('creates a pr_context job reusing the delivery row', async () => {
+    const db = fakeDb({ firstValue: null });
+    let selectCount = 0;
+    const contextJob = { ...job, kind: 'pr_context' };
+    db.prepare = (sql) => ({
+      bind: (...bindings) => {
+        const statement = {
+          sql,
+          bindings,
+          first: vi
+            .fn()
+            .mockResolvedValue(
+              sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : contextJob) : null,
+            ),
+          run: vi.fn(),
+          all: vi.fn(),
+        };
+        return statement;
+      },
+    });
+    const result = await createPrContextJob(db, {
+      deliveryId: 'delivery-1',
+      action: 'opened',
+      repositoryId: 10,
+      repository: { owner: 'owner', name: 'repo', fullName: 'owner/repo' },
+      prNumber: 7,
+      headSha: 'abc',
+    });
+    expect(result.created).toBe(true);
+    expect(result.job.kind).toBe('pr_context');
+    expect(db.batch).toHaveBeenCalledOnce();
   });
 
   it('sets a lease when claiming a queued job', async () => {

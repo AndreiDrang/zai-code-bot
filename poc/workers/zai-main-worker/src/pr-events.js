@@ -8,6 +8,20 @@ export const SUPPORTED_PR_ACTIONS = Object.freeze([
 ]);
 
 /**
+ * Actions that introduce a NEW head SHA worth gathering PR context for.
+ * `edited` (title change) and `closed` carry no new content, so the eager
+ * pr_context job is created only for these. (The gather handler is itself
+ * idempotent per head via the R2 manifest, so this is an optimization that
+ * avoids pointless job rows + queue round-trips, not a correctness gate.)
+ */
+export const CONTEXT_TRIGGER_ACTIONS = Object.freeze([
+  'opened',
+  'reopened',
+  'synchronize',
+  'ready_for_review',
+]);
+
+/**
  * Gate for the durable PR-preview path.
  *
  * `edited` fires for title, body, and base changes, but the preview is

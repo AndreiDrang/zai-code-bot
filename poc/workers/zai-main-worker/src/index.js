@@ -19,14 +19,18 @@ import { COMMENT_MARKER, BOT_FOOTER } from '../../shared/constants.js';
 import { classifyCommand } from './router.js';
 import { buildDelegationPayload, delegateToHeavy } from './delegator.js';
 import { getLightHandler } from './handlers/index.js';
-import { extractPullRequestEvent, isSupportedPullRequestEvent } from './pr-events.js';
+import {
+  extractPullRequestEvent,
+  isSupportedPullRequestEvent,
+  CONTEXT_TRIGGER_ACTIONS,
+} from './pr-events.js';
 import {
   enqueueJob,
   recoverExpiredJobs,
   replayDueOutbox,
   sweepExpiredStorage,
 } from './job-enqueuer.js';
-import { createPrPreviewJob } from '../../shared/storage/deliveries.js';
+import { createPrPreviewJob, createPrContextJob } from '../../shared/storage/deliveries.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -83,9 +87,16 @@ export default {
           logger.error('PR storage is not configured or payload is incomplete', { correlationId });
           return new Response('Service Unavailable', { status: 503 });
         }
-        const { job, created } = await createPrPreviewJob(env.BOT_DB, prEvent);
+        const preview = await createPrPreviewJob(env.BOT_DB, prEvent);
+        // Eager PR-context gather: only head-producing actions spawn a context
+        // job (edited/closed carry no new content). The gather is idempotent
+        // per head via the R2 manifest, so this avoids pointless job rows.
+        const context = CONTEXT_TRIGGER_ACTIONS.includes(prEvent.action)
+          ? await createPrContextJob(env.BOT_DB, prEvent)
+          : null;
         try {
-          await enqueueJob(env, job.job_id);
+          await enqueueJob(env, preview.job.job_id);
+          if (context?.job) await enqueueJob(env, context.job.job_id);
         } catch (error) {
           logger.error('PR job enqueue failed', { message: error?.message, correlationId });
           return new Response('Service Unavailable', { status: 503 });
@@ -93,8 +104,9 @@ export default {
         return json(202, {
           status: 'accepted',
           kind: 'pr_preview',
-          jobId: job.job_id,
-          duplicate: !created,
+          jobId: preview.job.job_id,
+          contextJobId: context?.job?.job_id ?? null,
+          duplicate: !preview.created,
         });
       }
 

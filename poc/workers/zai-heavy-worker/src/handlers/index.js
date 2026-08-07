@@ -9,6 +9,7 @@ import { handleDescribeCommand } from './describe.js';
 import { handleReviewCommand } from './review.js';
 import { handleImpactCommand } from './impact.js';
 import { handlePrPreviewJob } from './pr-preview.js';
+import { handlePrContextJob } from './pr-context.js';
 
 /**
  * @param {string} commandType
@@ -28,6 +29,8 @@ export function getHeavyHandler(commandType) {
       return handleImpactCommand;
     case 'pr_preview':
       return handlePrPreviewJob;
+    case 'pr_context':
+      return handlePrContextJob;
     default:
       return null;
   }

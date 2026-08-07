@@ -1,7 +1,7 @@
-import { PR_PREVIEW_JOB_KIND, STORAGE_SCHEMA_VERSION } from './keys.js';
+import { PR_PREVIEW_JOB_KIND, PR_CONTEXT_JOB_KIND, STORAGE_SCHEMA_VERSION } from './keys.js';
 import { batch, first, prepare } from './database.js';
 
-const JOB_SELECT = `
+const JOB_BASE = `
   SELECT j.job_id, j.delivery_id, j.kind, j.repository_id, j.pr_number, j.head_sha,
          j.status, j.attempt_count, j.available_at, j.claimed_at, j.lease_expires_at,
          j.completed_at, j.last_error_code, j.last_failure_at, j.config_version,
@@ -10,8 +10,12 @@ const JOB_SELECT = `
   FROM jobs j
   JOIN repositories r ON r.repository_id = j.repository_id
   JOIN pull_requests p ON p.repository_id = j.repository_id AND p.pr_number = j.pr_number
-  WHERE j.delivery_id = ?
 `;
+
+/** Loads the job of a specific kind created for a delivery (per-kind idempotency). */
+function jobByDeliveryKind(db, deliveryId, kind) {
+  return first(prepare(db, `${JOB_BASE} WHERE j.delivery_id = ? AND j.kind = ?`, deliveryId, kind));
+}
 
 function validateEvent(event) {
   const required = ['deliveryId', 'repositoryId', 'repository', 'prNumber', 'headSha'];
@@ -29,12 +33,16 @@ function validateEvent(event) {
 }
 
 /**
- * Atomically records a pull_request delivery and creates its preview job.
- * Duplicate GitHub deliveries return the existing job without creating state.
+ * Shared create path for a pull_request delivery job of a given `kind`.
+ * `ownsDelivery` controls the webhook_deliveries insert: the FIRST job created
+ * for a delivery inserts the delivery row (plain INSERT, doubling as the PK
+ * race guard); a second job kind for the same delivery reuses that row via
+ * INSERT OR IGNORE. Per-kind uniqueness is enforced by UNIQUE(delivery_id, kind)
+ * (migration 0004), so the catch path reconciles a concurrent winner.
  */
-export async function createPrPreviewJob(db, event, now = new Date().toISOString()) {
+async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().toISOString()) {
   validateEvent(event);
-  const existing = await first(prepare(db, JOB_SELECT, event.deliveryId));
+  const existing = await jobByDeliveryKind(db, event.deliveryId, kind);
   if (existing) return { job: existing, created: false };
 
   const jobId = crypto.randomUUID();
@@ -80,9 +88,13 @@ export async function createPrPreviewJob(db, event, now = new Date().toISOString
     ),
     prepare(
       db,
-      `INSERT INTO webhook_deliveries
-       (delivery_id, event_name, action, repository_id, pr_number, head_sha, received_at)
-       VALUES (?, 'pull_request', ?, ?, ?, ?, ?)`,
+      ownsDelivery
+        ? `INSERT INTO webhook_deliveries
+           (delivery_id, event_name, action, repository_id, pr_number, head_sha, received_at)
+           VALUES (?, 'pull_request', ?, ?, ?, ?, ?)`
+        : `INSERT OR IGNORE INTO webhook_deliveries
+           (delivery_id, event_name, action, repository_id, pr_number, head_sha, received_at)
+           VALUES (?, 'pull_request', ?, ?, ?, ?, ?)`,
       event.deliveryId,
       event.action,
       repositoryId,
@@ -98,7 +110,7 @@ export async function createPrPreviewJob(db, event, now = new Date().toISOString
        VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, 1, ?, ?)`,
       jobId,
       event.deliveryId,
-      PR_PREVIEW_JOB_KIND,
+      kind,
       repositoryId,
       prNumber,
       event.headSha,
@@ -121,24 +133,41 @@ export async function createPrPreviewJob(db, event, now = new Date().toISOString
   try {
     await batch(db, statements);
   } catch (error) {
-    // A concurrent duplicate can win the unique delivery constraint. Reading
-    // the winner makes webhook retries safe without exposing SQL internals.
-    const duplicate = await first(prepare(db, JOB_SELECT, event.deliveryId));
+    // A concurrent duplicate can win the UNIQUE(delivery_id, kind) constraint.
+    // Reading the winner makes webhook retries safe without exposing SQL internals.
+    const duplicate = await jobByDeliveryKind(db, event.deliveryId, kind);
     if (duplicate) return { job: duplicate, created: false };
     throw error;
   }
 
-  const job = await first(prepare(db, JOB_SELECT, event.deliveryId));
-  if (!job) throw new Error(`Created PR job ${jobId} could not be loaded`);
+  const job = await jobByDeliveryKind(db, event.deliveryId, kind);
+  if (!job) throw new Error(`Created ${kind} job ${jobId} could not be loaded`);
   return { job, created: true, schemaVersion: STORAGE_SCHEMA_VERSION };
 }
 
-export async function getJob(db, jobId) {
-  return first(
-    prepare(db, JOB_SELECT.replace('WHERE j.delivery_id = ?', 'WHERE j.job_id = ?'), jobId),
-  );
+/**
+ * Records a pull_request delivery and creates its metadata-only preview job.
+ * Owns the delivery row (the context job created alongside reuses it).
+ */
+export function createPrPreviewJob(db, event, now) {
+  return createPrJob(db, event, PR_PREVIEW_JOB_KIND, { ownsDelivery: true }, now);
 }
 
-export async function getJobByDelivery(db, deliveryId) {
-  return first(prepare(db, JOB_SELECT, deliveryId));
+/**
+ * Records (or returns the existing) eager PR-context gather job for a delivery.
+ * Reuses the delivery + PR rows already written by the preview job; idempotent
+ * on (delivery_id, 'pr_context'). Only created for headSha-producing actions.
+ */
+export function createPrContextJob(db, event, now) {
+  return createPrJob(db, event, PR_CONTEXT_JOB_KIND, { ownsDelivery: false }, now);
+}
+
+export async function getJob(db, jobId) {
+  return first(prepare(db, `${JOB_BASE} WHERE j.job_id = ?`, jobId));
+}
+
+export async function getJobByDelivery(db, deliveryId, kind) {
+  return kind
+    ? jobByDeliveryKind(db, deliveryId, kind)
+    : first(prepare(db, `${JOB_BASE} WHERE j.delivery_id = ?`, deliveryId));
 }
