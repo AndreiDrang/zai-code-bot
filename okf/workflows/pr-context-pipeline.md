@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: PR-context gather pipeline
-description: Eager gather of PR task context into per-PR R2 keys (overwritten on each new head) and a KV pr-card; the blob tier consumed by the heavy review/impact/ask/explain handlers.
+description: The writer side of the PR-context tier — a full eager gather (on each new head) plus incremental single-slice refreshes (comments on issue_comment, description on PR body edit) that keep the per-PR R2 keys + KV pr-card fresh between gathers; consumed by the heavy review/impact/ask/explain handlers.
 source_paths:
   - poc/workers/zai-main-worker/src/index.js
   - poc/workers/zai-main-worker/src/pr-events.js
@@ -10,7 +10,12 @@ source_paths:
   - poc/workers/shared/github.js
   - poc/workers/zai-heavy-worker/src/handlers/pr-context.js
   - poc/workers/shared/pr-context-reader.js
+  - poc/workers/shared/pr-comments.js
+  - poc/workers/shared/pr-description.js
+  - poc/workers/zai-main-worker/src/comment-events.js
   - poc/workers/tests/pr-context.test.js
+  - poc/workers/tests/pr-comments.test.js
+  - poc/workers/tests/pr-description.test.js
 confidence: observed
 status: current
 tags:
@@ -21,21 +26,30 @@ tags:
 
 # PR-context gather pipeline
 
-The **writer** half of the PR-context tier. On a head-producing PR event the
-main worker enqueues a `pr_context` job alongside the preview; the heavy worker
-gathers the PR's task context (changed files, diff, commits, description,
-comments) into **per-PR** R2 keys and a small KV pr-card. The context is a
-living snapshot of the PR — each new head overwrites it — and the matching
-**readers** (the context-aware review/impact/ask/explain handlers) ship with it
-(anti-write-only rule).
+The **writer** half of the PR-context tier, with two modes that share the same
+per-PR R2 keys (`v1/prs/{repo}/{pr}/context/{kind}`):
+
+- **Full gather** (heavy worker, on each new head) — re-captures every slice
+  (files, diff, commits, description, comments) + the KV pr-card. This is the
+  Trigger / Steps / Idempotency / Outcomes flow below.
+- **Incremental slice refresh** (main worker, on edit events) — refreshes a
+  SINGLE slice between gathers so the heavy readers see fresh conversation and
+  description without waiting for a push. See
+  [Incremental slice refresh](#incremental-slice-refresh-between-gathers).
+
+The context is a living snapshot of the PR — each new head overwrites it — and
+the matching **readers** (the context-aware review/impact/ask/explain handlers)
+ship with the gather (anti-write-only rule).
 
 # Trigger
 
 A `pull_request` webhook whose action is in `CONTEXT_TRIGGER_ACTIONS`:
-`opened`, `reopened`, `synchronize`, `ready_for_review`. `edited` (title) and
-`closed` carry no new content, so no context job is created for them. The
-preview job is always created; the context job is created alongside it on the
-same delivery.
+`opened`, `reopened`, `synchronize`, `ready_for_review`. `edited` and `closed`
+do NOT spawn a full gather job — but a body edit (`changes.body`) triggers an
+[incremental description refresh](#incremental-slice-refresh-between-gathers)
+instead, so the description slice stays fresh without a push. The preview job is
+always created; the context job is created alongside it on the same delivery
+(head-producing actions only).
 
 # Steps
 
@@ -112,6 +126,42 @@ degrades.
 | Redelivery (manifest head === job head) | `succeeded` (`skipped`) | No |
 | Slice failure (partial) | `succeeded` | Yes (degraded — manifest records gaps) |
 | Retryable failure (attempts 1–2) | `retryable` | No (manifest not yet written → re-gather) |
+
+# Incremental slice refresh (between gathers)
+
+Edit events keep individual slices fresh without a full re-gather. The main
+worker schedules a best-effort, non-blocking `ctx.waitUntil(...)` write — no D1
+job, no queue round-trip (the refresh is light: one GitHub fetch or zero, plus a
+single R2 `put`). Errors are swallowed; the slice is derivative and the next
+gather re-captures it from scratch.
+
+| Trigger | Slice | Source | API call? |
+| --- | --- | --- | --- |
+| `issue_comment` created/edited/deleted on a PR | `comments` | `getPrComments` (full conversation) | Yes — one webhook carries one comment, not the whole thread |
+| `pull_request.edited` with `changes.body` | `description` | `payload.pull_request.body` | **No** — the edited webhook carries the new body in-payload |
+
+**Why two writers are safe.** Each slice has ONE projection, shared by the full
+gather and its incremental refresh, so last-writer-wins on the single R2 key
+always leaves a consistent slice:
+
+- `comments` — `projectComments(raw)` (`shared/pr-comments.js`): issue
+  `{user, body, created_at, updated_at}` + review `{user, body, path, line,
+  updated_at}`. `updated_at` is kept so edits are visible. The gather imports
+  the same function — the two writers can never drift in shape.
+- `description` — the PR `body` string (`pullRequest.body || ''`). Both writers
+  store the identical source value.
+
+**Idempotency.** The comments refresh is a full re-fetch, so a webhook
+re-delivery writes identical bytes (never appends or duplicates — the property
+that makes full-refresh correct where an insert-one path would duplicate). The
+description refresh writes the deterministic payload body. A refresh racing the
+gather is safe: same key, same projection → whichever lands last is a valid
+snapshot.
+
+**Predicates.** `isPrCommentRefreshEvent` / `planCommentsRefresh`
+(`main/comment-events.js`) and `isPrDescriptionEditEvent` /
+`planDescriptionRefresh` (`main/pr-events.js`) are pure and unit-tested without
+the fetch handler.
 
 # Relationships
 

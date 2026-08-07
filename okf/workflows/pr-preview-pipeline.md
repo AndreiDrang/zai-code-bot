@@ -32,7 +32,10 @@ across the [two-worker split](/architecture/two-worker-split.md).
 A `pull_request` webhook with one of these actions: `opened`, `reopened`,
 `synchronize`, `ready_for_review`, `edited` (title changes only), or `closed`.
 These events **never** enter the command parser — they are detected early and
-routed directly to storage.
+routed directly to storage. A body-only edit does NOT re-render the preview
+(the brief is metadata-only); instead it triggers an [incremental description
+refresh](/workflows/pr-context-pipeline.md#incremental-slice-refresh-between-gathers)
+in the context pipeline. An edit to both title and body fires both.
 
 # Steps
 

@@ -7,6 +7,8 @@ source_paths:
   - poc/workers/shared/storage/database.js
   - poc/workers/shared/storage/keys.js
   - poc/workers/shared/pr-context-reader.js
+  - poc/workers/shared/pr-comments.js
+  - poc/workers/shared/pr-description.js
   - poc/workers/zai-heavy-worker/src/handlers/pr-context.js
   - poc/workers/zai-main-worker/wrangler.toml
   - poc/workers/zai-heavy-worker/wrangler.toml
@@ -29,7 +31,7 @@ blob tier, a transport, or a best-effort derivative.
 | Resource | Binding | Role | Authoritative? |
 | --- | --- | --- | --- |
 | D1 database | `BOT_DB` (`bot-db`) | Jobs, deliveries, runs, publications, configs — all transactional state | **Yes** |
-| R2 bucket | `BOT_ARTIFACTS` (`bot-storage`) | **PR task context** (changed files, diff, commits, comments) per PR — the blob tier | Mutable (latest snapshot, overwritten on new head) |
+| R2 bucket | `BOT_ARTIFACTS` (`bot-storage`) | **PR task context** (changed files, diff, commits, description, comments) per PR — the blob tier | Mutable (latest snapshot; overwritten on new head by the gather, refreshed slice-by-slice on edit events) |
 | Queue | `BOT_JOBS` (`bot-jobs`) | Async transport for job IDs | No (transport only) |
 | KV namespace | `BOT_CACHE` (`bot-cache`) | Read-through cache of hot PR/repo params (repo config, PR "card") | No (best-effort, derivative) |
 
@@ -43,9 +45,13 @@ R2 objects split into two grains with different keying and retention:
 
 - **Context** (`v1/prs/{repo}/{pr}/context/{kind}`) — keyed per PR (NOT per
   head); the latest snapshot is overwritten on each new head, with the head it
-  describes stamped inside `manifest.headSha`. Reused across commands, retained
-  by an R2 lifecycle rule on the `v1/prs/` prefix. **No D1 index table**: the
-  key is computable from a `pull_requests` row in both directions.
+  describes stamped inside `manifest.headSha`. Two writers share these keys: the
+  full [gather](/workflows/pr-context-pipeline.md) (every slice, on a new head)
+  and the [incremental slice refresh](/workflows/pr-context-pipeline.md#incremental-slice-refresh-between-gathers)
+  (a single slice, on an edit event) — safe because each slice has one shared
+  projection. Retained by an R2 lifecycle rule on the `v1/prs/` prefix. **No D1
+  index table**: the key is computable from a `pull_requests` row in both
+  directions.
 - **Run-outputs** (`v1/runs/{job}/{run}/{kind}.{ext}`) — keyed by job/run,
   indexed by the `artifacts` table, swept by the D1-backed retention cron. The
   `/zai review` handler is the first producer: it persists its Z.ai
