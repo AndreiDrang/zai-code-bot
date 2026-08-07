@@ -15,7 +15,7 @@ import { resolveSecretValue } from '../../shared/secrets.js';
 import { parseCommand, isCommand, formatCommandNotAvailable } from '../../shared/commands.js';
 import { authorizeCommenter } from '../../shared/auth.js';
 import { createLogger, logPerformance, generateCorrelationId } from '../../shared/logging.js';
-import { COMMENT_MARKER } from '../../shared/constants.js';
+import { COMMENT_MARKER, BOT_FOOTER } from '../../shared/constants.js';
 import { classifyCommand } from './router.js';
 import { buildDelegationPayload, delegateToHeavy } from './delegator.js';
 import { getLightHandler } from './handlers/index.js';
@@ -240,7 +240,7 @@ async function postUnauthorizedComment(github, owner, name, issueNumber, usernam
       owner,
       name,
       issueNumber,
-      `## ⚠️ Authorization Required\n\n@${username}, you need collaborator access to run /zai commands here.\n\n${COMMENT_MARKER}`,
+      `## ⚠️ Authorization Required\n\n@${username}, you need collaborator access to run /zai commands here.\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
     );
   } catch {
     /* best-effort */

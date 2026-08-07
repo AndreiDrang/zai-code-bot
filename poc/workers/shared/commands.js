@@ -4,7 +4,7 @@
  * Pure module — safe to import from both workers.
  */
 
-import { COMMENT_MARKER, AVAILABLE_COMMANDS } from './constants.js';
+import { COMMENT_MARKER, AVAILABLE_COMMANDS, BOT_FOOTER } from './constants.js';
 
 // Invocation form: /zai only. The @zai-bot mention and /zai-bot slash forms
 // were removed — callers must invoke the bot with "/zai <command>".
@@ -77,7 +77,7 @@ Available commands:
 - *(heavy)* commands run on the dedicated heavy worker
 
 ---
-*Powered by [AndreiDrang](https://github.com/AndreiDrang), [Z.ai](https://z.ai) and [Cloudflare Workers](https://cloudflare.com)*
+${BOT_FOOTER}
 
 ${COMMENT_MARKER}`;
 }
@@ -96,6 +96,9 @@ Currently functional:
 - \`/zai help\` — Show help message
 
 Other commands will be wired up as handlers are migrated.
+
+---
+${BOT_FOOTER}
 
 ${COMMENT_MARKER}`;
 }

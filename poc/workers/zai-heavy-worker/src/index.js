@@ -17,7 +17,7 @@
 
 import { GitHubClient } from '../../shared/github.js';
 import { createLogger, generateCorrelationId } from '../../shared/logging.js';
-import { INTERNAL_TOKEN_HEADER } from '../../shared/constants.js';
+import { INTERNAL_TOKEN_HEADER, COMMENT_MARKER, BOT_FOOTER } from '../../shared/constants.js';
 import { resolveSecretValue } from '../../shared/secrets.js';
 import { getHeavyHandler } from './handlers/index.js';
 import { processQueueBatch } from './queue.js';
@@ -108,7 +108,7 @@ async function runHeavy(env, handler, payload, correlationId, logger) {
         payload.repository?.owner,
         payload.repository?.name,
         payload.issue?.number,
-        `## ❌ Command failed\n\nThe \`${payload?.command?.type}\` command could not complete. Please retry.\n\n<!-- zai-code-review -->`,
+        `## ❌ Command failed\n\nThe \`${payload?.command?.type}\` command could not complete. Please retry.\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
       );
     } catch {
       /* nothing more we can do */

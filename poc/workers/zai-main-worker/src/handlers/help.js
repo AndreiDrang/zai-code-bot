@@ -3,7 +3,7 @@
  */
 
 import { formatHelp } from '../../../shared/commands.js';
-import { COMMENT_MARKER, SUCCESS_MESSAGES } from '../../../shared/constants.js';
+import { COMMENT_MARKER, SUCCESS_MESSAGES, BOT_FOOTER } from '../../../shared/constants.js';
 import { createLogger } from '../../../shared/logging.js';
 
 /**
@@ -42,7 +42,7 @@ async function postErrorComment(github, repository, issue, error) {
       repository.owner.login,
       repository.name,
       issue.number,
-      `## ❌ Error Processing /zai help\n\nPlease try again later.\n\n${COMMENT_MARKER}`,
+      `## ❌ Error Processing /zai help\n\nPlease try again later.\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
     );
   } catch {
     /* best-effort; nothing else we can do */

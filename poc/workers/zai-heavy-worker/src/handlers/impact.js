@@ -6,7 +6,7 @@
  * post result, and best-effort apply suggested labels.
  */
 
-import { COMMENT_MARKER } from '../../../shared/constants.js';
+import { COMMENT_MARKER, BOT_FOOTER } from '../../../shared/constants.js';
 import { createLogger } from '../../../shared/logging.js';
 
 /**
@@ -27,7 +27,7 @@ export async function handleImpactCommand({ github, payload }) {
     repository.owner,
     repository.name,
     issue.number,
-    `## 📊 /zai impact\n\nImpact & risk analysis is queued on the heavy worker. (POC stub — full implementation pending.)\n\n${COMMENT_MARKER}`,
+    `## 📊 /zai impact\n\nImpact & risk analysis is queued on the heavy worker. (POC stub — full implementation pending.)\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
   );
 
   return {

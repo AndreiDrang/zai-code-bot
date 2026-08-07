@@ -8,7 +8,7 @@
  * Heavy handlers own their own GitHub I/O (they run after main has acked).
  */
 
-import { COMMENT_MARKER } from '../../../shared/constants.js';
+import { COMMENT_MARKER, BOT_FOOTER } from '../../../shared/constants.js';
 import { createLogger } from '../../../shared/logging.js';
 
 /**
@@ -29,7 +29,7 @@ export async function handleDescribeCommand({ github, payload }) {
     repository.owner,
     repository.name,
     issue.number,
-    `## 📝 /zai describe\n\nPR description generation is queued on the heavy worker. (POC stub — full implementation pending.)\n\n${COMMENT_MARKER}`,
+    `## 📝 /zai describe\n\nPR description generation is queued on the heavy worker. (POC stub — full implementation pending.)\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
   );
 
   return {

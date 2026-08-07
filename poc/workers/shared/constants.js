@@ -53,6 +53,14 @@ export const DEFAULT_CONFIG = {
 };
 
 // ---------------------------------------------------------------------------
+// Shared footer — identical across EVERY bot comment. Append before the
+// hidden marker so the rendered attribution is uniform help, previews,
+// reviews, errors, and stubs alike.
+// ---------------------------------------------------------------------------
+export const BOT_FOOTER =
+  '*Powered by [AndreiDrang](https://github.com/AndreiDrang), [Z.ai](https://z.ai) and [Cloudflare Workers](https://cloudflare.com)*';
+
+// ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 export const ERROR_MESSAGES = {

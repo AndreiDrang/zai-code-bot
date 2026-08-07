@@ -11,7 +11,7 @@
  * Heavy handlers MUST own their own GitHub I/O (they run after main has acked).
  */
 
-import { COMMENT_MARKER } from '../../../shared/constants.js';
+import { COMMENT_MARKER, BOT_FOOTER } from '../../../shared/constants.js';
 import { createLogger } from '../../../shared/logging.js';
 
 /**
@@ -32,7 +32,7 @@ export async function handleReviewCommand({ github, payload }) {
     repository.owner,
     repository.name,
     issue.number,
-    `## 🔍 /zai review\n\nReview pipeline is queued on the heavy worker. (POC stub — full implementation pending.)\n\n${COMMENT_MARKER}`,
+    `## 🔍 /zai review\n\nReview pipeline is queued on the heavy worker. (POC stub — full implementation pending.)\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
   );
 
   return {
