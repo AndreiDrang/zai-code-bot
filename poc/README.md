@@ -43,7 +43,7 @@ poc/
 │   └── apply-bot-storage-lifecycle.sh# applies the rule via R2 S3 API
 └── workers/
     ├── shared/                       # shared lib — imported by BOTH workers
-    │   ├── constants.js              #   markers, command classification, token header
+    │   ├── constants.js              #   markers, command classification, token header, BOT_FOOTER
     │   ├── commands.js               #   parseCommand / isCommand / formatHelp
     │   ├── github.js                 #   GitHubClient (REST I/O only)
     │   ├── crypto.js                 #   Web Crypto webhook-signature verify (no compat flag)
@@ -51,8 +51,7 @@ poc/
     │   ├── secrets.js                #   resolveSecretValue (string | .get() | Promise)
     │   ├── logging.js                #   structured JSON logger + correlation id
     │   ├── comments.js               #   upsertComment — D1 publication lease + marker lookup
-    │   ├── pr-preview.js             #   renderPrPreview — bounded markdown renderer
-    │   ├── pr-stats.js               #   fetchPrStats — paginated PR change stats
+│   ├── pr-preview.js             #   renderPrPreview — metadata-only markdown brief
     │   └── storage/                  #   D1 / R2 / KV adapters
     │       ├── database.js           #     prepare / run / batch / first helpers
     │       ├── keys.js               #     versioned key builders (v1/...) for R2 + KV
@@ -92,7 +91,7 @@ poc/
     │           ├── review.js         #   /zai review   (stub — LLM)
     │           └── impact.js         #   /zai impact   (stub — LLM)
     │
-    └── tests/                        #   Vitest suite — 12 files, 130 tests
+    └── tests/                        #   Vitest suite — 13 files, 133 tests
         ├── commands / crypto / secrets / github / auth / logging / router .test.js
         ├── storage.test.js           #     schema + key builders + artifact expiry
         ├── storage-state.test.js     #     claimJob / retry / fail / lease recovery / publications
@@ -120,8 +119,8 @@ flowchart TD
   HEAVY -->|claimJob\nlease_expires_at=+10min\nattempt_count++| D1
   HEAVY -->|getPullRequest\nhead.sha == job.head_sha?| CHK{fresh?}
   CHK -- no, superseded --> SKIP[return superseded\nno comment written]
-  CHK -- yes --> STATS[fetchPrStats\npaginated, bounded]
-  STATS --> R2W[writeArtifact x2\nfiles manifest + result.md\n30-day expiry]
+  CHK -- yes --> REND[renderPrPreview\nmetadata-only brief]
+  REND --> R2W[writeArtifact\nresult.md\n30-day expiry]
   R2W --> R2[(R2 bot-storage)]
   R2W -->|link result_artifact_id| D1
   R2W --> PUB[upsertComment\nD1 publication lease]
@@ -131,8 +130,8 @@ flowchart TD
 ```
 
 **Why three storage resources?** D1 is the single source of truth (authority for
-deliveries, jobs, runs, artifacts, publications). R2 holds large immutable
-manifests and rendered output. KV holds only derived cache — never job status or
+deliveries, jobs, runs, artifacts, publications). R2 holds the rendered
+preview output. KV holds only derived cache — never job status or
 idempotency state.
 
 **Why a tiny queue message?** The message carries only `{ schemaVersion, jobId }`.
@@ -246,7 +245,7 @@ with an explicit `message.ack()` or `message.retry()`. The only case it does
 | Binding type    | Name                                | Worker | Purpose                                                            |
 | --------------- | ----------------------------------- | :----: | ------------------------------------------------------------------ |
 | D1 database     | `BOT_DB`                            |  both  | Authority: deliveries, jobs, outbox, runs, artifacts, publications |
-| R2 bucket       | `BOT_ARTIFACTS` (`bot-storage`)     | heavy  | Private. Immutable file manifests + rendered preview results       |
+| R2 bucket       | `BOT_ARTIFACTS` (`bot-storage`)     | heavy  | Private. Immutable rendered preview results                        |
 | KV namespace    | `BOT_CACHE` (`bot-cache`)           | heavy  | Non-authoritative config + preview cache (TTL 1h)                  |
 | Queue producer  | `BOT_JOBS` (`bot-jobs`)             |  main  | Publishes `{schemaVersion, jobId}`                                 |
 | Queue consumer  | — (same queue)                      | heavy  | Consumes `bot-jobs`; claims → runs → acks/retries                  |
@@ -260,7 +259,6 @@ with an explicit `message.ack()` or `message.retry()`. The only case it does
 | ------- | ----------------------------------------- | -------------------------------- |
 | GitHub  | `POST /repos/{o}/{r}/issues/{n}/comments` | Publish the live preview comment |
 | GitHub  | `GET /repos/{o}/{r}/pulls/{n}`            | Verify `head.sha` freshness      |
-| GitHub  | `GET /repos/{o}/{r}/pulls/{n}/files`      | Paginated change stats (bounded) |
 
 ## Configuration
 
@@ -416,17 +414,17 @@ state machine, queue retry budget, and runtime duplicate-delivery handling.
 
 ## Status and roadmap
 
-| Capability                                    | Status                                                          |
-| --------------------------------------------- | --------------------------------------------------------------- |
-| Webhook ingress + signature gate              | ✅ implemented                                                  |
-| Light `help` handler                          | ✅ implemented                                                  |
-| Durable PR-preview job (D1 + Queue + R2 + KV) | ✅ implemented                                                  |
-| 3-attempt retry budget + lease recovery       | ✅ implemented                                                  |
-| One-live-comment publication (D1 lease)       | ✅ implemented                                                  |
-| 30-day retention + cron sweep                 | ✅ implemented                                                  |
+| Capability                                                    | Status                                                          |
+| ------------------------------------------------------------- | --------------------------------------------------------------- |
+| Webhook ingress + signature gate                              | ✅ implemented                                                  |
+| Light `help` handler                                          | ✅ implemented                                                  |
+| Durable PR-preview job (D1 + Queue + R2 + KV)                 | ✅ implemented                                                  |
+| 3-attempt retry budget + lease recovery                       | ✅ implemented                                                  |
+| One-live-comment publication (D1 lease)                       | ✅ implemented                                                  |
+| 30-day retention + cron sweep                                 | ✅ implemented                                                  |
 | `/zai ask`/`explain`/`describe`/`review`/`impact` (heavy LLM) | 🟡 stub (legacy service-binding path; migrate to durable queue) |
-| Z.ai LLM integration                          | ⬜ not started                                                  |
-| `.zai-scheduled.yml` regeneration flows       | ⬜ not started                                                  |
+| Z.ai LLM integration                                          | ⬜ not started                                                  |
+| `.zai-scheduled.yml` regeneration flows                       | ⬜ not started                                                  |
 
 ## Related
 
@@ -437,4 +435,4 @@ state machine, queue retry budget, and runtime duplicate-delivery handling.
 
 ---
 
-**Version**: 0.3.1 · all LLM commands (`ask`/`explain`/`describe`/`review`/`impact`) reclassified as heavy; `help` is the only light command
+**Version**: 0.3.2 · PR preview is metadata-only (per-file stats and the `files` manifest artifact removed); unified `BOT_FOOTER` on every comment
