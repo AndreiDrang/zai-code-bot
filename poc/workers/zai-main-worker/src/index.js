@@ -22,6 +22,8 @@ import { getLightHandler } from './handlers/index.js';
 import {
   extractPullRequestEvent,
   isSupportedPullRequestEvent,
+  isPrDescriptionEditEvent,
+  planDescriptionRefresh,
   CONTEXT_TRIGGER_ACTIONS,
 } from './pr-events.js';
 import {
@@ -36,6 +38,7 @@ import {
   createCommandJob,
 } from '../../shared/storage/deliveries.js';
 import { refreshCommentsSlice } from '../../shared/pr-comments.js';
+import { refreshDescriptionSlice } from '../../shared/pr-description.js';
 import { isPrCommentRefreshEvent, planCommentsRefresh } from './comment-events.js';
 
 export default {
@@ -91,6 +94,21 @@ export default {
         const plan = planCommentsRefresh(webhookData);
         if (plan) {
           ctx.waitUntil(refreshPrComments(env, plan).catch(() => {}));
+        }
+      }
+
+      // --- Mirror a PR description edit into the description context slice ---
+      // pull_request.edited with changes.body carries the NEW body IN the
+      // payload itself, so this refresh needs NO API call — it writes
+      // pull_request.body straight to description.md (matching the gather's
+      // `pullRequest.body || ''`). Best-effort, non-blocking. An edit to BOTH
+      // title and body still re-renders the preview in the block below.
+      if (isPrDescriptionEditEvent(ghEvent, webhookData.action, payload, env)) {
+        const plan = planDescriptionRefresh(payload);
+        if (plan) {
+          ctx.waitUntil(
+            refreshDescriptionSlice({ bucket: env.BOT_ARTIFACTS, ...plan }).catch(() => {}),
+          );
         }
       }
 

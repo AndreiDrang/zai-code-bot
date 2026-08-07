@@ -36,6 +36,47 @@ export function isSupportedPullRequestEvent(event, action, payload = null) {
   return true;
 }
 
+/**
+ * True when a `pull_request.edited` webhook changed the PR body (description)
+ * and there is an R2 binding to write to.
+ *
+ * Distinct from the title-edit preview gate (`isSupportedPullRequestEvent`):
+ * a body edit does NOT re-render the metadata-only preview, but it DOES refresh
+ * the `description` context slice so the heavy review/impact/ask/explain
+ * handlers see the latest PR description between gathers. An edit that changes
+ * BOTH title and body fires both paths (this refresh + the preview re-render).
+ *
+ * @param {string} event - raw `x-github-event` header
+ * @param {string} action
+ * @param {Object} payload - raw webhook payload (carries `changes` + the full PR)
+ * @param {Object} env - worker env (checked for BOT_ARTIFACTS)
+ * @returns {boolean}
+ */
+export function isPrDescriptionEditEvent(event, action, payload, env) {
+  return (
+    event === 'pull_request' &&
+    action === 'edited' &&
+    Boolean(payload?.changes?.body) &&
+    Boolean(env?.BOT_ARTIFACTS)
+  );
+}
+
+/**
+ * Builds the args for `refreshDescriptionSlice` from an edited webhook. The
+ * post-edit body is carried IN the payload (`pull_request.body`), so NO API
+ * fetch is needed — unlike the comments refresh, where one webhook carries a
+ * single comment, not the whole conversation. A null/missing body is coerced
+ * to '' to match the gather (`pullRequest?.body || ''`), so clearing the PR
+ * description propagates. Returns null when identity cannot be resolved.
+ * @returns {{repoId:number, prNumber:number, body:string}|null}
+ */
+export function planDescriptionRefresh(payload) {
+  const repoId = payload?.repository?.id;
+  const prNumber = payload?.pull_request?.number;
+  if (repoId == null || prNumber == null) return null;
+  return { repoId, prNumber, body: payload?.pull_request?.body ?? '' };
+}
+
 export function extractPullRequestEvent(payload, deliveryId, action = payload?.action) {
   const repository = payload?.repository;
   const pullRequest = payload?.pull_request;

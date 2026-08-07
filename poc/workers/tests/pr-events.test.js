@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import {
   SUPPORTED_PR_ACTIONS,
   isSupportedPullRequestEvent,
+  isPrDescriptionEditEvent,
+  planDescriptionRefresh,
   extractPullRequestEvent,
 } from '../zai-main-worker/src/pr-events.js';
 
@@ -59,6 +61,64 @@ describe('isSupportedPullRequestEvent', () => {
   it('rejects non-pull_request events', () => {
     expect(isSupportedPullRequestEvent('issue_comment', 'created')).toBe(false);
     expect(isSupportedPullRequestEvent('pull_request_review_comment', 'created')).toBe(false);
+  });
+});
+
+describe('isPrDescriptionEditEvent', () => {
+  const env = { BOT_ARTIFACTS: {} };
+  const bodyEdit = {
+    changes: { body: { from: 'old body' } },
+    pull_request: { number: 7, body: 'new body' },
+    repository: { id: 10 },
+  };
+
+  it('accepts a pull_request edited with changes.body', () => {
+    expect(isPrDescriptionEditEvent('pull_request', 'edited', bodyEdit, env)).toBe(true);
+  });
+
+  it('rejects a title-only edit (no changes.body)', () => {
+    expect(
+      isPrDescriptionEditEvent(
+        'pull_request',
+        'edited',
+        { changes: { title: { from: 'x' } } },
+        env,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects non-edited actions and non-pull_request events', () => {
+    expect(isPrDescriptionEditEvent('pull_request', 'opened', bodyEdit, env)).toBe(false);
+    expect(isPrDescriptionEditEvent('issue_comment', 'edited', bodyEdit, env)).toBe(false);
+  });
+
+  it('rejects when R2 is not bound', () => {
+    expect(isPrDescriptionEditEvent('pull_request', 'edited', bodyEdit, {})).toBe(false);
+  });
+});
+
+describe('planDescriptionRefresh', () => {
+  it('extracts repoId / prNumber / body from the payload (no API call needed)', () => {
+    expect(
+      planDescriptionRefresh({
+        repository: { id: 10 },
+        pull_request: { number: 7, body: 'new desc' },
+      }),
+    ).toEqual({ repoId: 10, prNumber: 7, body: 'new desc' });
+  });
+
+  it('coerces a missing body to empty string (cleared description still refreshes)', () => {
+    expect(
+      planDescriptionRefresh({
+        repository: { id: 10 },
+        pull_request: { number: 7, body: null },
+      }).body,
+    ).toBe('');
+  });
+
+  it('returns null when repo / PR identity is incomplete', () => {
+    expect(planDescriptionRefresh({ repository: { id: 10 } })).toBeNull();
+    expect(planDescriptionRefresh({ pull_request: { number: 7, body: 'x' } })).toBeNull();
   });
 });
 
