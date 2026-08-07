@@ -157,6 +157,12 @@ async function findMarkerComment(
     if (!Array.isArray(comments) || comments.length === 0) return null;
     const botComments = comments.filter((comment) => {
       if (typeof comment.body !== 'string' || !comment.body.includes(marker)) return false;
+      // The exact comment we previously published — tracked by id in
+      // comment_publications — is unambiguously ours. Accept it regardless of
+      // whether it was posted by a GitHub App (type 'Bot') or a PAT-owned bot
+      // (type 'User'), so synchronize updates the existing comment instead of
+      // creating a new one when GITHUB_BOT_LOGIN is not configured.
+      if (expectedCommentId && comment.id === expectedCommentId) return true;
       const login = comment.user?.login;
       return comment.user?.type === 'Bot' || (botLogin && login === botLogin);
     });
