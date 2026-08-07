@@ -25,14 +25,6 @@ export function runArtifactKey(jobId, runId, kind, extension = 'json') {
   return `v${STORAGE_SCHEMA_VERSION}/runs/${component(jobId, 'job id')}/${component(runId, 'run id')}/${component(kind, 'artifact kind')}.${component(extension, 'extension')}`;
 }
 
-export function repoConfigCacheKey(repositoryId, version) {
-  return `v${STORAGE_SCHEMA_VERSION}:repo-config:${component(repositoryId, 'repository id')}:${component(version, 'config version')}`;
-}
-
-export function prPreviewCacheKey(repositoryId, prNumber, headSha) {
-  return `v${STORAGE_SCHEMA_VERSION}:pr-preview:${component(repositoryId, 'repository id')}:${component(prNumber, 'PR number')}:${component(headSha, 'head SHA')}`;
-}
-
-export function jobStatusCacheKey(jobId) {
-  return `v${STORAGE_SCHEMA_VERSION}:job-status:${component(jobId, 'job id')}`;
+export function repoConfigCacheKey(repositoryId) {
+  return `v${STORAGE_SCHEMA_VERSION}:repo-config:${component(repositoryId, 'repository id')}`;
 }

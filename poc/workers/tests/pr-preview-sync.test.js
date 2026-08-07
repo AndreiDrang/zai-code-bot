@@ -5,13 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../shared/storage/config.js', () => ({
   getRepositoryConfig: vi.fn(),
 }));
-vi.mock('../shared/storage/artifacts.js', () => ({
-  artifactExpiresAt: vi.fn().mockReturnValue('2099-01-01T00:00:00.000Z'),
-  writeArtifact: vi.fn().mockResolvedValue({ artifactId: 'art-1' }),
-}));
-vi.mock('../shared/storage/jobs.js', () => ({
-  linkRunResultArtifact: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock('../shared/comments.js', () => ({
   upsertComment: vi.fn(),
 }));
@@ -19,7 +12,6 @@ vi.mock('../shared/comments.js', () => ({
 import { PR_PREVIEW_MARKER, BOT_FOOTER } from '../shared/constants.js';
 import { handlePrPreviewJob } from '../zai-heavy-worker/src/handlers/pr-preview.js';
 import { getRepositoryConfig } from '../shared/storage/config.js';
-import { writeArtifact } from '../shared/storage/artifacts.js';
 import { upsertComment } from '../shared/comments.js';
 
 /** Canonical job record as produced by deliveries.JOB_SELECT. */
@@ -56,7 +48,6 @@ describe('handlePrPreviewJob — generate once, update on synchronize', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getRepositoryConfig.mockResolvedValue({ enabled: true, autoPreview: true, maxFiles: 100 });
-    writeArtifact.mockResolvedValue({ artifactId: 'art-1' });
   });
 
   it('creates the preview comment exactly once for the opened event', async () => {

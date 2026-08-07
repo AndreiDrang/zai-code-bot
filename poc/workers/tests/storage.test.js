@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  deliveryArtifactKey,
-  jobStatusCacheKey,
-  prPreviewCacheKey,
-  repoConfigCacheKey,
-  runArtifactKey,
-} from '../shared/storage/keys.js';
+import { deliveryArtifactKey, repoConfigCacheKey, runArtifactKey } from '../shared/storage/keys.js';
 import { renderPrPreview, renderPrClosed } from '../shared/pr-preview.js';
 import {
   extractPullRequestEvent,
@@ -18,13 +12,11 @@ describe('storage key contracts', () => {
       'v1/deliveries/2026-01-02/del-1/payload.json',
     );
     expect(runArtifactKey('job', 'run', 'result', 'md')).toBe('v1/runs/job/run/result.md');
-    expect(repoConfigCacheKey(10, 2)).toBe('v1:repo-config:10:2');
-    expect(prPreviewCacheKey(10, 7, 'abc')).toBe('v1:pr-preview:10:7:abc');
-    expect(jobStatusCacheKey('job')).toBe('v1:job-status:job');
+    expect(repoConfigCacheKey(10)).toBe('v1:repo-config:10');
   });
 
   it('rejects unsafe key components', () => {
-    expect(() => prPreviewCacheKey(1, 2, '../secret')).toThrow('storage key component');
+    expect(() => runArtifactKey('1/2', 'run', 'result', 'md')).toThrow('storage key component');
   });
 });
 

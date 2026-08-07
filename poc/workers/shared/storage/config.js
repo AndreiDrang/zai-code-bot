@@ -23,15 +23,22 @@ function fromRow(row) {
 }
 
 export async function getRepositoryConfig(db, cache, repositoryId) {
+  const cacheKey = repoConfigCacheKey(repositoryId);
+  if (cache?.get) {
+    try {
+      const hit = await cache.get(cacheKey, { type: 'json' });
+      if (hit) return hit;
+    } catch {
+      // KV is derivative; an outage must not change repository policy.
+    }
+  }
   const row = await first(
     prepare(db, 'SELECT * FROM repository_configs WHERE repository_id = ?', repositoryId),
   );
   const config = fromRow(row) || { ...DEFAULT_REPOSITORY_CONFIG };
   if (cache?.put) {
     try {
-      await cache.put(repoConfigCacheKey(repositoryId, config.version), JSON.stringify(config), {
-        expirationTtl: 300,
-      });
+      await cache.put(cacheKey, JSON.stringify(config), { expirationTtl: 300 });
     } catch {
       // KV is derivative; a cache outage must not change repository policy.
     }
@@ -70,11 +77,12 @@ export async function saveRepositoryConfig(
     ),
   );
   if (cache?.delete) {
-    // Versioned keys make stale entries harmless; delete is only an optimization.
+    // Non-versioned read-through key: delete on save keeps it fresh; a missed
+    // delete is bounded by the 300s TTL on the write-back in getRepositoryConfig.
     try {
-      await cache.delete(repoConfigCacheKey(repositoryId, current.version));
+      await cache.delete(repoConfigCacheKey(repositoryId));
     } catch {
-      /* best effort cache invalidation */
+      /* best effort cache invalidation; staleness is TTL-bounded */
     }
   }
   return next;

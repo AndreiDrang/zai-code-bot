@@ -12,18 +12,10 @@ vi.mock('../shared/comments.js', () => ({
 vi.mock('../shared/storage/config.js', () => ({
   getRepositoryConfig: vi.fn().mockResolvedValue({ enabled: true, autoPreview: true }),
 }));
-vi.mock('../shared/storage/artifacts.js', () => ({
-  writeArtifact: vi.fn().mockResolvedValue({ artifactId: 'art-closed-1' }),
-  artifactExpiresAt: vi.fn().mockReturnValue('2099-01-01T00:00:00.000Z'),
-}));
-vi.mock('../shared/storage/jobs.js', () => ({
-  linkRunResultArtifact: vi.fn().mockResolvedValue(undefined),
-}));
 
 import { handlePrPreviewJob } from '../zai-heavy-worker/src/handlers/pr-preview.js';
 import { upsertComment } from '../shared/comments.js';
 import { getRepositoryConfig } from '../shared/storage/config.js';
-import { writeArtifact } from '../shared/storage/artifacts.js';
 import { PR_CLOSED_MARKER } from '../shared/constants.js';
 
 function makeEnv() {
@@ -78,23 +70,18 @@ describe('handlePrPreviewJob — closed lifecycle branch', () => {
     expect(result).toMatchObject({ status: 'success', action: 'pr_closed' });
     // No supersede GET on the close path — head SHA is irrelevant for a close.
     expect(github.getPullRequest).not.toHaveBeenCalled();
-    expect(writeArtifact).toHaveBeenCalledOnce();
-
-    const body = writeArtifact.mock.calls[0][0].content;
-    expect(body).toContain('## 🔒 PR Closed');
-    expect(body).toContain('PR closed by @AndreiDrang');
-    expect(body).toContain(PR_CLOSED_MARKER);
 
     expect(upsertComment).toHaveBeenCalledOnce();
-    expect(upsertComment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commentKind: 'pr_closed',
-        marker: PR_CLOSED_MARKER,
-        issueNumber: 43,
-        repositoryId: 10,
-        bodyArtifactId: 'art-closed-1',
-      }),
-    );
+    const call = upsertComment.mock.calls[0][0];
+    expect(call.commentKind).toBe('pr_closed');
+    expect(call.marker).toBe(PR_CLOSED_MARKER);
+    expect(call.issueNumber).toBe(43);
+    expect(call.repositoryId).toBe(10);
+    // The closed body is passed straight through to the comment — no R2 artifact.
+    expect(call.body).toContain('## 🔒 PR Closed');
+    expect(call.body).toContain('PR closed by @AndreiDrang');
+    expect(call.body).toContain(PR_CLOSED_MARKER);
+    expect(call.bodyArtifactId).toBeUndefined();
   });
 
   it('does nothing when auto-preview is disabled', async () => {
@@ -111,7 +98,6 @@ describe('handlePrPreviewJob — closed lifecycle branch', () => {
 
     expect(result).toEqual({ status: 'disabled' });
     expect(upsertComment).not.toHaveBeenCalled();
-    expect(writeArtifact).not.toHaveBeenCalled();
     expect(github.getPullRequest).not.toHaveBeenCalled();
   });
 
