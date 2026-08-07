@@ -73,7 +73,7 @@ export default {
       // --- Durable PR event path ---
       // PR events never enter the command parser. They are recorded in D1 and
       // published as a small job ID so the heavy worker can retry safely.
-      if (isSupportedPullRequestEvent(webhookData.event, webhookData.action)) {
+      if (isSupportedPullRequestEvent(webhookData.event, webhookData.action, payload)) {
         const prEvent = extractPullRequestEvent(
           payload,
           request.headers.get('x-github-delivery'),

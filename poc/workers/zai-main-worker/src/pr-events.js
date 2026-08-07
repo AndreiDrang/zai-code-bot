@@ -3,10 +3,22 @@ export const SUPPORTED_PR_ACTIONS = Object.freeze([
   'reopened',
   'synchronize',
   'ready_for_review',
+  'edited',
 ]);
 
-export function isSupportedPullRequestEvent(event, action) {
-  return event === 'pull_request' && SUPPORTED_PR_ACTIONS.includes(action);
+/**
+ * Gate for the durable PR-preview path.
+ *
+ * `edited` fires for title, body, and base changes, but the preview is
+ * metadata-only (repository / PR / title / author / head) — only a title
+ * change affects it. Accepting every edit would re-render identical content
+ * (a wasted R2 write + comment PATCH + KV put), so `edited` is gated on
+ * `changes.title`. `payload` is optional for the non-edited actions.
+ */
+export function isSupportedPullRequestEvent(event, action, payload = null) {
+  if (event !== 'pull_request' || !SUPPORTED_PR_ACTIONS.includes(action)) return false;
+  if (action === 'edited') return Boolean(payload?.changes?.title);
+  return true;
 }
 
 export function extractPullRequestEvent(payload, deliveryId, action = payload?.action) {
