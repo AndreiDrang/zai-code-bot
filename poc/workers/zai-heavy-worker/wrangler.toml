@@ -16,6 +16,7 @@ R2_RETENTION_DAYS = "30"
 # binding from zai-main-worker (which works without any public URL). Disable the
 # default workers.dev route so it has no public ingress at all.
 workers_dev = false
+
 [[d1_databases]]
 binding = "BOT_DB"
 database_name = "bot-db"
