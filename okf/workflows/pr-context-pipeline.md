@@ -158,6 +158,18 @@ description refresh writes the deterministic payload body. A refresh racing the
 gather is safe: same key, same projection → whichever lands last is a valid
 snapshot.
 
+**Limitation — manifest counts lag.** The incremental refresh deliberately
+does NOT touch `manifest.json` (single-key `put`, no read-modify-write, so it
+can't race the gather). The manifest's derived counters — `counts.issueComments`
+/ `counts.reviewComments`, written by the gather from the same comments slice —
+therefore go stale between a comments refresh and the next push. The only reader
+of those counts is `renderContextSummary`'s coverage line ("**N commits**, **N
+comments"): the `/zai impact` stub shows it, and `/zai review` prints it as a
+decorative note while reading the actual `diff`/`description`/`files` slices
+directly (so the review content itself is always fresh). The stale count is
+cosmetic and self-heals on the next gather; fixing it would require a racy
+read-modify-write on the manifest, which isn't worth it.
+
 **Predicates.** `isPrCommentRefreshEvent` / `planCommentsRefresh`
 (`main/comment-events.js`) and `isPrDescriptionEditEvent` /
 `planDescriptionRefresh` (`main/pr-events.js`) are pure and unit-tested without
