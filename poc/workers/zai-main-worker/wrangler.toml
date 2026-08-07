@@ -4,6 +4,30 @@ name = "zai-main-worker"
 main = "src/index.js"
 compatibility_date = "2026-08-05"
 
+[vars]
+NODE_ENV = "production"
+ZAI_MODEL = "glm-5.2"
+R2_RETENTION_DAYS = "30"
+
+# Production resource IDs are supplied before deploy.
+[[d1_databases]]
+binding = "BOT_DB"
+database_name = "bot-db"
+database_id = "2f6c5cd9-ec01-44ad-8ea8-fb1bb5523226"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BOT_ARTIFACTS"
+bucket_name = "bot-storage"
+
+[[kv_namespaces]]
+binding = "BOT_CACHE"
+id = "a0fca8c009de4e57a0d241d5ebcaf055"
+
+[[queues.producers]]
+binding = "BOT_JOBS"
+queue = "bot-jobs"
+
 # Worker-to-Worker delegation (internal to the Cloudflare account).
 # `env.HEAVY_WORKER.fetch(...)` is available inside the worker.
 [[services]]
@@ -26,10 +50,6 @@ zone_name = "tokenbel.info"
 [[routes]]
 pattern = "zai-worker.tokenbel.info"
 custom_domain = true
-
-[vars]
-NODE_ENV = "development"
-ZAI_MODEL = "glm-5.2"
 
 # Secrets — sourced from Cloudflare Secrets Store (NOT per-worker secrets).
 # One store is shared across both workers; `binding` is the env var the code
@@ -67,6 +87,9 @@ invocation_logs = true
 
 [observability.traces]
 enabled = true
+
+[triggers]
+crons = ["*/5 * * * *"]
 
 [placement]
 mode = "smart"

@@ -1,10 +1,11 @@
 /**
- * Heavy-command handler registry for the heavy worker.
- * Only HEAVY commands live here (review, impact).
+ * Heavy job handler registry for the heavy worker.
+ * Legacy command handlers and durable storage-backed jobs live here.
  */
 
 import { handleReviewCommand } from './review.js';
 import { handleImpactCommand } from './impact.js';
+import { handlePrPreviewJob } from './pr-preview.js';
 
 /**
  * @param {string} commandType
@@ -16,6 +17,8 @@ export function getHeavyHandler(commandType) {
       return handleReviewCommand;
     case 'impact':
       return handleImpactCommand;
+    case 'pr_preview':
+      return handlePrPreviewJob;
     default:
       return null;
   }

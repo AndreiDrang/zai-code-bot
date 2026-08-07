@@ -19,6 +19,14 @@ import { COMMENT_MARKER } from '../../shared/constants.js';
 import { classifyCommand } from './router.js';
 import { buildDelegationPayload, delegateToHeavy } from './delegator.js';
 import { getLightHandler } from './handlers/index.js';
+import { extractPullRequestEvent, isSupportedPullRequestEvent } from './pr-events.js';
+import {
+  enqueueJob,
+  recoverExpiredJobs,
+  replayDueOutbox,
+  sweepExpiredStorage,
+} from './job-enqueuer.js';
+import { createPrPreviewJob } from '../../shared/storage/deliveries.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -61,6 +69,34 @@ export default {
         internalEvent,
         repo: webhookData.repository?.full_name,
       });
+
+      // --- Durable PR event path ---
+      // PR events never enter the command parser. They are recorded in D1 and
+      // published as a small job ID so the heavy worker can retry safely.
+      if (isSupportedPullRequestEvent(webhookData.event, webhookData.action)) {
+        const prEvent = extractPullRequestEvent(
+          payload,
+          request.headers.get('x-github-delivery'),
+          webhookData.action,
+        );
+        if (!prEvent || !env.BOT_DB || !env.BOT_JOBS) {
+          logger.error('PR storage is not configured or payload is incomplete', { correlationId });
+          return new Response('Service Unavailable', { status: 503 });
+        }
+        const { job, created } = await createPrPreviewJob(env.BOT_DB, prEvent);
+        try {
+          await enqueueJob(env, job.job_id);
+        } catch (error) {
+          logger.error('PR job enqueue failed', { message: error?.message, correlationId });
+          return new Response('Service Unavailable', { status: 503 });
+        }
+        return json(202, {
+          status: 'accepted',
+          kind: 'pr_preview',
+          jobId: job.job_id,
+          duplicate: !created,
+        });
+      }
 
       // --- Gate 4: only process command-bearing comment events ---
       if (!isCommandEvent(internalEvent) || !isCommand(webhookData.comment?.body)) {
@@ -141,6 +177,13 @@ export default {
       });
       return new Response('Internal Server Error', { status: 500 });
     }
+  },
+
+  async scheduled(_controller, env) {
+    const leases = await recoverExpiredJobs(env, 100);
+    const outbox = await replayDueOutbox(env, 25);
+    const artifacts = await sweepExpiredStorage(env, 100);
+    return { leases, outbox, artifacts };
   },
 };
 

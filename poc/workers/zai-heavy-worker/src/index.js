@@ -1,11 +1,12 @@
 /**
  * zai-heavy-worker — entrypoint.
  *
- * Receives delegated heavy commands from zai-main-worker over a Service
- * Binding. It is NOT exposed publicly: the only caller is the main worker,
+ * Receives durable jobs from the BOT_JOBS Queue (and retains the legacy
+ * Service Binding endpoint for /zai command migration). It is NOT exposed
+ * publicly: the queue consumer is the normal caller and the legacy endpoint is
  * authenticated by a shared `ZAI_INTERNAL_TOKEN` header.
  *
- * Lifecycle (decoupled from the webhook 10s timeout):
+ * Queue lifecycle (decoupled from the webhook 10s timeout):
  *   1. verify internal token   → 401 on mismatch
  *   2. parse delegation payload
  *   3. schedule the heavy work via ctx.waitUntil(...)
@@ -19,8 +20,13 @@ import { createLogger, generateCorrelationId } from '../../shared/logging.js';
 import { INTERNAL_TOKEN_HEADER } from '../../shared/constants.js';
 import { resolveSecretValue } from '../../shared/secrets.js';
 import { getHeavyHandler } from './handlers/index.js';
+import { processQueueBatch } from './queue.js';
 
 export default {
+  async queue(batch, env) {
+    await processQueueBatch(batch, env);
+  },
+
   async fetch(request, env, ctx) {
     const logger = createLogger(env, 'zai-heavy-worker');
     const correlationId = generateCorrelationId();

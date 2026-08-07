@@ -86,6 +86,19 @@ export class GitHubClient {
     return this.request('POST', `/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body });
   }
 
+  /** Lists issue/PR comments; pagination is handled by the caller. */
+  getIssueComments(owner, repo, issueNumber, page = 1, perPage = 100) {
+    return this.request(
+      'GET',
+      `/repos/${owner}/${repo}/issues/${issueNumber}/comments?page=${page}&per_page=${perPage}`,
+    );
+  }
+
+  /** Updates an existing issue/PR comment. */
+  updateComment(owner, repo, commentId, body) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/issues/comments/${commentId}`, { body });
+  }
+
   /** User profile. */
   getUser(username) {
     return this.request('GET', `/users/${username}`);
