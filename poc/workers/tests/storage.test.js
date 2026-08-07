@@ -1,13 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   deliveryArtifactKey,
   jobStatusCacheKey,
   prPreviewCacheKey,
-  prFilesArtifactKey,
   repoConfigCacheKey,
   runArtifactKey,
 } from '../shared/storage/keys.js';
-import { fetchPrStats } from '../shared/pr-stats.js';
 import { renderPrPreview } from '../shared/pr-preview.js';
 import {
   extractPullRequestEvent,
@@ -19,7 +17,6 @@ describe('storage key contracts', () => {
     expect(deliveryArtifactKey('del-1', new Date('2026-01-02T00:00:00Z'))).toBe(
       'v1/deliveries/2026-01-02/del-1/payload.json',
     );
-    expect(prFilesArtifactKey(10, 7, 'abc')).toBe('v1/pr/10/7/abc/files.json');
     expect(runArtifactKey('job', 'run', 'result', 'md')).toBe('v1/runs/job/run/result.md');
     expect(repoConfigCacheKey(10, 2)).toBe('v1:repo-config:10:2');
     expect(prPreviewCacheKey(10, 7, 'abc')).toBe('v1:pr-preview:10:7:abc');
@@ -64,55 +61,24 @@ describe('PR storage event contract', () => {
   });
 });
 
-describe('PR statistics and preview', () => {
-  it('paginates files and returns bounded aggregate statistics', async () => {
-    const github = {
-      getPrFiles: vi
-        .fn()
-        .mockResolvedValueOnce(
-          Array.from({ length: 100 }, (_, index) => ({
-            filename: `file-${index}.js`,
-            additions: index === 0 ? 2 : 0,
-            deletions: index === 0 ? 1 : 0,
-            status: 'modified',
-          })),
-        )
-        .mockResolvedValueOnce(
-          Array.from({ length: 10 }, (_, index) => ({
-            filename: `extra-${index}.js`,
-            additions: 0,
-            deletions: 0,
-            status: 'added',
-          })),
-        ),
-    };
-    await expect(fetchPrStats(github, 'o', 'r', 7, { maxFiles: 110 })).resolves.toMatchObject({
-      additions: 2,
-      deletions: 1,
-      changedFiles: 110,
-      truncated: true,
-    });
-    expect(github.getPrFiles).toHaveBeenCalledTimes(2);
-  });
-
-  it('renders escaped, marker-idempotent markdown', () => {
+describe('PR preview rendering', () => {
+  it('renders a metadata-only, marker-idempotent comment with escaped pipes', () => {
     const body = renderPrPreview({
       repository: 'o/repo',
       prNumber: 7,
       headSha: 'abc',
       title: 'A | title',
       authorLogin: 'user',
-      stats: {
-        additions: 2,
-        deletions: 1,
-        changedFiles: 1,
-        truncated: true,
-        files: [{ filename: 'a|b.js', additions: 2, deletions: 1, status: 'modified' }],
-      },
     });
+    expect(body).toContain('## PR Preview');
+    expect(body).toContain('| **PR** | #7 |');
+    expect(body).toContain('| **Head** | `abc` |');
     expect(body).toContain('A \\| title');
-    expect(body).toContain('a\\|b.js');
     expect(body).toContain('<!-- zai-pr-preview -->');
-    expect(body).toContain('File list truncated');
+    // No per-file or stat rows leak into the brief.
+    expect(body).not.toContain('Files changed');
+    expect(body).not.toContain('Lines added');
+    expect(body).not.toContain('Lines deleted');
+    expect(body).not.toContain('Changed Files');
   });
 });

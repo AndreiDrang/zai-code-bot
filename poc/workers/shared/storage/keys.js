@@ -21,10 +21,6 @@ export function deliveryArtifactKey(deliveryId, date = new Date()) {
   return `v${STORAGE_SCHEMA_VERSION}/deliveries/${day}/${component(deliveryId, 'delivery id')}/payload.json`;
 }
 
-export function prFilesArtifactKey(repositoryId, prNumber, headSha) {
-  return `v${STORAGE_SCHEMA_VERSION}/pr/${component(repositoryId, 'repository id')}/${component(prNumber, 'PR number')}/${component(headSha, 'head SHA')}/files.json`;
-}
-
 export function runArtifactKey(jobId, runId, kind, extension = 'json') {
   return `v${STORAGE_SCHEMA_VERSION}/runs/${component(jobId, 'job id')}/${component(runId, 'run id')}/${component(kind, 'artifact kind')}.${component(extension, 'extension')}`;
 }

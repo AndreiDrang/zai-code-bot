@@ -1,6 +1,5 @@
 import { PR_PREVIEW_MARKER } from '../../../shared/constants.js';
 import { upsertComment } from '../../../shared/comments.js';
-import { fetchPrStats } from '../../../shared/pr-stats.js';
 import { renderPrPreview } from '../../../shared/pr-preview.js';
 import { artifactExpiresAt, writeArtifact } from '../../../shared/storage/artifacts.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
@@ -10,8 +9,10 @@ import { prPreviewCacheKey, runArtifactKey } from '../../../shared/storage/keys.
 const COMMENT_KIND = 'pr_preview';
 
 /**
- * Builds and publishes a bounded PR preview. The job contains only IDs and
- * metadata; large file manifests and rendered output are stored in R2.
+ * Publishes the metadata-only PR preview. No stats are computed or stored —
+ * the brief is a lightweight identity card; per-file analysis lives in the
+ * heavy /zai review pipeline. The rendered comment is still persisted to R2
+ * (result artifact) for audit/replay.
  */
 export async function handlePrPreviewJob({ github, env, db, job, runId }) {
   const config = await getRepositoryConfig(db, env.BOT_CACHE, job.repository_id);
@@ -26,37 +27,12 @@ export async function handlePrPreviewJob({ github, env, db, job, runId }) {
     return { status: 'superseded', headSha: currentPullRequest.head.sha };
   }
 
-  const stats = await fetchPrStats(
-    github,
-    job.repository_owner,
-    job.repository_name,
-    job.pr_number,
-    { maxFiles: config.maxFiles },
-  );
-  const manifest = {
-    repositoryId: job.repository_id,
-    repository: job.repository_full_name,
-    prNumber: job.pr_number,
-    headSha: job.head_sha,
-    stats,
-  };
-  await writeArtifact({
-    bucket: env.BOT_ARTIFACTS,
-    db,
-    jobId: job.job_id,
-    runId,
-    kind: 'files',
-    content: JSON.stringify(manifest),
-    expiresAt: artifactExpiresAt(new Date(), env.R2_RETENTION_DAYS),
-  });
-
   const body = renderPrPreview({
     repository: job.repository_full_name,
     prNumber: job.pr_number,
     headSha: job.head_sha,
     title: job.title,
     authorLogin: job.author_login,
-    stats,
   });
   const resultArtifact = await writeArtifact({
     bucket: env.BOT_ARTIFACTS,

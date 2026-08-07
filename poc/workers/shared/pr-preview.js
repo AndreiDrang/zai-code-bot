@@ -1,4 +1,4 @@
-import { PR_PREVIEW_MARKER } from './constants.js';
+import { PR_PREVIEW_MARKER, BOT_FOOTER } from './constants.js';
 
 function tableCell(value) {
   return String(value ?? '')
@@ -6,17 +6,15 @@ function tableCell(value) {
     .replaceAll('\n', ' ');
 }
 
-export function renderPrPreview({ repository, prNumber, headSha, title, authorLogin, stats }) {
-  const rows = stats.files
-    .map(
-      (file) =>
-        `| \`${tableCell(file.filename)}\` | ±${file.additions + file.deletions} | ${tableCell(file.status)} |`,
-    )
-    .join('\n');
-  const truncation = stats.truncated
-    ? '\n\n> ⚠️ File list truncated by the configured safety limit.'
-    : '';
-  return `## 🔍 Z.ai PR Preview
+/**
+ * Renders the metadata-only PR preview comment.
+ *
+ * No stats (files/additions/deletions) are computed or stored — the brief is
+ * intentionally a lightweight identity card for the PR. Per-file data is the
+ * job of the heavy /zai review pipeline, not the auto-preview.
+ */
+export function renderPrPreview({ repository, prNumber, headSha, title, authorLogin }) {
+  return `## PR Preview
 
 | Metric | Value |
 | --- | --- |
@@ -25,16 +23,7 @@ export function renderPrPreview({ repository, prNumber, headSha, title, authorLo
 | **Title** | ${tableCell(title || 'Untitled')} |
 | **Author** | @${tableCell(authorLogin || 'unknown')} |
 | **Head** | \`${tableCell(headSha)}\` |
-| **Files changed** | ${stats.changedFiles} |
-| **Lines added** | +${stats.additions} |
-| **Lines deleted** | -${stats.deletions} |
-
-### 📁 Changed Files
-
-| File | Changes | Status |
-| --- | ---: | --- |
-${rows || '| _(none)_ | 0 | — |'}${truncation}
 
 ---
-*Powered by Z.ai* ${PR_PREVIEW_MARKER}`;
+${BOT_FOOTER} ${PR_PREVIEW_MARKER}`;
 }
