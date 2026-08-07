@@ -30,7 +30,11 @@ import {
   replayDueOutbox,
   sweepExpiredStorage,
 } from './job-enqueuer.js';
-import { createPrPreviewJob, createPrContextJob } from '../../shared/storage/deliveries.js';
+import {
+  createPrPreviewJob,
+  createPrContextJob,
+  createCommandJob,
+} from '../../shared/storage/deliveries.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -141,6 +145,43 @@ export default {
       const bucket = classifyCommand(parsed.type);
 
       if (bucket === 'heavy') {
+        // `review` is a durable queue job: the full {github, env, db, job, runId}
+        // context lets the handler persist a run-output artifact + record the
+        // attempt. The other heavy commands still delegate via the service
+        // binding until they get the same treatment; review on a non-PR comment
+        // (or when storage is unconfigured) also falls back to delegation.
+        if (parsed.type === 'review' && canRouteDurable(webhookData, env)) {
+          try {
+            const created = await createCommandDurableJob(
+              env,
+              github,
+              webhookData,
+              parsed.type,
+              request.headers.get('x-github-delivery'),
+            );
+            await enqueueJob(env, created.job.job_id);
+            logger.info('Enqueued durable command job', {
+              command: parsed.type,
+              repo: full_name,
+              jobId: created.job.job_id,
+              correlationId,
+            });
+            return json(202, {
+              status: 'accepted',
+              command: parsed.type,
+              jobId: created.job.job_id,
+              durable: true,
+            });
+          } catch (error) {
+            logger.error('Durable command job failed; falling back to delegation', {
+              command: parsed.type,
+              message: error?.message,
+              correlationId,
+            });
+            // Fall through to service-binding delegation as a safety net.
+          }
+        }
+
         // Offload to heavy worker; ack GitHub immediately.
         delegateToHeavy(env, ctx, buildDelegationPayload(parsed, webhookData));
         logger.info('Delegated heavy command', {
@@ -237,6 +278,38 @@ function repoCoordinates(repository) {
     name: repository?.name,
     full_name: repository?.full_name,
   };
+}
+
+/** A heavy command can take the durable path only on a PR comment with storage. */
+function canRouteDurable(webhookData, env) {
+  return Boolean(webhookData?.issue?.pull_request && env?.BOT_DB && env?.BOT_JOBS);
+}
+
+/**
+ * Creates a durable job for a /zai command (issue_comment). Resolves the PR's
+ * head via getPullRequest so the job row matches a PR-event job's shape; the
+ * queue consumer then runs the handler with the full {github, env, db, job,
+ * runId} context.
+ */
+async function createCommandDurableJob(env, github, webhookData, kind, deliveryId) {
+  const { owner, name, full_name } = repoCoordinates(webhookData.repository);
+  const prNumber = webhookData.issue.number;
+  const pr = await github.getPullRequest(owner, name, prNumber);
+  if (!pr?.head?.sha) throw new Error('Could not resolve PR head for command job');
+  const event = {
+    deliveryId,
+    eventName: 'issue_comment',
+    action: webhookData.action || 'created',
+    repositoryId: webhookData.repository.id,
+    repository: { owner, name, fullName: full_name, defaultBranch: null },
+    prNumber,
+    headSha: pr.head.sha,
+    baseSha: pr.base?.sha || null,
+    title: pr.title || null,
+    authorLogin: pr.user?.login || null,
+    state: pr.state || 'open',
+  };
+  return createCommandJob(env.BOT_DB, event, kind);
 }
 
 function json(status, body) {

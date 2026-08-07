@@ -43,6 +43,25 @@ export async function readContextManifest(bucket, repositoryId, prNumber, headSh
 }
 
 /**
+ * Reads a single gathered context slice from R2. `diff` and `description`
+ * are stored as text; the other kinds (files, commits, comments) are JSON.
+ * Best-effort: a miss or outage returns null so the caller falls back to a
+ * live fetch rather than failing.
+ * @returns {Promise<string|Object|null>}
+ */
+export async function readContextSlice(bucket, repositoryId, prNumber, headSha, kind) {
+  if (!bucket?.get || !headSha) return null;
+  try {
+    const object = await bucket.get(prContextKey(repositoryId, prNumber, headSha, kind));
+    if (!object) return null;
+    const text = await object.text();
+    return kind === 'diff' || kind === 'description' ? text : JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Renders a compact "what context is ready" block for a context-aware comment.
  * Used by review/impact until the LLM pipeline lands. Returns an empty string
  * when no manifest exists (caller shows a "not yet gathered" notice instead).

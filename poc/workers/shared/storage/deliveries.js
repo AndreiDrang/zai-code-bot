@@ -91,11 +91,12 @@ async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().t
       ownsDelivery
         ? `INSERT INTO webhook_deliveries
            (delivery_id, event_name, action, repository_id, pr_number, head_sha, received_at)
-           VALUES (?, 'pull_request', ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
         : `INSERT OR IGNORE INTO webhook_deliveries
            (delivery_id, event_name, action, repository_id, pr_number, head_sha, received_at)
-           VALUES (?, 'pull_request', ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
       event.deliveryId,
+      event.eventName || 'pull_request',
       event.action,
       repositoryId,
       prNumber,
@@ -160,6 +161,18 @@ export function createPrPreviewJob(db, event, now) {
  */
 export function createPrContextJob(db, event, now) {
   return createPrJob(db, event, PR_CONTEXT_JOB_KIND, { ownsDelivery: false }, now);
+}
+
+/**
+ * Records a durable job triggered by a /zai COMMAND (issue_comment), not a
+ * pull_request webhook. The caller resolves the PR's head via getPullRequest so
+ * the job carries the same row shape as a PR-event job; the queue consumer then
+ * runs it with the full {github, env, db, job, runId} context (db + runId are
+ * what let the handler persist a run-output artifact). Owns its delivery row:
+ * one command comment = one delivery = one job.
+ */
+export function createCommandJob(db, event, kind, now) {
+  return createPrJob(db, event, kind, { ownsDelivery: true }, now);
 }
 
 export async function getJob(db, jobId) {

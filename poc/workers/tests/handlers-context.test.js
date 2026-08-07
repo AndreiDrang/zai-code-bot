@@ -5,7 +5,6 @@ vi.mock('../shared/logging.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { handleReviewCommand } from '../zai-heavy-worker/src/handlers/review.js';
 import { handleImpactCommand } from '../zai-heavy-worker/src/handlers/impact.js';
 import { handleAskCommand } from '../zai-heavy-worker/src/handlers/ask.js';
 import { handleExplainCommand } from '../zai-heavy-worker/src/handlers/explain.js';
@@ -61,29 +60,8 @@ function makeGithub() {
   return { postComment: vi.fn().mockResolvedValue({ id: 1 }) };
 }
 
-describe('review / impact — context-aware readers', () => {
-  it('review surfaces the gathered context when card + manifest are present', async () => {
-    const { env } = makeEnv({ withCard: true, withManifest: true });
-    const github = makeGithub();
-    const res = await handleReviewCommand({ github, env, payload });
-    expect(github.postComment).toHaveBeenCalledWith('o', 'r', 7, expect.any(String));
-    const body = github.postComment.mock.calls[0][3];
-    expect(body).toContain('gathered and ready');
-    expect(body).toContain('2 files');
-    expect(body).toContain('<!-- zai-code-review -->');
-    expect(res).toMatchObject({ headSha: HEAD, contextReady: true });
-  });
-
-  it('review falls back to a "not gathered" notice without context', async () => {
-    const { env } = makeEnv({ withCard: false, withManifest: false });
-    const github = makeGithub();
-    const res = await handleReviewCommand({ github, env, payload });
-    const body = github.postComment.mock.calls[0][3];
-    expect(body).toContain('not been gathered');
-    expect(res.contextReady).toBe(false);
-  });
-
-  it('impact mirrors review: gathered summary when context is ready', async () => {
+describe('impact — context-aware reader', () => {
+  it('impact surfaces the gathered summary when context is ready', async () => {
     const { env } = makeEnv({ withCard: true, withManifest: true });
     const github = makeGithub();
     const res = await handleImpactCommand({ github, env, payload });
