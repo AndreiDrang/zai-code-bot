@@ -59,52 +59,52 @@ Read only when relevant:
 
 ## Code map
 
-| Symbol | File | Role |
-|--------|------|------|
-| `run` | `src/index.js` | Event gate + dispatcher |
-| `handlePullRequestEvent` | `src/index.js` | PR auto-review flow |
-| `handleIssueCommentEvent` | `src/index.js` | Command parse → auth → dispatch |
-| `handlePullRequestReviewCommentEvent` | `src/index.js` | Inline review comment command flow |
-| `dispatchCommand` | `src/index.js` | Handler selection + response management |
-| `enforceCommandAuthorization` | `src/index.js` | Auth gate before dispatch |
-| `getReviewConfig` | `src/index.js` | Reads auto-review thresholds from action inputs |
-| `executeReviewBatch` | `src/index.js` | Per-batch review execution with context-limit sub-splitting |
-| `runLargePrReview` | `src/index.js` | Batched review loop + final synthesis |
-| `callZaiApi` | `src/index.js` | Direct Z.ai HTTP call (auto-review path) |
-| `parseCommand` / `isValid` | `src/lib/commands.js` | `/zai` parser + allowlist enforcement |
-| `normalizeInput` | `src/lib/commands.js` | `@zai-bot` mention → `/zai` normalization |
-| `checkForkAuthorization` | `src/lib/auth.js` | Fork-aware auth policy |
-| `checkAuthorization` | `src/lib/auth.js` | Permissive: authorizes any identifiable user |
-| `getCommenter` | `src/lib/auth.js` | Extracts commenter from payload |
-| `upsertComment` | `src/lib/comments.js` | Marker-idempotent + threaded comments |
-| `findCommentByMarker` | `src/lib/comments.js` | Locates existing bot comment by hidden marker |
-| `setReaction` | `src/lib/comments.js` | Lifecycle reactions (`eyes`, `rocket`, `-1`) |
-| `createApiClient` | `src/lib/api.js` | Factory for Z.ai client with timeout/retry config |
-| `callWithRetry` | `src/lib/api.js` | Exponential backoff + progressive timeout + optional fallback |
-| `categorizeError` | `src/lib/api.js` | Classifies errors as retryable/non-retryable |
-| `createReviewBatches` | `src/lib/auto-review.js` | Large-PR entry creation + priority-sorted chunking |
-| `isLargePr` | `src/lib/auto-review.js` | File-count threshold check |
-| `buildSynthesisPrompt` | `src/lib/auto-review.js` | Final batch-merge prompt |
-| `buildCoverageNotes` | `src/lib/auto-review.js` | Coverage summary for review output |
-| `fetchAllChangedFiles` | `src/lib/changed-files.js` | Paginated file list (3000-file API ceiling) |
-| `MAX_PR_FILES_API_LIMIT` | `src/lib/changed-files.js` | GitHub API ceiling constant (3000) |
-| `extractWindow` | `src/lib/code-scope.js` | Surrounding-window line extraction |
-| `extractEnclosingBlock` | `src/lib/code-scope.js` | Nearest function/class block detection |
-| `extractTargetBlock` | `src/lib/code-scope.js` | Exact line-range extraction |
-| `getEventType` / `shouldProcessEvent` | `src/lib/events.js` | Event-type detection incl. `schedule` (always processed) |
-| `extractReviewCommentAnchor` | `src/lib/events.js` | File/line anchor from review comments |
-| `loadContinuityState` / `mergeState` | `src/lib/continuity.js` | Hidden-marker state across turns |
-| `createLogger` / `generateCorrelationId` | `src/lib/logging.js` | Categorized safe-error logging |
-| `loadScheduledConfig` / `getTasksToRun` | `src/lib/config/scheduled-config.js` | `.zai-scheduled.yml` parsing + schedule matching |
-| `validateAndNormalizeConfig` | `src/lib/config/scheduled-config.js` | Schema validation + default-merging |
-| `getGistUrl` | `src/lib/config/scheduled-config.js` | Gist URL priority: task > defaults > env |
-| `validateAgentsConfig` | `src/lib/config/scheduled-config.js` | Validates scoping fields (`context_paths`, `target_paths`, etc.) |
-| `handleScheduledEvent` | `src/lib/handlers/scheduled.js` | Scheduled pipeline entry: load config, run matching tasks |
-| `handleUpdateAgentsTask` | `src/lib/handlers/scheduled.js` | Grounded AGENTS.md regen: context → prompt → validate → PR |
-| `collectRepositoryContext` | `src/lib/repository-context.js` | Git tree + existing AGENTS.md discovery + key files (budgeted) |
-| `renderRepositoryContext` | `src/lib/repository-context.js` | Renders context into compact prompt block |
-| `validateGeneratedAgentFiles` | `src/lib/agents-validation.js` | Pre-PR guard: rejects non-AGENTS paths, out-of-scope writes, hallucinated content |
-| `validateFileEntry` | `src/lib/agents-validation.js` | Per-file validation (path, scope, hallucination check) |
+| Symbol                                   | File                                 | Role                                                                              |
+| ---------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------- |
+| `run`                                    | `src/index.js`                       | Event gate + dispatcher                                                           |
+| `handlePullRequestEvent`                 | `src/index.js`                       | PR auto-review flow                                                               |
+| `handleIssueCommentEvent`                | `src/index.js`                       | Command parse → auth → dispatch                                                   |
+| `handlePullRequestReviewCommentEvent`    | `src/index.js`                       | Inline review comment command flow                                                |
+| `dispatchCommand`                        | `src/index.js`                       | Handler selection + response management                                           |
+| `enforceCommandAuthorization`            | `src/index.js`                       | Auth gate before dispatch                                                         |
+| `getReviewConfig`                        | `src/index.js`                       | Reads auto-review thresholds from action inputs                                   |
+| `executeReviewBatch`                     | `src/index.js`                       | Per-batch review execution with context-limit sub-splitting                       |
+| `runLargePrReview`                       | `src/index.js`                       | Batched review loop + final synthesis                                             |
+| `callZaiApi`                             | `src/index.js`                       | Direct Z.ai HTTP call (auto-review path)                                          |
+| `parseCommand` / `isValid`               | `src/lib/commands.js`                | `/zai` parser + allowlist enforcement                                             |
+| `normalizeInput`                         | `src/lib/commands.js`                | `@zai-bot` mention → `/zai` normalization                                         |
+| `checkForkAuthorization`                 | `src/lib/auth.js`                    | Fork-aware auth policy                                                            |
+| `checkAuthorization`                     | `src/lib/auth.js`                    | Permissive: authorizes any identifiable user                                      |
+| `getCommenter`                           | `src/lib/auth.js`                    | Extracts commenter from payload                                                   |
+| `upsertComment`                          | `src/lib/comments.js`                | Marker-idempotent + threaded comments                                             |
+| `findCommentByMarker`                    | `src/lib/comments.js`                | Locates existing bot comment by hidden marker                                     |
+| `setReaction`                            | `src/lib/comments.js`                | Lifecycle reactions (`eyes`, `rocket`, `-1`)                                      |
+| `createApiClient`                        | `src/lib/api.js`                     | Factory for Z.ai client with timeout/retry config                                 |
+| `callWithRetry`                          | `src/lib/api.js`                     | Exponential backoff + progressive timeout + optional fallback                     |
+| `categorizeError`                        | `src/lib/api.js`                     | Classifies errors as retryable/non-retryable                                      |
+| `createReviewBatches`                    | `src/lib/auto-review.js`             | Large-PR entry creation + priority-sorted chunking                                |
+| `isLargePr`                              | `src/lib/auto-review.js`             | File-count threshold check                                                        |
+| `buildSynthesisPrompt`                   | `src/lib/auto-review.js`             | Final batch-merge prompt                                                          |
+| `buildCoverageNotes`                     | `src/lib/auto-review.js`             | Coverage summary for review output                                                |
+| `fetchAllChangedFiles`                   | `src/lib/changed-files.js`           | Paginated file list (3000-file API ceiling)                                       |
+| `MAX_PR_FILES_API_LIMIT`                 | `src/lib/changed-files.js`           | GitHub API ceiling constant (3000)                                                |
+| `extractWindow`                          | `src/lib/code-scope.js`              | Surrounding-window line extraction                                                |
+| `extractEnclosingBlock`                  | `src/lib/code-scope.js`              | Nearest function/class block detection                                            |
+| `extractTargetBlock`                     | `src/lib/code-scope.js`              | Exact line-range extraction                                                       |
+| `getEventType` / `shouldProcessEvent`    | `src/lib/events.js`                  | Event-type detection incl. `schedule` (always processed)                          |
+| `extractReviewCommentAnchor`             | `src/lib/events.js`                  | File/line anchor from review comments                                             |
+| `loadContinuityState` / `mergeState`     | `src/lib/continuity.js`              | Hidden-marker state across turns                                                  |
+| `createLogger` / `generateCorrelationId` | `src/lib/logging.js`                 | Categorized safe-error logging                                                    |
+| `loadScheduledConfig` / `getTasksToRun`  | `src/lib/config/scheduled-config.js` | `.zai-scheduled.yml` parsing + schedule matching                                  |
+| `validateAndNormalizeConfig`             | `src/lib/config/scheduled-config.js` | Schema validation + default-merging                                               |
+| `getGistUrl`                             | `src/lib/config/scheduled-config.js` | Gist URL priority: task > defaults > env                                          |
+| `validateAgentsConfig`                   | `src/lib/config/scheduled-config.js` | Validates scoping fields (`context_paths`, `target_paths`, etc.)                  |
+| `handleScheduledEvent`                   | `src/lib/handlers/scheduled.js`      | Scheduled pipeline entry: load config, run matching tasks                         |
+| `handleUpdateAgentsTask`                 | `src/lib/handlers/scheduled.js`      | Grounded AGENTS.md regen: context → prompt → validate → PR                        |
+| `collectRepositoryContext`               | `src/lib/repository-context.js`      | Git tree + existing AGENTS.md discovery + key files (budgeted)                    |
+| `renderRepositoryContext`                | `src/lib/repository-context.js`      | Renders context into compact prompt block                                         |
+| `validateGeneratedAgentFiles`            | `src/lib/agents-validation.js`       | Pre-PR guard: rejects non-AGENTS paths, out-of-scope writes, hallucinated content |
+| `validateFileEntry`                      | `src/lib/agents-validation.js`       | Per-file validation (path, scope, hallucination check)                            |
 
 ## Change rules
 
@@ -136,3 +136,16 @@ CI gates (`.github/workflows/ci.yml`): test → build → dist-drift → securit
 - `ZAI_MODEL` default is `glm-5.2`; Z.ai endpoint is `https://api.z.ai/api/coding/paas/v4/chat/completions`.
 - The command dispatch `switch` lives in `src/index.js` (`dispatchCommand`), not in `src/lib/handlers/index.js`. The handler registry in `index.js` is consumed by the runtime but `scheduled` is exported separately and not in the `/zai` HANDLERS map.
 - `@zai-bot` prefix is normalized to `/zai` by `normalizeInput` in `src/lib/commands.js`.
+
+<!-- okf-knowledge:start -->
+
+## Open Knowledge Format (OKF)
+
+- OKF knowledge bundles live in an `okf/` directory under their documentation scope.
+- Before changing a documented domain, read the nearest `okf/index.md` and the relevant concept documents.
+- Update OKF when business rules, workflows, APIs, schemas, data contracts, architecture boundaries, operational playbooks, or canonical references materially change.
+- Preserve stable Concept IDs. When moving a concept, update incoming links, directory indexes, and `okf/log.md`.
+- After changes, validate frontmatter, internal links, indexes, duplicate resources, stale source paths, and lifecycle status.
+- Use the `okf-knowledge` skill to initialize, refresh, reconcile, or audit a bundle.
+
+<!-- okf-knowledge:end -->

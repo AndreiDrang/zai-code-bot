@@ -1,0 +1,53 @@
+---
+type: Business Rule
+title: Collaborator authorization
+description: Only repository collaborators may run /zai commands — stricter than the parent GitHub Actions bot, which authorizes any identifiable user.
+source_paths:
+  - poc/workers/shared/auth.js
+  - poc/workers/zai-main-worker/src/index.js
+confidence: observed
+status: current
+tags:
+  - rules
+  - authorization
+  - security
+---
+
+# Collaborator authorization
+
+Before any `/zai` command is dispatched, the commenter must be verified as a
+repository collaborator. This is gate 5 in the
+[webhook ingress](/workflows/webhook-ingress.md) chain.
+
+# Policy
+
+The POC policy is **stricter** than the parent GitHub Actions bot:
+
+| | Parent bot | POC workers |
+| --- | --- | --- |
+| Policy | Authorizes any identifiable user | Requires collaborator status |
+| Check | `checkAuthorization()` | `authorizeCommenter()` |
+
+The check calls GitHub's `GET /repos/{owner}/{repo}/collaborators/{username}`
+endpoint: `204` = collaborator (authorized), `404` = not (unauthorized). Other
+HTTP errors propagate as exceptions.
+
+# Centralization
+
+The policy lives in a single shared module (`shared/auth.js`) imported by both
+workers, so a future policy change is a one-file edit. The convenience factory
+`isAuthorized(env, owner, repo, username)` builds a `GitHubClient` and runs the
+check in one call — useful from the heavy worker, which rebuilds a client per
+invocation.
+
+# Failure behavior
+
+Unauthorized commenters receive a `403 Forbidden` response and a posted
+unauthorized comment. Note: the durable PR-preview path (triggered by
+`pull_request` webhooks) does **not** pass through this gate — it is triggered
+by PR events, not commands.
+
+# Relationships
+
+- Applied as gate 5 in [webhook ingress](/workflows/webhook-ingress.md).
+- Precedes [command routing](/workflows/command-routing.md).
