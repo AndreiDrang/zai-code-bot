@@ -20,8 +20,9 @@ GitHub Webhook ──▶ zai-main-worker ──┬── pull_request ──▶ 
 ## Why two workers
 
 GitHub webhooks time out if a `200` isn't returned within ~10 seconds. PR
-analysis (diff fetch + render + any future LLM call) and heavy commands
-(`/zai review`, `/zai impact`) **cannot** complete inline. Splitting lets the
+analysis (diff fetch + render + LLM calls) and all LLM-backed commands
+(`/zai ask`, `/zai explain`, `/zai describe`, `/zai review`, `/zai impact`)
+**cannot** complete inline. Splitting lets the
 main worker acknowledge instantly while the heavy worker runs to completion on
 its own lifetime budget, driven by a durable Queue.
 
@@ -73,9 +74,8 @@ poc/
     │       ├── job-enqueuer.js       #   enqueueJob / recoverExpiredJobs / replayDueOutbox / sweep
     │       ├── delegator.js          #   buildDelegationPayload + delegateToHeavy (legacy binding)
     │       └── handlers/
-    │           ├── index.js          #   getLightHandler()
-    │           ├── help.js           #   /zai help  (working)
-    │           └── describe.js       #   /zai describe (stub)
+    │           ├── index.js          #   getLightHandler() — help only
+    │           └── help.js           #   /zai help (implemented, no LLM call)
     │
     ├── zai-heavy-worker/
     │   ├── wrangler.toml             #   queue consumer + storage bindings
@@ -84,10 +84,13 @@ poc/
     │       ├── index.js              #   queue handler + legacy fetch (token-gated)
     │       ├── queue.js              #   processQueueMessage — claim → run → ack/retry/fail
     │       └── handlers/
-    │           ├── index.js          #   getHeavyHandler(): pr_preview | review | impact
+    │           ├── index.js          #   getHeavyHandler(): ask|explain|describe|review|impact|pr_preview
     │           ├── pr-preview.js     #   durable PR preview job (implemented)
-    │           ├── review.js         #   /zai review (stub — legacy service-binding path)
-    │           └── impact.js         #   /zai impact  (stub — legacy service-binding path)
+    │           ├── ask.js            #   /zai ask      (stub — LLM)
+    │           ├── explain.js        #   /zai explain  (stub — LLM)
+    │           ├── describe.js       #   /zai describe (stub — LLM)
+    │           ├── review.js         #   /zai review   (stub — LLM)
+    │           └── impact.js         #   /zai impact   (stub — LLM)
     │
     └── tests/                        #   Vitest suite — 12 files, 130 tests
         ├── commands / crypto / secrets / github / auth / logging / router .test.js
@@ -181,7 +184,7 @@ are no-ops (`claimJob` idempotency), crashed consumers recover via lease
 expiry, lost publishes recover via outbox replay, and retention is enforced on
 both the bucket and its index.
 
-### Light command path (`/zai help`, `/zai describe`)
+### Light command path (`/zai help` only)
 
 ```mermaid
 flowchart LR
@@ -192,10 +195,12 @@ flowchart LR
   MAIN -->|200 + JSON result| GH
 ```
 
-Runs entirely inline within the webhook request. `help` is implemented;
-`describe`, `ask`, and `explain` are stubs.
+Runs entirely inline within the webhook request. Only `help` is light — pure
+formatting with no LLM call — and it is fully implemented. Every other command
+(`ask`, `explain`, `describe`, `review`, `impact`) is **heavy** because it
+makes a Z.ai LLM call.
 
-### Heavy command path (`/zai review`, `/zai impact`) — legacy
+### Heavy command path (`/zai ask`, `explain`, `describe`, `review`, `impact`) — legacy
 
 ```mermaid
 flowchart LR
@@ -208,10 +213,10 @@ flowchart LR
   HEAVY -->|runHeavy: stub work| GH2[GitHub REST API]
 ```
 
-This is the pre-storage service-binding delegation path. The handlers are
-**stubs** that post a "not yet implemented" notice. The migration plan is to
-route `review` and `impact` through the same durable Queue + D1 + R2 path as
-`pr_preview` (see status below).
+This is the pre-storage service-binding delegation path. All five heavy
+commands are **stubs** that post a "not yet implemented" notice. The
+migration plan is to route them through the same durable Queue + D1 + R2 path
+as `pr_preview` (see status below).
 
 The double-`ctx.waitUntil` is intentional and decoupled: main schedules the
 service-binding fetch and returns `202`; heavy verifies the internal token,
@@ -319,12 +324,12 @@ Classification lives in [`workers/shared/constants.js`](workers/shared/constants
 [`workers/zai-main-worker/src/router.js`](workers/zai-main-worker/src/router.js):
 
 ```js
-classifyCommand('help'); // → 'light'   (implemented)
-classifyCommand('describe'); // → 'light'   (stub)
-classifyCommand('ask'); // → 'light'   (stub)
-classifyCommand('explain'); // → 'light'   (stub)
-classifyCommand('review'); // → 'heavy'   (stub, legacy service-binding path)
-classifyCommand('impact'); // → 'heavy'   (stub, legacy service-binding path)
+classifyCommand('help'); // → 'light'   (implemented — no LLM call)
+classifyCommand('ask'); // → 'heavy'   (stub — LLM)
+classifyCommand('explain'); // → 'heavy'   (stub — LLM)
+classifyCommand('describe'); // → 'heavy'   (stub — LLM)
+classifyCommand('review'); // → 'heavy'   (stub — LLM)
+classifyCommand('impact'); // → 'heavy'   (stub — LLM)
 ```
 
 To reclassify a command, move it between the two arrays — nothing else changes.
@@ -419,8 +424,7 @@ state machine, queue retry budget, and runtime duplicate-delivery handling.
 | 3-attempt retry budget + lease recovery       | ✅ implemented                                                  |
 | One-live-comment publication (D1 lease)       | ✅ implemented                                                  |
 | 30-day retention + cron sweep                 | ✅ implemented                                                  |
-| `describe` / `ask` / `explain` light stubs    | 🟡 stub                                                         |
-| `/zai review` / `/zai impact`                 | 🟡 stub (legacy service-binding path; migrate to durable queue) |
+| `/zai ask`/`explain`/`describe`/`review`/`impact` (heavy LLM) | 🟡 stub (legacy service-binding path; migrate to durable queue) |
 | Z.ai LLM integration                          | ⬜ not started                                                  |
 | `.zai-scheduled.yml` regeneration flows       | ⬜ not started                                                  |
 
@@ -433,4 +437,4 @@ state machine, queue retry budget, and runtime duplicate-delivery handling.
 
 ---
 
-**Version**: 0.3.0 · durable PR-preview storage live · `/zai review` and `/zai impact` migration to durable queue pending
+**Version**: 0.3.1 · all LLM commands (`ask`/`explain`/`describe`/`review`/`impact`) reclassified as heavy; `help` is the only light command

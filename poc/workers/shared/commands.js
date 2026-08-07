@@ -61,12 +61,12 @@ Available commands:
 
 ### Code Review & Analysis
 - \`/zai review\` — Request a full code review of the Pull Request *(heavy)*
-- \`/zai explain <lines>\` — Explain specific lines of code (e.g. \`/zai explain 10-20\`)
-- \`/zai ask <question>\` — Ask a question about the code
+- \`/zai explain <lines>\` — Explain specific lines of code (e.g. \`/zai explain 10-20\`) *(heavy)*
+- \`/zai ask <question>\` — Ask a question about the code *(heavy)*
 - \`/zai impact\` — Analyze the potential impact of changes *(heavy)*
 
 ### Documentation
-- \`/zai describe\` — Generate PR description from commits
+- \`/zai describe\` — Generate PR description from commits *(heavy)*
 
 ### Help
 - \`/zai help\` — Show this help message

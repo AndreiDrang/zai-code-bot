@@ -18,8 +18,10 @@ export const PROGRESS_MARKER = '<!-- zai-progress -->';
 // Command classification — single source of truth for light vs heavy routing.
 // Reclassify a command by moving it between these two sets.
 // ---------------------------------------------------------------------------
-export const LIGHT_COMMANDS = ['help', 'ask', 'explain', 'describe'];
-export const HEAVY_COMMANDS = ['review', 'impact'];
+// LIGHT = completes inline within the webhook (~10s budget), NO LLM call.
+// HEAVY = makes a Z.ai LLM call (or heavy I/O); must run async on the heavy worker.
+export const LIGHT_COMMANDS = ['help'];
+export const HEAVY_COMMANDS = ['ask', 'explain', 'describe', 'review', 'impact'];
 
 // Full allowlist (union of light + heavy). Anything else is "unsupported".
 export const AVAILABLE_COMMANDS = [...LIGHT_COMMANDS, ...HEAVY_COMMANDS];
