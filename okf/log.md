@@ -2,6 +2,8 @@
 
 ## 2026-08-07
 
+- **Create**: [PR closed lifecycle](/workflows/pr-preview-pipeline.md#closed-lifecycle) — `closed` actions now flow through the durable pipeline and post an idempotent "PR closed by @X" comment (`comment_kind` `pr_closed`, marker `<!-- zai-pr-closed -->`); `pull_requests.closed_by` persisted via migration 0003; supersede guard skipped on close. Also added `edited` (title) to the supported actions.
+- **Update**: [Durable PR-preview pipeline](/workflows/pr-preview-pipeline.md), [One-live-comment publication](/state/comment-publication.md), and [D1 storage schema](/datasets/d1-storage-schema.md) for the closed lifecycle + `edited` action + migration 0003.
 - **Create**: Added [Unified bot comment footer](/rules/comment-footer.md) — the shared `BOT_FOOTER` now terminates every bot comment.
 - **Update**: Reworked [Durable PR-preview pipeline](/workflows/pr-preview-pipeline.md) — the preview is metadata-only; dropped per-file stats fetching and the `files` manifest artifact (the head-sha supersede check is now the only GitHub fetch).
 - **Update**: Refreshed [One-live-comment publication](/state/comment-publication.md), [Queue message format](/contracts/queue-message.md), [30-day R2 retention](/rules/r2-retention.md), and [Storage authority model](/architecture/storage-authority-model.md) to drop file-manifest references and reflect the metadata-only brief.

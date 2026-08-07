@@ -5,6 +5,7 @@ description: Exactly one bot comment per (repository, PR, comment_kind) is kept 
 source_paths:
   - poc/workers/shared/comments.js
   - poc/workers/zai-main-worker/migrations/0002_storage_hardening.sql
+  - poc/workers/zai-main-worker/migrations/0003_pr_closed_by.sql
   - poc/workers/zai-heavy-worker/src/handlers/pr-preview.js
 confidence: observed
 status: current
@@ -52,6 +53,19 @@ The publication records `current_head_sha`. The [PR-preview pipeline](/workflows
 verifies that the live PR's `head.sha` still matches the job's `head_sha`
 before publishing — if a newer push arrived, the job returns `superseded` and
 the newer job's publication wins.
+
+# Comment kinds
+
+Each `(repository_id, pr_number, comment_kind)` is an independently maintained
+live comment:
+
+| `comment_kind` | Marker | Published by | Purpose |
+| --- | --- | --- | --- |
+| `pr_preview` | `<!-- zai-pr-preview -->` | PR-preview pipeline | Metadata-only identity brief, updated across pushes |
+| `pr_closed` | `<!-- zai-pr-closed -->` | [Closed lifecycle](/workflows/pr-preview-pipeline.md#closed-lifecycle) | One-time "PR closed by @X" announcement |
+
+Both share the same publication-lease machinery and the
+[unified footer](/rules/comment-footer.md).
 
 # Preview body
 

@@ -11,6 +11,7 @@ source_paths:
   - poc/workers/shared/comments.js
   - poc/workers/shared/pr-preview.js
   - poc/workers/tests/pr-preview-sync.test.js
+  - poc/workers/tests/pr-preview-closed.test.js
 confidence: observed
 status: current
 tags:
@@ -29,8 +30,9 @@ across the [two-worker split](/architecture/two-worker-split.md).
 # Trigger
 
 A `pull_request` webhook with one of these actions: `opened`, `reopened`,
-`synchronize`, `ready_for_review`. These events **never** enter the command
-parser — they are detected early and routed directly to storage.
+`synchronize`, `ready_for_review`, `edited` (title changes only), or `closed`.
+These events **never** enter the command parser — they are detected early and
+routed directly to storage.
 
 # Steps
 
@@ -63,6 +65,19 @@ parser — they are detected early and routed directly to storage.
    via a D1 publication lease.
 7. Cache the body in KV (best-effort, TTL 1h).
 8. Mark the job succeeded and `ack` the queue message.
+
+# Closed lifecycle
+
+A `closed` action rides the same durable pipeline but takes a distinct branch
+in the heavy worker. When `job.state === 'closed'`, the handler renders
+`renderPrClosed({ closedBy })` — a one-time "PR closed by @X" announcement —
+and publishes it under `commentKind = 'pr_closed'` (marker
+`<!-- zai-pr-closed -->`). The supersede `getPullRequest` is skipped (head SHA
+is irrelevant for a close) and the metadata preview comment is left untouched.
+`closed_by` is the webhook `sender` (who closed the PR), captured in
+`extractPullRequestEvent` and persisted on `pull_requests.closed_by` (migration
+0003); GitHub's PR API does not expose it. The same publication lease keeps the
+close comment idempotent across redelivery.
 
 # Failure handling
 
