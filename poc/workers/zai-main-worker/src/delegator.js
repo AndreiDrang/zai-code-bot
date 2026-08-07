@@ -25,6 +25,7 @@ export function buildDelegationPayload(parsed, webhookData) {
   return {
     command: parsed,
     repository: {
+      id: repository?.id,
       owner: repository?.owner?.login,
       name: repository?.name,
       full_name: repository?.full_name,
