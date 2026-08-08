@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { prContextKey } from '../shared/storage/keys.js';
+import { prContextKey, prCommandResultKey } from '../shared/storage/keys.js';
 import { REVIEW_MARKER } from '../shared/constants.js';
 
 // Hoisted mocks — vi.mock factories run before imports, so the fns live here.
@@ -7,8 +7,6 @@ const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   call: vi.fn(),
   upsertComment: vi.fn(),
-  writeArtifact: vi.fn(),
-  linkRunResultArtifact: vi.fn(),
   getRepositoryConfig: vi.fn(),
 }));
 
@@ -17,10 +15,6 @@ vi.mock('../shared/zai-client.js', () => ({
   createZaiClient: () => ({ call: mocks.call, config: {} }),
 }));
 vi.mock('../shared/comments.js', () => ({ upsertComment: mocks.upsertComment }));
-vi.mock('../shared/storage/artifacts.js', () => ({ writeArtifact: mocks.writeArtifact }));
-vi.mock('../shared/storage/jobs.js', () => ({
-  linkRunResultArtifact: mocks.linkRunResultArtifact,
-}));
 vi.mock('../shared/storage/config.js', () => ({ getRepositoryConfig: mocks.getRepositoryConfig }));
 
 import { handleReviewCommand } from '../zai-heavy-worker/src/handlers/review.js';
@@ -40,11 +34,16 @@ const job = {
   author_login: 'author',
 };
 
-/** Fake R2 (context slices + manifest) + KV. Real pr-context-reader runs. */
+/**
+ * Fake R2 (context slices + manifest, with a put() spy) + KV.
+ * The real pr-context-reader runs against this bucket.
+ */
 function makeEnv({
   withDiff = true,
   withFiles = true,
   withDescription = true,
+  withCommits = true,
+  withComments = true,
   apiKey = 'zai-key',
 } = {}) {
   const bucket = {
@@ -54,7 +53,7 @@ function makeEnv({
           text: async () =>
             JSON.stringify({
               headSha: HEAD,
-              counts: { files: 2 },
+              counts: { files: 2, commits: 1, issueComments: 0, reviewComments: 0 },
               aggregates: { additions: 5, deletions: 1 },
             }),
         };
@@ -64,6 +63,21 @@ function makeEnv({
         return { text: async () => JSON.stringify([{ filename: 'a/f' }, { filename: 'b/g' }]) };
       if (withDescription && key === prContextKey(REPO_ID, PR, 'description'))
         return { text: async () => 'A feature' };
+      if (withCommits && key === prContextKey(REPO_ID, PR, 'commits'))
+        return {
+          text: async () =>
+            JSON.stringify([
+              {
+                sha: 'cccc111',
+                title: 'Add feature',
+                message: 'Add feature',
+                author: 'author',
+                date: '2024-01-01',
+              },
+            ]),
+        };
+      if (withComments && key === prContextKey(REPO_ID, PR, 'comments'))
+        return { text: async () => JSON.stringify({ issue: [], review: [] }) };
       return null;
     }),
     put: vi.fn(),
@@ -90,51 +104,57 @@ function makeGithub() {
 beforeEach(() => {
   mocks.call.mockReset();
   mocks.upsertComment.mockReset();
-  mocks.writeArtifact.mockReset();
-  mocks.linkRunResultArtifact.mockReset();
   mocks.getRepositoryConfig.mockReset();
   mocks.getRepositoryConfig.mockResolvedValue({ maxContextBytes: 200000, maxFiles: 100 });
   mocks.upsertComment.mockResolvedValue({ id: 42, created: true });
-  mocks.writeArtifact.mockResolvedValue({
-    artifactId: 'art-1',
-    key: 'k',
-    sha256: 'h',
-    byteLength: 10,
-  });
-  mocks.linkRunResultArtifact.mockResolvedValue(undefined);
 });
 
-describe('/zai review — durable LLM handler', () => {
-  it('reviews, persists response.json, links the run, and publishes a review comment', async () => {
+describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
+  it('reviews, persists the result to /context/review.md, and publishes a comment', async () => {
     mocks.call.mockResolvedValue({ success: true, data: '## Summary\nGood.' });
+    const env = makeEnv();
     const res = await handleReviewCommand({
       github: makeGithub(),
-      env: makeEnv(),
+      env,
       db: {},
       job,
       runId: 'run-1',
     });
 
-    expect(res).toMatchObject({ status: 'reviewed', artifactId: 'art-1', headSha: HEAD });
+    expect(res).toMatchObject({ status: 'reviewed', resultStored: true, headSha: HEAD });
     expect(mocks.call).toHaveBeenCalledOnce();
-    expect(mocks.writeArtifact).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'response', runId: 'run-1', content: '## Summary\nGood.' }),
-    );
-    expect(mocks.linkRunResultArtifact).toHaveBeenCalledWith({}, 'run-1', 'art-1');
+
+    // The result is written to the per-command /context/ key (overwrite store).
+    const expectedKey = prCommandResultKey(REPO_ID, PR, 'review');
+    expect(env.BOT_ARTIFACTS.put).toHaveBeenCalledWith(expectedKey, '## Summary\nGood.');
+
+    // Comment is marker-idempotent, no per-run artifact id anymore.
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
     const upsertArg = mocks.upsertComment.mock.calls[0][0];
     expect(upsertArg).toMatchObject({
       commentKind: 'review',
       marker: REVIEW_MARKER,
       headSha: HEAD,
-      bodyArtifactId: 'art-1',
       jobId: 'job-1',
       owner: 'o',
       repo: 'r',
     });
+    expect(upsertArg.bodyArtifactId).toBeUndefined();
     expect(upsertArg.body).toContain('## 🔍 /zai review');
     expect(upsertArg.body).toContain('## Summary\nGood.');
     expect(upsertArg.body).toContain(REVIEW_MARKER);
+  });
+
+  it('sends the full context (commits + comments) to the LLM, not just the diff', async () => {
+    mocks.call.mockResolvedValue({ success: true, data: 'ok' });
+    await handleReviewCommand({ github: makeGithub(), env: makeEnv(), db: {}, job, runId: 'r' });
+    const userPrompt = mocks.call.mock.calls[0][0].messages[1].content;
+    expect(userPrompt).toContain('## Diff');
+    expect(userPrompt).toContain('## Commits (1)');
+    expect(userPrompt).toContain('`cccc111` Add feature — author');
+    expect(userPrompt).toContain('## Description');
+    expect(userPrompt).toContain('A feature');
+    expect(userPrompt).toContain('## Changed files (2)');
   });
 
   it('posts a "not configured" notice and skips the LLM when ZAI_API_KEY is unset', async () => {
@@ -154,15 +174,11 @@ describe('/zai review — durable LLM handler', () => {
   it('posts a "no diff" notice when no diff can be loaded', async () => {
     const github = makeGithub();
     github.getPrDiff.mockResolvedValue(''); // live fallback empty too
-    const res = await handleReviewCommand({
-      github,
-      env: makeEnv({ withDiff: false }),
-      db: {},
-      job,
-      runId: 'run-1',
-    });
+    const env = makeEnv({ withDiff: false });
+    const res = await handleReviewCommand({ github, env, db: {}, job, runId: 'run-1' });
     expect(res.status).toBe('no_diff');
     expect(mocks.call).not.toHaveBeenCalled();
+    expect(env.BOT_ARTIFACTS.put).not.toHaveBeenCalled();
     expect(mocks.upsertComment.mock.calls[0][0].body).toContain('nothing to review');
   });
 
@@ -187,31 +203,33 @@ describe('/zai review — durable LLM handler', () => {
       success: false,
       error: { category: 'provider', retryable: true, attempts: 3 },
     });
+    const env = makeEnv();
     const res = await handleReviewCommand({
       github: makeGithub(),
-      env: makeEnv(),
+      env,
       db: {},
       job,
       runId: 'run-1',
     });
     expect(res).toMatchObject({ status: 'llm_failed', errorCode: 'provider' });
-    expect(mocks.writeArtifact).not.toHaveBeenCalled();
+    expect(env.BOT_ARTIFACTS.put).not.toHaveBeenCalled(); // nothing persisted on failure
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
     expect(mocks.upsertComment.mock.calls[0][0].body).toContain('could not complete');
   });
 
-  it('still publishes the review even if artifact persistence throws', async () => {
+  it('still publishes the review even if result persistence (bucket.put) throws', async () => {
     mocks.call.mockResolvedValue({ success: true, data: '## Summary\nGood.' });
-    mocks.writeArtifact.mockRejectedValue(new Error('r2 down'));
+    const env = makeEnv();
+    env.BOT_ARTIFACTS.put.mockRejectedValue(new Error('r2 down'));
     const res = await handleReviewCommand({
       github: makeGithub(),
-      env: makeEnv(),
+      env,
       db: {},
       job,
       runId: 'run-1',
     });
     expect(res.status).toBe('reviewed');
-    expect(res.artifactId).toBeNull(); // artifact write failed -> null, but comment still posted
+    expect(res.resultStored).toBe(false); // persist failed -> false, but comment still posted
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deliveryArtifactKey,
   prCardKey,
+  prCommandResultKey,
   prContextKey,
   repoConfigCacheKey,
   runArtifactKey,
@@ -31,10 +32,17 @@ describe('storage key contracts', () => {
     expect(prContextKey(10, 7, 'description')).toBe('v1/prs/10/7/context/description.md');
   });
 
+  it('builds a per-command result key under the same /context/ prefix (overwrite)', () => {
+    // One object per (repo, PR, command); re-running a command overwrites it.
+    expect(prCommandResultKey(10, 7, 'review')).toBe('v1/prs/10/7/context/review.md');
+    expect(prCommandResultKey(10, 7, 'impact')).toBe('v1/prs/10/7/context/impact.md');
+  });
+
   it('rejects unsafe key components and unknown context kinds', () => {
     expect(() => runArtifactKey('1/2', 'run', 'result', 'md')).toThrow('storage key component');
     expect(() => prCardKey('../x', 7)).toThrow('storage key component');
     expect(() => prContextKey(10, 7, 'bogus')).toThrow('Invalid PR context kind');
+    expect(() => prCommandResultKey(10, 7, '../rev')).toThrow('storage key component');
   });
 });
 

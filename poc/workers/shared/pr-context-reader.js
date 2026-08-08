@@ -1,4 +1,4 @@
-import { prCardKey, prContextKey } from './storage/keys.js';
+import { prCardKey, prContextKey, prCommandResultKey } from './storage/keys.js';
 
 /**
  * Read-helpers for the PR-context tier, shared by the command handlers
@@ -57,6 +57,25 @@ export async function readContextSlice(bucket, repositoryId, prNumber, kind) {
     if (!object) return null;
     const text = await object.text();
     return kind === 'diff' || kind === 'description' ? text : JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads a stored COMMAND RESULT — the latest LLM output of one /zai command for
+ * one PR (`v1/prs/{repo}/{pr}/context/{command}.md`). Pairs with the
+ * runLlmCommand runner's write so the command-result tier is never write-only:
+ * the published comment can note/links the latest result, and a future
+ * `/zai <cmd> --last` reads from here. Best-effort like the slice readers.
+ * @returns {Promise<string|null>}
+ */
+export async function readCommandResult(bucket, repositoryId, prNumber, command) {
+  if (!bucket?.get || repositoryId == null || prNumber == null || command == null) return null;
+  try {
+    const object = await bucket.get(prCommandResultKey(repositoryId, prNumber, command));
+    if (!object) return null;
+    return await object.text();
   } catch {
     return null;
   }

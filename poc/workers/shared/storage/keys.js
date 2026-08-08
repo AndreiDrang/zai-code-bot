@@ -78,3 +78,18 @@ export function prContextKey(repositoryId, prNumber, kind) {
   }
   return `v${STORAGE_SCHEMA_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/${kind}.${CONTEXT_KIND_EXTENSION[kind]}`;
 }
+
+/**
+ * R2 key for a COMMAND RESULT — the LLM output of one /zai command for one PR,
+ * stored under the same `/context/` prefix as the gathered slices but OUTSIDE
+ * `PR_CONTEXT_KINDS` (those are gather inputs + the manifest contract).
+ *
+ * One object per (repo, PR, command): `v1/prs/{repo}/{pr}/context/review.md`.
+ * Overwrite semantics — re-running `/zai review` replaces the latest result.
+ * Written with a raw `bucket.put` (no D1 index, no manifest coupling), exactly
+ * like the incremental slice refresh. Retention rides the same `v1/prs/`
+ * lifecycle rule as the gathered context.
+ */
+export function prCommandResultKey(repositoryId, prNumber, command) {
+  return `v${STORAGE_SCHEMA_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/${component(command, 'command')}.md`;
+}

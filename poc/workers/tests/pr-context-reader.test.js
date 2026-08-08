@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   readPrCard,
   readContextManifest,
+  readCommandResult,
   renderContextSummary,
   renderPrCardShape,
 } from '../shared/pr-context-reader.js';
-import { prCardKey, prContextKey } from '../shared/storage/keys.js';
+import { prCardKey, prContextKey, prCommandResultKey } from '../shared/storage/keys.js';
 
 describe('readPrCard — KV pr-card', () => {
   it('returns the parsed card on a hit', async () => {
@@ -44,6 +45,32 @@ describe('readContextManifest — R2 manifest', () => {
   it('returns null when no manifest exists', async () => {
     const bucket = { get: vi.fn().mockResolvedValue(null) };
     await expect(readContextManifest(bucket, 10, 7)).resolves.toBeNull();
+  });
+});
+
+describe('readCommandResult — R2 latest command output', () => {
+  it('returns the stored markdown text on a hit', async () => {
+    const bucket = {
+      get: vi.fn().mockResolvedValue({ text: () => Promise.resolve('## Summary\nGood.') }),
+    };
+    await expect(readCommandResult(bucket, 10, 7, 'review')).resolves.toBe('## Summary\nGood.');
+    expect(bucket.get).toHaveBeenCalledWith(prCommandResultKey(10, 7, 'review'));
+  });
+
+  it('returns null when no result is stored for that command', async () => {
+    const bucket = { get: vi.fn().mockResolvedValue(null) };
+    await expect(readCommandResult(bucket, 10, 7, 'review')).resolves.toBeNull();
+  });
+
+  it('returns null when the bucket get throws (derivative tier)', async () => {
+    const bucket = { get: vi.fn().mockRejectedValue(new Error('R2 down')) };
+    await expect(readCommandResult(bucket, 10, 7, 'review')).resolves.toBeNull();
+  });
+
+  it('returns null without a bucket binding or identifiers', async () => {
+    await expect(readCommandResult(null, 10, 7, 'review')).resolves.toBeNull();
+    await expect(readCommandResult({ get: vi.fn() }, 10, null, 'review')).resolves.toBeNull();
+    await expect(readCommandResult({ get: vi.fn() }, 10, 7, null)).resolves.toBeNull();
   });
 });
 
