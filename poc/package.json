@@ -1,0 +1,30 @@
+{
+  "name": "zai-code-bot-workers",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Hybrid Cloudflare Workers for Z.ai Code Bot: main (light) + heavy (offloaded) workers sharing a common lib layer",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "format:js": "prettier --write \"workers/**/*.js\"",
+    "format:js:check": "prettier --check \"workers/**/*.js\"",
+    "dev:main": "cd workers/zai-main-worker && wrangler dev",
+    "dev:heavy": "cd workers/zai-heavy-worker && wrangler dev",
+    "deploy:main": "cd workers/zai-main-worker && wrangler deploy",
+    "deploy:heavy": "cd workers/zai-heavy-worker && wrangler deploy",
+    "deploy:main:dry-run": "cd workers/zai-main-worker && wrangler deploy --dry-run",
+    "deploy:heavy:dry-run": "cd workers/zai-heavy-worker && wrangler deploy --dry-run",
+    "tail:main": "cd workers/zai-main-worker && wrangler tail",
+    "tail:heavy": "cd workers/zai-heavy-worker && wrangler tail"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.0",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8",
+    "vitest-environment-miniflare": "^2.14.4"
+  }
+}

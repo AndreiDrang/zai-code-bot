@@ -1,0 +1,101 @@
+# zai-main-worker — receives GitHub webhooks, runs light commands,
+# delegates heavy commands to zai-heavy-worker via a Service Binding.
+name = "zai-main-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-05"
+
+[vars]
+NODE_ENV = "production"
+ZAI_MODEL = "glm-5.2"
+R2_RETENTION_DAYS = "30"
+
+# Production resource IDs are supplied before deploy.
+[[d1_databases]]
+binding = "BOT_DB"
+database_name = "bot-db"
+database_id = "2f6c5cd9-ec01-44ad-8ea8-fb1bb5523226"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BOT_ARTIFACTS"
+bucket_name = "bot-storage"
+
+# R2 lifecycle for the PR-context tier: objects under `v1/prs/` (the gather
+# output) expire after R2_RETENTION_DAYS (30). Bucket-level rule — apply via:
+#   npx wrangler r2 bucket lifecycle add bot-storage \
+#     --id pr-context-retention --prefix "v1/prs/" --expire-days 30
+# (Mirrored in zai-heavy-worker/wrangler.toml; the rule lives on the bucket.)
+
+[[kv_namespaces]]
+binding = "BOT_CACHE"
+id = "a0fca8c009de4e57a0d241d5ebcaf055"
+
+[[queues.producers]]
+binding = "BOT_JOBS"
+queue = "bot-jobs"
+
+# Worker-to-Worker delegation (internal to the Cloudflare account).
+# `env.HEAVY_WORKER.fetch(...)` is available inside the worker.
+[[services]]
+binding = "HEAVY_WORKER"
+service = "zai-heavy-worker"
+
+# Public ingress for GitHub webhooks.
+#   • Adding a route INFERS workers_dev=false on the next deploy → the
+#     *.workers.dev URL disappears. Point the GitHub webhook at
+#     https://zai-worker.tokenbel.info (Payload URL).
+#   • A route (pattern+zone_name) requires a PROXIED DNS record for
+#     zai-worker.tokenbel.info to already exist in the tokenbel.info zone.
+#     If you'd rather have Cloudflare auto-create the DNS record + TLS cert,
+#     replace this block with:  pattern = "zai-worker.tokenbel.info",
+#     custom_domain = true   (no zone_name, no /* path).
+[[routes]]
+pattern = "zai-worker.tokenbel.info/*"
+zone_name = "tokenbel.info"
+
+[[routes]]
+pattern = "zai-worker.tokenbel.info"
+custom_domain = true
+
+# Secrets — sourced from Cloudflare Secrets Store (NOT per-worker secrets).
+# One store is shared across both workers; `binding` is the env var the code
+# reads (env.<binding>) and `secret_name` is the key inside the store.
+# Store id: 629e5dd6594845a889e6ddabb26cc009
+#   GITHUB_WEBHOOK_SECRET  <- secret ZAI_GITHUB_WEBHOOK_KEY  (HMAC-SHA256 webhook secret)
+#   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT: repo + read:org)
+#   ZAI_INTERNAL_TOKEN     <- secret ZAI_INTERNAL_TOKEN       (shared main<->heavy auth)
+#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once LLM calls land)
+[[secrets_store_secrets]]
+binding = "GITHUB_WEBHOOK_SECRET"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_WEBHOOK_KEY"
+
+[[secrets_store_secrets]]
+binding = "GITHUB_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_INTERNAL_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_INTERNAL_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_API_KEY"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_API_KEY"
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[placement]
+mode = "smart"

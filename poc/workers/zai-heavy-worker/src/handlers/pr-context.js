@@ -1,0 +1,230 @@
+import { prContextKey, prCardKey } from '../../../shared/storage/keys.js';
+import { getRepositoryConfig } from '../../../shared/storage/config.js';
+import { createLogger } from '../../../shared/logging.js';
+import { projectComments } from '../../../shared/pr-comments.js';
+
+/**
+ * Eager PR-context gather job.
+ *
+ * Writes the PR's TASK CONTEXT to R2 under per-PR keys
+ * (`v1/prs/{repo}/{pr}/context/{kind}` — keyed per PR, not per head) and a
+ * small PR "card" to KV (`v1:pr-card:{repo}:{pr}`). R2 context is the blob tier
+ * reused by the heavy review/impact handlers (no re-fetch); the KV card lets
+ * command handlers read the PR's shape without calling getPullRequest.
+ *
+ * No LLM, no comment. Idempotent per PR head: the per-PR manifest is read and a
+ * gather for the SAME headSha short-circuits a redelivery; a newer head
+ * overwrites the snapshot in place.
+ */
+
+const PR_CARD_TTL_SECONDS = 30 * 24 * 60 * 60; // 30d — matches the R2 context lifecycle
+const DEFAULT_MAX_CONTEXT_BYTES = 200000;
+const COMMIT_CAP = 100;
+
+export async function handlePrContextJob({ github, env, db, job }) {
+  const logger = createLogger(env, 'zai-heavy-worker:pr-context');
+  const bucket = env.BOT_ARTIFACTS;
+  const cache = env.BOT_CACHE;
+  const { repository_id: repoId, pr_number: prNumber, head_sha: headSha } = job;
+  const manifestKey = prContextKey(repoId, prNumber, 'manifest');
+
+  // Idempotency: the context is keyed per PR, so we read the existing manifest
+  // and skip only if it describes THIS SAME head (a redelivery). A different
+  // head means a newer commit landed → overwrite the snapshot. `get` (not
+  // `head`) because we need the headSha stamp inside the manifest.
+  let existingHead = null;
+  if (bucket?.get) {
+    const existing = await bucket.get(manifestKey).catch(() => null);
+    if (existing) {
+      try {
+        existingHead = (JSON.parse(await existing.text()) || {}).headSha ?? null;
+      } catch {
+        /* corrupt manifest → re-gather */
+      }
+    }
+  }
+  if (existingHead && existingHead === headSha) {
+    return { status: 'skipped', action: 'pr_context', reason: 'same_head_manifest_exists' };
+  }
+
+  const config = await getRepositoryConfig(db, cache, repoId);
+  const maxBytes = Number(config.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
+  const maxFiles = Math.max(1, Number(config.maxFiles) || 100);
+  const owner = job.repository_owner;
+  const name = job.repository_name;
+
+  // Fetch all slices in parallel; a single slice failure degrades but does not
+  // abort the gather (the manifest records what was actually captured).
+  const [pullRequest, filesPage, diff, commits, comments] = await Promise.all([
+    github.getPullRequest(owner, name, prNumber).catch(() => null),
+    github.getPrFiles(owner, name, prNumber, 1, Math.min(maxFiles, 100)).catch(() => []),
+    github.getPrDiff(owner, name, prNumber).catch(() => ''),
+    github.getPrCommits(owner, name, prNumber, 1, COMMIT_CAP).catch(() => []),
+    github
+      .getPrComments(owner, name, prNumber, { maxComments: 100 })
+      .catch(() => ({ issue: [], review: [] })),
+  ]);
+
+  // Compact projections — store what consumers need, not raw API blobs. The
+  // raw page is kept separately so the diff can be reconstructed from the
+  // per-file patches when GitHub refuses the unified diff (PRs > 300 files).
+  const rawFiles = Array.isArray(filesPage) ? filesPage : [];
+  const files = rawFiles.slice(0, maxFiles).map((f) => ({
+    filename: f.filename,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    changes: f.changes,
+  }));
+  const commitsPayload = (Array.isArray(commits) ? commits : []).slice(0, COMMIT_CAP).map((c) => {
+    const message = String(c.commit?.message || '');
+    return {
+      sha: c.sha,
+      title: message.split('\n')[0],
+      message, // full commit message (subject + body), not just the subject line
+      author: c.commit?.author?.name || c.author?.login || null,
+      date: c.commit?.author?.date || null,
+    };
+  });
+  // Shared projection — identical to the incremental comment-refresh path
+  // (shared/pr-comments.js), so the gather and the issue_comment refresh never
+  // drift in the stored slice shape. Includes `updated_at` so edits are visible.
+  const commentsPayload = projectComments(comments);
+  // Prefer GitHub's unified diff; fall back to reconstructing it from the
+  // per-file patches when the unified diff is unavailable. GitHub 406s the
+  // .diff media type for PRs over 300 files ("diff too_large") and points users
+  // at the List-Files API — whose `patch` field we already fetched above.
+  const unifiedDiff = typeof diff === 'string' && diff.length ? diff : '';
+  let diffSource = 'none';
+  if (unifiedDiff) {
+    diffSource = 'unified';
+  } else if (rawFiles.some((f) => typeof f.patch === 'string' && f.patch.length)) {
+    diffSource = 'reconstructed';
+  }
+  const diffText = (unifiedDiff || reconstructDiff(rawFiles.slice(0, maxFiles))).slice(0, maxBytes);
+
+  const aggregates = aggregateFiles(files);
+  const gatheredAt = new Date().toISOString();
+
+  // Write the five context slices (deterministic keys). The manifest is written
+  // LAST so a crash before it leaves the gather retryable (no false "already
+  // gathered" marker); on retry every slice is re-fetched and overwritten.
+  if (bucket?.put) {
+    const k = (kind) => prContextKey(repoId, prNumber, kind);
+    await Promise.all([
+      putJson(bucket, k('files'), files),
+      putText(bucket, k('diff'), diffText, 'text/x-diff'),
+      putJson(bucket, k('commits'), commitsPayload),
+      putText(bucket, k('description'), pullRequest?.body || '', 'text/markdown'),
+      putJson(bucket, k('comments'), commentsPayload),
+    ]);
+
+    const manifest = {
+      repositoryId: repoId,
+      prNumber,
+      headSha,
+      title: pullRequest?.title ?? job.title ?? null,
+      authorLogin: pullRequest?.user?.login ?? job.author_login ?? null,
+      gatheredAt,
+      contextPrefix: `v1/prs/${repoId}/${prNumber}/context`,
+      aggregates,
+      counts: {
+        files: files.length,
+        commits: commitsPayload.length,
+        issueComments: commentsPayload.issue.length,
+        reviewComments: commentsPayload.review.length,
+      },
+      truncated: { diffBytes: diffText.length, maxBytes, diffSource },
+    };
+    await putJson(bucket, manifestKey, manifest);
+  }
+
+  // KV pr-card: small hot shape snapshot. Keyed by (repo, pr) — NOT headSha —
+  // so command handlers read the latest gathered shape without getPullRequest.
+  if (cache?.put) {
+    const card = {
+      repositoryId: repoId,
+      prNumber,
+      headSha,
+      title: pullRequest?.title ?? job.title ?? null,
+      authorLogin: pullRequest?.user?.login ?? job.author_login ?? null,
+      state: pullRequest?.state ?? job.state ?? 'open',
+      changedFiles: pullRequest?.changed_files ?? aggregates.changedFiles,
+      additions: pullRequest?.additions ?? aggregates.additions,
+      deletions: pullRequest?.deletions ?? aggregates.deletions,
+      contextReady: true,
+      contextPrefix: `v1/prs/${repoId}/${prNumber}/context`,
+      gatheredAt,
+    };
+    await cache
+      .put(prCardKey(repoId, prNumber), JSON.stringify(card), {
+        expirationTtl: PR_CARD_TTL_SECONDS,
+      })
+      .catch(() => {
+        /* KV is derivative — a failed card write degrades, not fails */
+      });
+  }
+
+  logger.info('Gathered PR context', {
+    repo: job.repository_full_name,
+    pr: prNumber,
+    headSha,
+    files: files.length,
+    commits: commitsPayload.length,
+  });
+
+  return {
+    status: 'success',
+    action: 'pr_context',
+    counts: {
+      files: files.length,
+      commits: commitsPayload.length,
+      comments: commentsPayload.issue.length + commentsPayload.review.length,
+    },
+  };
+}
+
+function aggregateFiles(files) {
+  let additions = 0;
+  let deletions = 0;
+  for (const f of files) {
+    additions += Number(f.additions) || 0;
+    deletions += Number(f.deletions) || 0;
+  }
+  return { changedFiles: files.length, additions, deletions };
+}
+
+/**
+ * Build a unified-diff-shaped string from the per-file `patch` fields returned
+ * by the List-Files API. This is the GitHub-recommended fallback when the PR's
+ * unified .diff media type is refused ("diff exceeded the maximum number of
+ * files (300)") or otherwise unavailable. Output is bounded by the caller via
+ * maxBytes before it reaches R2.
+ */
+function reconstructDiff(files) {
+  const parts = [];
+  for (const f of files) {
+    if (typeof f.patch !== 'string' || !f.patch) continue;
+    parts.push(
+      `diff --git a/${f.filename} b/${f.filename}`,
+      `--- a/${f.filename}`,
+      `+++ b/${f.filename}`,
+      f.patch,
+    );
+  }
+  return parts.join('\n');
+}
+
+function putJson(bucket, key, value) {
+  return bucket.put(key, JSON.stringify(value), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+}
+
+function putText(bucket, key, text, contentType) {
+  return bucket.put(key, text, { httpMetadata: { contentType } });
+}
+
+export function canHandle(commandType) {
+  return commandType === 'pr_context';
+}

@@ -1,0 +1,8 @@
+# Local development secrets for `wrangler dev` (dotenv format).
+# Copy to .dev.vars and fill in real values. NEVER commit .dev.vars.
+# Keys are the `binding` names (= env vars the code reads); in production these
+# are injected from the Cloudflare Secrets Store (store 629e5dd...).
+GITHUB_WEBHOOK_SECRET=local-webhook-secret
+GITHUB_TOKEN=ghp_local_replace_me
+ZAI_INTERNAL_TOKEN=local-internal-token
+ZAI_API_KEY=local-zai-key
