@@ -1,34 +1,39 @@
 # AGENTS.md
 
-## Scope
-
-Repository-wide guidance for the Cloudflare Workers implementation.
-
 ## Repository overview
 
-This project has two Workers under `poc/workers/`:
+Z.ai Code Bot: Cloudflare Workers that turn `/zai` GitHub PR comments into
+Z.ai-powered review and describe results.
 
-1. `zai-main-worker` — signed GitHub webhook ingress, authorization, context
-   gather scheduling, durable job creation, and recovery cron.
-2. `zai-heavy-worker` — private Queue consumer for `review`, `describe`, and
-   the internal `pr_context` gather job.
+- `zai-main-worker` — signed GitHub webhook ingress, authorization, durable job
+  creation, PR-context scheduling, and a recovery cron (`*/5 * * * *`).
+- `zai-heavy-worker` — private Queue consumer for `review`, `describe`, and the
+  internal `pr_context` / `pr_summary` gather jobs.
+
+All implementation and tests live under `poc/`; everything else at the root is
+docs or tooling:
+
+```text
+poc/                  # Workers implementation (see poc/AGENTS.md)
+okf/                  # OKF knowledge bundle; okf/index.md is the entry point
+.agents/skills/       # Vendored Cloudflare skills (wrangler, workers-best-practices, …)
+docs/                 # Currently empty — do not link into it
+dist/ coverage/       # Untracked leftovers of the removed GitHub Action runtime
+*.md                  # ARCHITECTURE, RUNBOOK, SECURITY, CONTRIBUTING, README
+```
 
 The old GitHub Action runtime (`action.yml`, `src/`, `dist/`, and its tests) has
 been removed. Do not recreate it.
 
 ## Supported product surface
 
-- `/zai help`
-- `/zai review`
-- `/zai describe`
-
-`/zai help` is handled inline by the main Worker. Review and describe run through
-the durable Queue; there is no legacy service binding.
+- `/zai help` — handled inline by the main Worker; no D1 job, no Queue message.
+- `/zai review`, `/zai describe` — durable jobs through the `bot-jobs` Queue.
 
 ## Important files
 
 | Area | Location |
-|---|---|
+| --- | --- |
 | Webhook routing | `poc/workers/zai-main-worker/src/index.js` |
 | Command allowlist | `poc/workers/shared/constants.js` |
 | Command parsing | `poc/workers/shared/commands.js` |
@@ -51,7 +56,23 @@ the durable Queue; there is no legacy service binding.
 - Use Cloudflare bindings and Secrets Store; do not add a GitHub Action
   runtime, `dist` bundle, or public heavy-worker endpoint.
 
+## Context routing
+
+Read only when relevant:
+
+- Cross-worker data flow or boundary changes → `ARCHITECTURE.md`
+- Command flow, bindings, R2 context layout → `poc/README.md`
+- Operational failures and recovery → `RUNBOOK.md`
+- Trust boundaries and user-visible output rules → `SECURITY.md`
+- Change rules and commit expectations → `CONTRIBUTING.md`
+- Cloudflare platform questions → `.agents/skills/wrangler/SKILL.md`,
+  `.agents/skills/workers-best-practices/SKILL.md`
+- `okf/` is a curated knowledge artifact, not source code — start from
+  `okf/index.md` and update it deliberately when architecture changes.
+
 ## Validation
+
+CI (`.github/workflows/ci.yml`) runs from `poc/` on Node 20 and 22:
 
 ```bash
 cd poc
@@ -60,3 +81,6 @@ npm test
 npm run deploy:main:dry-run
 npm run deploy:heavy:dry-run
 ```
+
+CI additionally runs `npm audit --audit-level=moderate`. Workspace mechanics
+(script inventory, tests, coverage) are in `poc/AGENTS.md`.
