@@ -222,10 +222,13 @@ describe('D1 storage adapters', () => {
   });
 
   it('lists expired running jobs in a bounded batch', async () => {
-    const db = fakeDb({     const db = fakeDb({ allValue: [{ job_id: 'job-1', attempt_count: 2, kind: 'review' }] });
-iredRunningJobs(db, 10, '2026-01-01T00:00:00.000Z')).resolves.toEqual([
-      { job_id: 'job-1',      { job_id: 'job-1', attempt_count: 2, kind: 'review' },
-s defaults when no repository configuration exists', async () => {
+    const db = fakeDb({ allValue: [{ job_id: 'job-1', attempt_count: 2, kind: 'review' }] });
+    await expect(listExpiredRunningJobs(db, 10, '2026-01-01T00:00:00.000Z')).resolves.toEqual([
+      { job_id: 'job-1', attempt_count: 2, kind: 'review' },
+    ]);
+  });
+
+  it('uses defaults when no repository configuration exists', async () => {
     const cache = { put: vi.fn().mockRejectedValue(new Error('cache down')) };
     await expect(
       getRepositoryConfig(fakeDb({ firstValue: null }), cache, 10),
@@ -273,8 +276,8 @@ describe('marker-scoped comment persistence', () => {
         first: vi.fn().mockResolvedValue({
           repository_id: 10,
           pr_number: 7,
-          comment_kind:           comment_kind: 'review',
-_id: null,
+          comment_kind: 'review',
+          github_comment_id: null,
           status: 'publishing',
         }),
       }),
@@ -283,8 +286,8 @@ _id: null,
       claimPublication(db, {
         repositoryId: 10,
         prNumber: 7,
-        commentKind: 'pr        commentKind: 'review',
-rker -->',
+        commentKind: 'review',
+        marker: '<!-- marker -->',
         jobId: 'job-1',
       }),
     ).resolves.toMatchObject({ status: 'publishing' });
@@ -292,8 +295,8 @@ rker -->',
       claimPublication(db, {
         repositoryId: 10,
         prNumber: 7,
-        commentKind: 'pr        commentKind: 'review',
-rker -->',
+        commentKind: 'review',
+        marker: '<!-- marker -->',
         jobId: 'job-2',
       }),
     ).resolves.toBeNull();
@@ -315,8 +318,8 @@ rker -->',
         issueNumber: 7,
         repositoryId: 10,
         headSha: 'abc',
-        commentKind: 'pr        commentKind: 'review',
-rker -->',
+        commentKind: 'review',
+        marker: '<!-- marker -->',
         body: 'body',
         jobId: 'job-1',
       }),
@@ -343,8 +346,8 @@ rker -->',
         issueNumber: 7,
         repositoryId: 10,
         headSha: 'abc',
-        commentKind: 'pr        commentKind: 'review',
-rker -->',
+        commentKind: 'review',
+        marker: '<!-- marker -->',
         body: 'body',
         jobId: 'job-1',
       }),
