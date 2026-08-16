@@ -11,7 +11,12 @@ vi.mock('../shared/storage/config.js', () => ({
 
 import { handlePrContextJob } from '../zai-heavy-worker/src/handlers/pr-context.js';
 import { getRepositoryConfig } from '../shared/storage/config.js';
-import { prContextKey, prCardKey } from '../shared/storage/keys.js';
+import {
+  prContextKey,
+  prContextV2DiffKey,
+  prContextV2Key,
+  prCardKey,
+} from '../shared/storage/keys.js';
 
 // JSON.parse can throw on malformed input; wrap it so the test bodies stay
 // assertion-focused (and satisfy the unchecked-throwing-call guard).
@@ -107,13 +112,16 @@ describe('handlePrContextJob — gather', () => {
     });
     expect(res).toMatchObject({ status: 'success', action: 'pr_context' });
 
-    // Keys are per-PR (repo, pr, kind) — NO headSha segment.
+    // V1 is retained for compatibility while V2 stores per-file patches.
     const keys = bucket.put.mock.calls.map((c) => c[0]);
     for (const kind of ['manifest', 'files', 'diff', 'commits', 'description', 'comments']) {
       expect(keys).toContain(prContextKey(10, 7, kind));
     }
-    // Manifest is the commit marker — written last.
-    expect(bucket.put.mock.calls.at(-1)[0]).toBe(prContextKey(10, 7, 'manifest'));
+    for (const kind of ['files', 'commits', 'description', 'comments']) {
+      expect(keys).toContain(prContextV2Key(10, 7, kind));
+    }
+    // V2 manifest is the complete snapshot's commit marker.
+    expect(bucket.put.mock.calls.at(-1)[0]).toBe(prContextV2Key(10, 7, 'manifest'));
 
     // pr-card keyed by (repo, pr), 30d TTL, carries the head inside.
     expect(cache.put).toHaveBeenCalledWith(
@@ -132,7 +140,7 @@ describe('handlePrContextJob — gather', () => {
 
   it('skips a redelivery when the per-PR manifest already describes this same head', async () => {
     const bucket = fakeR2({
-      [prContextKey(10, 7, 'manifest')]: JSON.stringify({ headSha: 'abc' }),
+      [prContextV2Key(10, 7, 'manifest')]: JSON.stringify({ schemaVersion: 2, headSha: 'abc' }),
     });
     const cache = fakeCache();
     const github = makeGithub();
@@ -182,6 +190,13 @@ describe('handlePrContextJob — gather', () => {
       counts: { files: 2, commits: 1, issueComments: 1, reviewComments: 0 },
       aggregates: { changedFiles: 2, additions: 10, deletions: 2 },
       contextPrefix: 'v1/prs/10/7/context',
+    });
+    const v2Manifest = parseJson(bucket.store.get(prContextV2Key(10, 7, 'manifest')));
+    expect(v2Manifest).toMatchObject({
+      schemaVersion: 2,
+      headSha: 'abc',
+      contextPrefix: 'v2/prs/10/7/context',
+      counts: { files: 2, diffsAvailable: 0, diffsUnavailable: 2 },
     });
   });
 
@@ -295,6 +310,52 @@ describe('handlePrContextJob — gather', () => {
     expect(storedDiff).toContain('+new');
     const manifest = parseJson(bucket.store.get(prContextKey(10, 7, 'manifest')));
     expect(manifest.truncated.diffSource).toBe('reconstructed');
+    const files = parseJson(bucket.store.get(prContextV2Key(10, 7, 'files')));
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: 'a.js',
+          diff: expect.objectContaining({ state: 'available', bytes: expect.any(Number) }),
+        }),
+        expect.objectContaining({
+          path: 'b.js',
+          diff: expect.objectContaining({ state: 'available', bytes: expect.any(Number) }),
+        }),
+      ]),
+    );
+    expect(bucket.store.get(prContextV2DiffKey(10, 7, 'a.js'))).toContain('@@ -1 +1 @@');
+    expect(bucket.store.get(prContextV2DiffKey(10, 7, 'b.js'))).toContain('+added');
+  });
+
+  it('marks a binary or unavailable patch explicitly instead of silently truncating it', async () => {
+    const bucket = fakeR2();
+    const github = makeGithub({
+      getPrFiles: vi.fn().mockResolvedValue([
+        {
+          filename: 'assets/logo.png',
+          status: 'modified',
+          additions: 0,
+          deletions: 0,
+          changes: 0,
+          binary: true,
+        },
+      ]),
+    });
+    await handlePrContextJob({
+      github,
+      env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
+      db: {},
+      job: baseJob,
+    });
+    const files = parseJson(bucket.store.get(prContextV2Key(10, 7, 'files')));
+    expect(files).toEqual([
+      expect.objectContaining({
+        path: 'assets/logo.png',
+        binary: true,
+        diff: { state: 'unavailable', reason: 'binary_file', bytes: null },
+      }),
+    ]);
+    expect(bucket.store.has(prContextV2DiffKey(10, 7, 'assets/logo.png'))).toBe(false);
   });
 
   it('still succeeds with no R2/KV bindings (writes are no-ops)', async () => {
