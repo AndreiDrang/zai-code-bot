@@ -90,5 +90,4 @@ describe('renderers', () => {
   it('renderContextSummary is empty without a manifest', () => {
     expect(renderContextSummary(null)).toBe('');
   });
-
 });

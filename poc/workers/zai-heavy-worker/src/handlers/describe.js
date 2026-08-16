@@ -8,10 +8,7 @@
 
 import { DESCRIBE_MARKER, BOT_FOOTER } from '../../../shared/constants.js';
 import { createLogger } from '../../../shared/logging.js';
-import {
-  readContextManifest,
-  readContextSlice,
-} from '../../../shared/pr-context-reader.js';
+import { readContextManifest, readContextSlice } from '../../../shared/pr-context-reader.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
 import { prCommandResultKey } from '../../../shared/storage/keys.js';
 import { upsertComment } from '../../../shared/comments.js';
@@ -52,9 +49,15 @@ CI/CD, dependencies, and configuration changes.`;
  */
 export async function handleDescribeCommand({ github, env, db, job, runId }) {
   const logger = createLogger(env, 'zai-heavy-worker:describe');
-  const { repository_id: repoId, pr_number: prNumber, repository_owner: owner,
-    repository_name: name, head_sha: headSha, job_id: jobId,
-    repository_full_name: repoFullName } = job;
+  const {
+    repository_id: repoId,
+    pr_number: prNumber,
+    repository_owner: owner,
+    repository_name: name,
+    head_sha: headSha,
+    job_id: jobId,
+    repository_full_name: repoFullName,
+  } = job;
 
   const manifest = await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber);
   let commits = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'commits');
@@ -142,7 +145,11 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
     }
   }
 
-  await publishStatus(identity, 'The PR description was updated from its commit history.', 'updated');
+  await publishStatus(
+    identity,
+    'The PR description was updated from its commit history.',
+    'updated',
+  );
   return {
     ...result('updated', repoFullName, prNumber),
     model: env?.ZAI_MODEL || 'glm-5.2',

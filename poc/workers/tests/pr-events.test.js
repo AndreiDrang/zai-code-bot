@@ -134,5 +134,4 @@ describe('extractPullRequestEvent', () => {
     expect(extractPullRequestEvent({}, 'delivery-1')).toBeNull();
     expect(extractPullRequestEvent(basePayload(), '')).toBeNull();
   });
-
 });
