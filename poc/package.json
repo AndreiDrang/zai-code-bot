@@ -5,6 +5,7 @@
   "description": "Cloudflare Workers for Z.ai Code Bot: webhook ingress and durable review/describe processing",
   "type": "module",
   "scripts": {
+    "build": "npm run deploy:heavy:dry-run && npm run deploy:main:dry-run",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "format:js": "prettier --write \"workers/**/*.js\"",
