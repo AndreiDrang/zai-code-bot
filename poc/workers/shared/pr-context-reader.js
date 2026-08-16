@@ -1,4 +1,11 @@
-import { prCardKey, prContextKey, prCommandResultKey, prSummaryKey } from './storage/keys.js';
+import {
+  prCardKey,
+  prContextKey,
+  prContextV2DiffKey,
+  prContextV2Key,
+  prCommandResultKey,
+  prSummaryKey,
+} from './storage/keys.js';
 
 /**
  * Read-helpers for the PR-context tier, shared by the review and describe
@@ -58,6 +65,59 @@ export async function readContextSlice(bucket, repositoryId, prNumber, kind) {
     if (!object) return null;
     const text = await object.text();
     return kind === 'diff' || kind === 'description' ? text : JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads the V2 manifest that commits a per-file-diff snapshot. V2 readers are
+ * intentionally separate from V1 so consumers can migrate without making
+ * legacy objects ambiguous.
+ * @returns {Promise<Object|null>}
+ */
+export async function readContextV2Manifest(bucket, repositoryId, prNumber) {
+  const manifest = await readContextV2Slice(bucket, repositoryId, prNumber, 'manifest');
+  return manifest?.schemaVersion === 2 && typeof manifest.headSha === 'string' ? manifest : null;
+}
+
+/**
+ * Reads one non-diff V2 snapshot artifact. `description` is text; all other
+ * allowed kinds are JSON. This is a storage reader and deliberately knows
+ * nothing about prompts, LLMs, or tool schemas.
+ * @returns {Promise<string|Object|null>}
+ */
+export async function readContextV2Slice(bucket, repositoryId, prNumber, kind) {
+  if (!bucket?.get || repositoryId == null || prNumber == null) return null;
+  try {
+    const object = await getExistingObject(bucket, prContextV2Key(repositoryId, prNumber, kind));
+    if (!object) return null;
+    const text = await object.text();
+    return kind === 'description' ? text : JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export async function readContextV2Files(bucket, repositoryId, prNumber) {
+  const files = await readContextV2Slice(bucket, repositoryId, prNumber, 'files');
+  return Array.isArray(files) ? files : null;
+}
+
+/**
+ * Reads the patch identified by an already-indexed V2 file entry. The caller
+ * must resolve `fileEntry` from files.json first; arbitrary user paths never
+ * flow directly into an R2 key.
+ * @returns {Promise<string|null>}
+ */
+export async function readContextV2Diff(bucket, repositoryId, prNumber, fileEntry) {
+  if (!bucket?.get || repositoryId == null || prNumber == null) return null;
+  if (fileEntry?.diff?.state !== 'available' || typeof fileEntry.path !== 'string') return null;
+  try {
+    const expectedKey = prContextV2DiffKey(repositoryId, prNumber, fileEntry.path);
+    if (fileEntry.diff.key !== expectedKey) return null;
+    const object = await getExistingObject(bucket, expectedKey);
+    return object ? await object.text() : null;
   } catch {
     return null;
   }

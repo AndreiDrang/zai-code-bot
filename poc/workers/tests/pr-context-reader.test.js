@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   readPrCard,
   readContextManifest,
+  readContextV2Diff,
+  readContextV2Files,
+  readContextV2Manifest,
   readCommandResult,
   readPrSummary,
   renderContextSummary,
@@ -9,6 +12,8 @@ import {
 import {
   prCardKey,
   prContextKey,
+  prContextV2DiffKey,
+  prContextV2Key,
   prCommandResultKey,
   prSummaryKey,
 } from '../shared/storage/keys.js';
@@ -72,6 +77,50 @@ describe('readContextManifest — R2 manifest', () => {
       prefix: prContextKey(10, 7, 'manifest'),
       limit: 1,
     });
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
+});
+
+describe('V2 context readers — per-file artifacts', () => {
+  const file = {
+    path: 'src/cache.ts',
+    diff: {
+      state: 'available',
+      key: prContextV2DiffKey(10, 7, 'src/cache.ts'),
+      bytes: 12,
+      sha256: 'abc',
+    },
+  };
+
+  it('reads the V2 manifest, files index, and an indexed patch', async () => {
+    const manifest = { schemaVersion: 2, headSha: 'abc' };
+    const files = [file];
+    const objects = new Map([
+      [prContextV2Key(10, 7, 'manifest'), JSON.stringify(manifest)],
+      [prContextV2Key(10, 7, 'files'), JSON.stringify(files)],
+      [prContextV2DiffKey(10, 7, 'src/cache.ts'), '@@ -1 +1 @@\n+cache'],
+    ]);
+    const bucket = {
+      get: vi.fn((key) =>
+        Promise.resolve(
+          objects.has(key) ? { text: () => Promise.resolve(objects.get(key)) } : null,
+        ),
+      ),
+    };
+
+    await expect(readContextV2Manifest(bucket, 10, 7)).resolves.toEqual(manifest);
+    await expect(readContextV2Files(bucket, 10, 7)).resolves.toEqual(files);
+    await expect(readContextV2Diff(bucket, 10, 7, file)).resolves.toContain('+cache');
+  });
+
+  it('refuses a diff entry whose key does not match its indexed path', async () => {
+    const bucket = { get: vi.fn() };
+    await expect(
+      readContextV2Diff(bucket, 10, 7, {
+        ...file,
+        diff: { ...file.diff, key: 'v2/prs/10/7/context/diffs/other.patch' },
+      }),
+    ).resolves.toBeNull();
     expect(bucket.get).not.toHaveBeenCalled();
   });
 });

@@ -30,6 +30,28 @@ const CONTEXT_KIND_EXTENSION = {
   comments: 'json',
 };
 
+/**
+ * V2 keeps the same living per-PR snapshot semantics as V1, but stores a
+ * patch per changed file rather than one aggregate diff blob. This is
+ * deliberately separate from STORAGE_SCHEMA_VERSION: deliveries, runs, and KV
+ * cache keys do not participate in this storage-contract migration.
+ */
+export const PR_CONTEXT_STORAGE_VERSION = 2;
+export const PR_CONTEXT_V2_KINDS = Object.freeze([
+  'manifest',
+  'files',
+  'commits',
+  'description',
+  'comments',
+]);
+const CONTEXT_V2_KIND_EXTENSION = {
+  manifest: 'json',
+  files: 'json',
+  commits: 'json',
+  description: 'md',
+  comments: 'json',
+};
+
 const SAFE_COMPONENT = /^[a-zA-Z0-9._-]+$/;
 
 function component(value, name) {
@@ -77,6 +99,44 @@ export function prContextKey(repositoryId, prNumber, kind) {
     throw new TypeError(`Invalid PR context kind: ${kind}`);
   }
   return `v${STORAGE_SCHEMA_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/${kind}.${CONTEXT_KIND_EXTENSION[kind]}`;
+}
+
+/**
+ * R2 key for a V2 PR context artifact. V2 is scoped to the PR-context storage
+ * contract; other storage keys remain on STORAGE_SCHEMA_VERSION.
+ */
+export function prContextV2Key(repositoryId, prNumber, kind) {
+  if (!PR_CONTEXT_V2_KINDS.includes(kind)) {
+    throw new TypeError(`Invalid V2 PR context kind: ${kind}`);
+  }
+  return `v${PR_CONTEXT_STORAGE_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/${kind}.${CONTEXT_V2_KIND_EXTENSION[kind]}`;
+}
+
+/**
+ * Returns a canonical repository-relative path. Never concatenate untrusted
+ * paths into an R2 key: Context Service first resolves exact paths from the
+ * files index, and this helper supplies a second defensive boundary.
+ */
+export function normalizeRepositoryPath(path) {
+  const value = String(path ?? '');
+  if (!value || value.startsWith('/') || value.includes('\0')) {
+    throw new TypeError('Invalid repository-relative path');
+  }
+  const parts = value.split('/');
+  if (parts.some((part) => !part || part === '.' || part === '..')) {
+    throw new TypeError('Invalid repository-relative path');
+  }
+  return value;
+}
+
+/**
+ * A URL-encoded full path is one R2 path component, so nested, Unicode, and
+ * punctuation-containing repository paths cannot alter the key hierarchy.
+ * The readable canonical path remains in files.json.
+ */
+export function prContextV2DiffKey(repositoryId, prNumber, path) {
+  const safePath = normalizeRepositoryPath(path);
+  return `v${PR_CONTEXT_STORAGE_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/diffs/${encodeURIComponent(safePath)}.patch`;
 }
 
 /**
