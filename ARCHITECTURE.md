@@ -1,43 +1,270 @@
 # Architecture
 
-Z.ai Code Bot runs entirely on Cloudflare Workers. There is no GitHub Action
-runtime, bundled `dist/` artifact, or Node entrypoint.
+## 1. High-Level Overview
 
-## Runtime
+A GitHub bot that turns `/zai` PR comments into Z.ai-powered review and describe
+results, implemented entirely as Cloudflare Workers under `poc/`: two deployable
+Workers (`poc/workers/zai-main-worker/`, `poc/workers/zai-heavy-worker/`) plus a
+shared library package (`poc/workers/shared/`). There is no GitHub Action
+runtime; root `dist/` and `coverage/` are untracked leftovers of the removed
+Action (see `AGENTS.md`).
 
-1. `zai-main-worker` receives GitHub webhooks.
-2. It verifies the HMAC signature and gates commands through collaborator
-   authorization.
-3. PR head events enqueue a `pr_context` gather job.
-4. `/zai review` and `/zai describe` comments create durable command jobs.
-5. `zai-heavy-worker` consumes `{ schemaVersion, jobId }`, claims the D1 lease,
-   calls Z.ai, and publishes the result to GitHub.
+The paradigm is asynchronous, durable job processing. The public main Worker
+validates and schedules; a private heavy Worker consumes the `bot-jobs` Queue
+and performs all LLM work. D1 is authoritative for job state and comment
+publication leases; R2 stores bounded PR context and command results; KV is a
+read-through cache for repository configuration and PR cards. The two Workers
+never call each other directly — no service bindings, no cross-worker imports —
+they coordinate only through Queue messages and shared D1/R2/KV bindings
+declared in `poc/workers/*/wrangler.toml`.
 
-D1 is authoritative for jobs and comment publication leases. R2 stores bounded
-PR context and the latest command result. KV is a read-through cache for small
-repository and PR snapshots. Queue messages intentionally contain no tokens or
-source data.
+Unknowns: none material.
 
-## Boundaries
+## 2. System Architecture (Logical)
 
-- `poc/workers/zai-main-worker/src/` owns webhook routing and scheduling.
-- `poc/workers/zai-heavy-worker/src/handlers/review.js` owns review prompt
-  construction.
-- `poc/workers/zai-heavy-worker/src/handlers/describe.js` owns PR description
-  generation and the bot-owned PR-body section.
-- `poc/workers/shared/` owns GitHub/Z.ai clients, auth, context, storage, and
-  marker-idempotent comments.
-
-Only `review` and `describe` are public commands. Removed commands must not be
-reintroduced without an explicit product decision.
-
-## Validation
-
-Run tests from `poc/`:
-
-```bash
-npm ci
-npm test
-npm run deploy:main:dry-run
-npm run deploy:heavy:dry-run
+```text
+GitHub webhooks ─▶ zai-main-worker ─{schemaVersion, jobId}─▶ bot-jobs Queue ─▶ zai-heavy-worker ─▶ Z.ai API
+                  (fetch + cron)       │                                   (queue consumer)     │
+                                       ▼                                                        ▼
+                         poc/workers/shared/ ◀── used by both ──▶ GitHub API (results)
+                                       │
+                                       ▼
+              D1 (BOT_DB) · R2 (BOT_ARTIFACTS) · KV (BOT_CACHE) · Secrets Store
 ```
+
+### Main Worker — ingress and scheduling
+
+- Responsibility: public webhook ingress; validation gates (method,
+  content-type, HMAC signature, command parse, collaborator authorization);
+  inline `/zai help`; durable job creation; bounded cron recovery.
+- Code locations: `poc/workers/zai-main-worker/src/`
+- Entry points: `src/index.js` — `fetch` and `scheduled` (cron `*/5 * * * *`).
+- Depends on: `shared/`; D1, R2, KV, Queue producer `BOT_JOBS`, Secrets Store.
+- Must not depend on: heavy-Worker code (zero cross-worker imports); LLM
+  calls — webhooks time out in ~10s, so command work is always offloaded.
+- Owns: D1 schema (`migrations/`); command classification (`router.js`);
+  PR-event planning (`pr-events.js`, `comment-events.js`); enqueue, outbox,
+  and recovery (`job-enqueuer.js`).
+- State and external boundaries: writes D1 job + outbox rows; publishes Queue
+  messages; best-effort R2 slice refreshes via `ctx.waitUntil`.
+- Evidence: `zai-main-worker/src/index.js`, `wrangler.toml`.
+
+### Heavy Worker — queue consumption and LLM processing
+
+- Responsibility: consume `bot-jobs`, claim D1 leases, run `review`,
+  `describe`, and the internal `pr_context` / `pr_summary` gather jobs.
+- Code locations: `poc/workers/zai-heavy-worker/src/`
+- Entry points: `src/index.js` — `queue` handler only, via `src/queue.js`.
+- Depends on: `shared/` (Z.ai client, LLM runner, context, storage); D1, R2,
+  KV, Secrets Store; Z.ai API; GitHub API for publishing.
+- Must not depend on: main-Worker code; any public HTTP ingress
+  (`workers_dev = false` — reached only via the Queue consumer).
+- Owns: handler pipeline `src/handlers/`; prompt sources `prompts/*.txt` and
+  committed `generated/prompts.js` (from `scripts/generate-prompts.mjs`).
+- State and external boundaries: claims the D1 lease before executing; records
+  runs and artifacts; upserts marker-idempotent comments or the bot-owned PR
+  body section; stores the latest command result in R2.
+- Evidence: `zai-heavy-worker/src/queue.js`, `wrangler.toml`.
+
+### Shared libraries — `poc/workers/shared/`
+
+- Responsibility: GitHub and Z.ai clients; authorization; command
+  parsing/allowlist; marker-idempotent comments; bounded PR-context gathering;
+  LLM tool registry; storage over D1/R2/KV; logging; secret resolution.
+- Code locations: `poc/workers/shared/` (subpackages `context/`,
+  `context-tools/`, `storage/`).
+- Depends on: Workers runtime APIs only (Web Crypto, `fetch`, `Response`).
+- Must not depend on: either Worker's `src/` (no upward imports); Node-only
+  APIs (per `poc/AGENTS.md`, enforced by the Workers runtime).
+- Owns: R2 key layout (`storage/keys.js`); job/lease/outbox SQL
+  (`storage/jobs.js`, `storage/deliveries.js`); Z.ai error sanitization
+  (`zai-client.js`).
+- Evidence: import scan across `poc/workers/`; `poc/AGENTS.md`.
+
+### Durable state and coordination plane
+
+- Responsibility: the only medium through which the two Workers interact.
+- Code locations: bindings in both `poc/workers/*/wrangler.toml`; access code
+  in `poc/workers/shared/storage/`.
+- Owns: D1 `bot-db` (jobs, leases, outbox, `comment_publications`, repository
+  configs — `zai-main-worker/migrations/`); R2 `bot-storage` (`v2/prs/`
+  context tier, `v1/runs/` run outputs); KV `bot-cache`; `bot-jobs` Queue; one
+  shared Secrets Store.
+- Evidence: `wrangler.toml` files, `migrations/0001_storage_foundation.sql`.
+
+### Workspace, tests, and CI
+
+- Responsibility: single script source at `poc/package.json` (per-Worker
+  manifests serve Wrangler only); vitest + miniflare suites; deploy dry-run
+  and audit gates; prompt codegen.
+- Code locations: `poc/vitest.config.js`, `poc/workers/tests/`,
+  `.github/workflows/ci.yml`.
+- Entry points: `npm test`; `deploy:main:dry-run` / `deploy:heavy:dry-run`.
+- Owns: coverage thresholds gating only `workers/shared/**` and
+  `zai-main-worker/src/router.js`.
+- Evidence: `poc/AGENTS.md`, `.github/workflows/ci.yml`.
+
+## 3. Code Map (Physical)
+
+```text
+poc/                          # npm workspace root; only real scripts (package.json)
+├─ workers/
+│  ├─ zai-main-worker/        # public webhook ingress + cron recovery (src/index.js)
+│  │  └─ migrations/          # D1 schema: jobs, outbox, publications, configs
+│  ├─ zai-heavy-worker/       # private Queue consumer (src/queue.js)
+│  │  ├─ src/handlers/        # review, describe, pr-context, pr-summary
+│  │  └─ prompts/ + generated/# prompt sources (.txt) → committed modules (scripts/)
+│  ├─ shared/                 # libraries used by both Workers
+│  │  ├─ storage/             # D1/R2/KV access + R2 key layout
+│  │  ├─ context/             # PR-context service and size limits
+│  │  └─ context-tools/       # LLM tool registry and JSON schemas
+│  └─ tests/                  # vitest suites, miniflare-backed
+okf/                          # curated knowledge bundle (entry: okf/index.md)
+.github/workflows/ci.yml      # test + coverage, dry-run deploys, npm audit
+```
+
+## 4. Life of a Request / Primary Data Flow
+
+### `/zai review` / `/zai describe` command (sync ingress → async processing)
+
+1. Trigger: GitHub comment webhook carrying a `/zai` command body.
+2. Entry point: `zai-main-worker/src/index.js` `fetch`.
+3. Coordination: gate chain (method → content-type → HMAC → parse →
+   collaborator authorization); classification in `src/router.js`; durable job
+   row via `shared/storage/deliveries.js`.
+4. Core or domain processing: main Worker publishes `{ schemaVersion, jobId }`
+   to `bot-jobs` (D1 outbox row is the recovery fallback), returns 202; heavy
+   Worker `src/queue.js` claims the D1 lease and dispatches to
+   `src/handlers/review.js` / `describe.js`; `shared/llm-command-runner.js` +
+   `shared/zai-client.js` send bounded context to Z.ai.
+5. Persistence or external interaction: run and result recorded in D1
+   (`analysis_runs`, `artifacts`) and R2; comment upsert guarded by the
+   `comment_publications` lease.
+6. Output or side effect: marker-idempotent review comment or bot-owned PR
+   body section; job marked succeeded/failed/retryable in D1.
+
+Boundaries crossed: public HTTP → main Worker; Queue → private heavy Worker;
+shared code → D1/R2/KV/GitHub/Z.ai. Evidence: `zai-main-worker/src/index.js`,
+`zai-heavy-worker/src/queue.js`, sequence diagram in `poc/README.md`.
+
+### PR context gathering and summary chain (event-driven)
+
+1. Trigger: PR `opened` / `reopened` / `synchronize` / `ready_for_review`.
+2. Entry point: main Worker `fetch` → planning in `src/pr-events.js`.
+3. Coordination: `pr_context` job created and enqueued like a command job.
+4. Core or domain processing: `handlers/pr-context.js` gathers V2 context to
+   R2 `v2/prs/{repositoryId}/{prNumber}/context/` (manifest, files, commits,
+   description, comments, per-file patches); once the manifest commits, an
+   idempotent `pr_summary` job is enqueued (outbox fallback) and
+   `handlers/pr-summary.js` stores the validated Z.ai JSON summary there.
+5. Persistence or external interaction: R2 context tier (30-day bucket
+   lifecycle) plus D1 job rows.
+6. Output or side effect: later `review` commands reuse the matching-head
+   summary as auxiliary context.
+
+Boundaries crossed: GitHub → main Worker → Queue → heavy Worker → GitHub API,
+R2, Z.ai. Evidence: `zai-main-worker/src/pr-events.js`, heavy-worker handlers
+`pr-context.js` and `pr-summary.js`.
+
+### Cron recovery sweep (scheduled)
+
+1. Trigger: cron `*/5 * * * *` on the main Worker.
+2. Entry point: `scheduled` handler in `zai-main-worker/src/index.js`.
+3. Coordination: bounded batches in `src/job-enqueuer.js`.
+4. Core or domain processing: recover expired job leases, replay due outbox
+   rows, sweep expired storage via `deleteExpiredArtifacts` (`v1/runs/`
+   objects indexed by the `artifacts` table).
+5. Persistence or external interaction: D1 lease/outbox/artifact rows; R2
+   deletions only.
+6. Output or side effect: stranded jobs become retriable; orphaned R2 objects
+   removed.
+
+Boundaries crossed: scheduler → main Worker → D1/R2 only (no GitHub/Z.ai).
+Evidence: `src/job-enqueuer.js`, `shared/storage/artifacts.js`, `RUNBOOK.md`.
+
+## 5. Architectural Invariants & Constraints
+
+- Rule: Verify the webhook HMAC signature before parsing or dispatching.
+- Rationale: the fetch handler is the only public, unauthenticated surface.
+- Enforcement / Signals: gate ordering in `zai-main-worker/src/index.js`;
+  `tests/crypto.test.js`, `tests/router.test.js`.
+
+- Rule: Queue messages carry only `{ schemaVersion, jobId }` — no tokens or
+  source data.
+- Rationale: keeps secrets and content out of the transport; D1 stays the
+  single source of truth.
+- Enforcement / Signals: producer in `shared/storage/deliveries.js`; consumer
+  validates `schemaVersion === 1` in `zai-heavy-worker/src/queue.js`.
+
+- Rule: D1 is authoritative for job state and comment publication leases; a
+  lease must be claimed before a handler runs.
+- Rationale: at-least-once delivery plus cron recovery need one durable
+  arbiter; duplicate deliveries must be idempotent.
+- Enforcement / Signals: `claimJob` in `shared/storage/jobs.js`; lease/outbox
+  tables in `migrations/0001_storage_foundation.sql`.
+
+- Rule: the two Workers are isolated deployment units — no cross-worker
+  imports, no service bindings, and no public HTTP endpoint on the heavy
+  Worker (queue consumer only).
+- Rationale: keeps ingress and processing independently deployable and keeps
+  LLM work and GitHub writes reachable only through the Queue.
+- Enforcement / Signals: zero cross-worker imports; no `services` entries and
+  `workers_dev = false` in the `wrangler.toml` files; queue-only export in
+  `zai-heavy-worker/src/index.js` (structural convention, not linted).
+
+- Rule: `shared/` runs on Workers runtime APIs only — no Node built-ins.
+- Rationale: the same code deploys into both Workers; Node APIs fail at
+  runtime.
+- Enforcement / Signals: `poc/AGENTS.md`; Workers runtime and both dry-run
+  builds in CI.
+
+- Rule: the heavy Worker never calls Z.ai or GitHub from an HTTP request
+  path; all such calls run inside claimed Queue jobs.
+- Rationale: webhooks time out in ~10s; durable leases make retries safe.
+- Enforcement / Signals: main-Worker `fetch` only enqueues; LLM and publish
+  calls appear only under `src/queue.js` handlers.
+
+- Rule: GitHub comments are marker-idempotent, `describe` body markers are
+  preserved, and secrets or raw provider errors are never surfaced.
+- Rationale: repeated deliveries must not duplicate output; comments are
+  public-facing.
+- Enforcement / Signals: `shared/comments.js`; `comment_publications` lease;
+  `sanitizeErrorMessage` in `shared/zai-client.js`; `SECURITY.md`.
+
+- Rule: context sent to Z.ai is bounded and stored in tiered R2 with expiry.
+- Rationale: cost and prompt-size control; stale PR context must age out.
+- Enforcement / Signals: limits in `shared/context/context-limits.js`;
+  `v2/prs/` bucket lifecycle (30 days) and `v1/runs/` swept by
+  `deleteExpiredArtifacts`.
+
+- Rule: secrets come only from Cloudflare Secrets Store bindings, never from
+  `wrangler.toml` or source.
+- Rationale: one shared store keeps a single rotation point for both Workers.
+- Enforcement / Signals: `[[secrets_store_secrets]]` in both `wrangler.toml`;
+  `shared/secrets.js`; `npm audit` gate in CI.
+
+- Rule: the public command surface is fixed — `help` inline, `review` and
+  `describe` durable; removed commands must not reappear without an explicit
+  product decision.
+- Rationale: the allowlist is a product contract, not a convenience.
+- Enforcement / Signals: `shared/constants.js` allowlist, `shared/commands.js`
+  parsing, `router.js` classification.
+
+## 6. Documentation Strategy
+
+`ARCHITECTURE.md` (this file) owns the global architecture map: components,
+dependency direction, representative flows, and invariants. It deliberately
+does not duplicate operational or local detail:
+
+- `AGENTS.md` (root) — repository-wide agent rules and task-based routing.
+- `poc/AGENTS.md` — workspace mechanics, local boundaries, coverage-gate policy.
+- `poc/workers/zai-heavy-worker/AGENTS.md` — prompt sources and regeneration.
+- `poc/README.md` — bindings, command-flow sequence diagram, R2 `v2/prs/`
+  layout, development workflow.
+- `RUNBOOK.md` — operational failure modes and cron-based recovery.
+- `SECURITY.md` — trust boundaries and user-visible output rules.
+- `CONTRIBUTING.md` — change rules and commit expectations.
+- `okf/index.md` — curated, navigation-oriented knowledge bundle.
+
+No ADR or `DESIGN.md` exists today; that absence does not limit the
+architecture model.
