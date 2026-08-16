@@ -28,11 +28,13 @@ bucket_name = "bot-storage"
 binding = "BOT_JOBS"
 queue = "bot-jobs"
 
-# R2 lifecycle for the PR-context tier: objects under `v1/prs/` (the gather
-# output) expire after R2_RETENTION_DAYS (30). This is a BUCKET-level rule —
+# R2 lifecycle for the PR-context tier: objects under `v1/prs/` and `v2/prs/`
+# (the dual-written gather output) expire after R2_RETENTION_DAYS (30). This is a BUCKET-level rule —
 # wrangler.toml has no declarative lifecycle key — apply it once via the CLI:
 #   npx wrangler r2 bucket lifecycle add bot-storage \
 #     --id pr-context-retention --prefix "v1/prs/" --expire-days 30
+#   npx wrangler r2 bucket lifecycle add bot-storage \
+#     --id pr-context-v2-retention --prefix "v2/prs/" --expire-days 30
 # Run-outputs under `v1/runs/` are NOT covered here: they are indexed by the
 # `artifacts` D1 table and swept by deleteExpiredArtifacts on the cron.
 

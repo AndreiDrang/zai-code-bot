@@ -8,10 +8,6 @@ Cloudflare Workers that receive GitHub webhooks and provide these bot commands:
 - `/zai describe` — synthesizes a pull-request description from commit history
   and updates the marker-owned section of the PR body.
 
-The old GitHub Action runtime has been removed. GitHub is used only as the
-webhook source and API target; execution, secrets, retries, and storage live on
-Cloudflare.
-
 ## Architecture
 
 ```mermaid
@@ -46,14 +42,14 @@ poc/
 
 The main worker requires:
 
-| Binding | Purpose |
-|---|---|
-| `GITHUB_WEBHOOK_SECRET` | GitHub HMAC webhook secret |
-| `GITHUB_TOKEN` | GitHub API token for authorization and writes |
-| `BOT_DB` | Durable job and publication state |
-| `BOT_JOBS` | Queue producer |
-| `BOT_ARTIFACTS` | Gathered PR context and command results |
-| `BOT_CACHE` | Repository configuration and PR card cache |
+| Binding                 | Purpose                                       |
+| ----------------------- | --------------------------------------------- |
+| `GITHUB_WEBHOOK_SECRET` | GitHub HMAC webhook secret                    |
+| `GITHUB_TOKEN`          | GitHub API token for authorization and writes |
+| `BOT_DB`                | Durable job and publication state             |
+| `BOT_JOBS`              | Queue producer                                |
+| `BOT_ARTIFACTS`         | Gathered PR context and command results       |
+| `BOT_CACHE`             | Repository configuration and PR card cache    |
 
 The heavy worker consumes `BOT_JOBS` and requires `GITHUB_TOKEN`, `ZAI_API_KEY`,
 `BOT_DB`, `BOT_ARTIFACTS`, and `BOT_CACHE`. `ZAI_MODEL` defaults to `glm-5.2`.
