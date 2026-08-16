@@ -51,6 +51,16 @@ describe('readContextManifest — R2 manifest', () => {
     const bucket = { get: vi.fn().mockResolvedValue(null) };
     await expect(readContextManifest(bucket, 10, 7)).resolves.toBeNull();
   });
+
+  it('uses R2 head before get so an expected miss is not logged as GetObject error', async () => {
+    const bucket = {
+      head: vi.fn().mockResolvedValue(null),
+      get: vi.fn(),
+    };
+    await expect(readContextManifest(bucket, 10, 7)).resolves.toBeNull();
+    expect(bucket.head).toHaveBeenCalledWith(prContextKey(10, 7, 'manifest'));
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
 });
 
 describe('readCommandResult — R2 latest command output', () => {

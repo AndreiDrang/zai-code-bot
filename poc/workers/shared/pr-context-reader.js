@@ -33,7 +33,10 @@ export async function readPrCard(cache, repositoryId, prNumber) {
 export async function readContextManifest(bucket, repositoryId, prNumber) {
   if (!bucket?.get || repositoryId == null || prNumber == null) return null;
   try {
-    const object = await bucket.get(prContextKey(repositoryId, prNumber, 'manifest'));
+    const object = await getExistingObject(
+      bucket,
+      prContextKey(repositoryId, prNumber, 'manifest'),
+    );
     if (!object) return null;
     return JSON.parse(await object.text());
   } catch {
@@ -51,7 +54,7 @@ export async function readContextManifest(bucket, repositoryId, prNumber) {
 export async function readContextSlice(bucket, repositoryId, prNumber, kind) {
   if (!bucket?.get || repositoryId == null || prNumber == null) return null;
   try {
-    const object = await bucket.get(prContextKey(repositoryId, prNumber, kind));
+    const object = await getExistingObject(bucket, prContextKey(repositoryId, prNumber, kind));
     if (!object) return null;
     const text = await object.text();
     return kind === 'diff' || kind === 'description' ? text : JSON.parse(text);
@@ -71,7 +74,10 @@ export async function readContextSlice(bucket, repositoryId, prNumber, kind) {
 export async function readCommandResult(bucket, repositoryId, prNumber, command) {
   if (!bucket?.get || repositoryId == null || prNumber == null || command == null) return null;
   try {
-    const object = await bucket.get(prCommandResultKey(repositoryId, prNumber, command));
+    const object = await getExistingObject(
+      bucket,
+      prCommandResultKey(repositoryId, prNumber, command),
+    );
     if (!object) return null;
     return await object.text();
   } catch {
@@ -87,13 +93,27 @@ export async function readCommandResult(bucket, repositoryId, prNumber, command)
 export async function readPrSummary(bucket, repositoryId, prNumber) {
   if (!bucket?.get || repositoryId == null || prNumber == null) return null;
   try {
-    const object = await bucket.get(prSummaryKey(repositoryId, prNumber));
+    const object = await getExistingObject(bucket, prSummaryKey(repositoryId, prNumber));
     if (!object) return null;
     const value = JSON.parse(await object.text());
     return value?.schemaVersion === 1 && value?.summary ? value : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * R2 `head()` returns null for a missing object without producing the noisy
+ * GetObject error span that a caught `get()` miss creates in Observability.
+ * Keep the get-only fallback for the lightweight test doubles and older
+ * bindings that do not expose head().
+ */
+async function getExistingObject(bucket, key) {
+  if (typeof bucket.head === 'function') {
+    const metadata = await bucket.head(key);
+    if (!metadata) return null;
+  }
+  return bucket.get(key);
 }
 
 /**
