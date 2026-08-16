@@ -48,7 +48,8 @@ describe('storage key contracts', () => {
 describe('PR storage event contract', () => {
   it('accepts only supported pull_request actions', () => {
     expect(isSupportedPullRequestEvent('pull_request', 'opened')).toBe(true);
-    expect(isSupportedPullRequestEvent('pull_request', 'closed')).toBe(true);
+    // Closed PRs do not introduce a new head and must not create a gather job.
+    expect(isSupportedPullRequestEvent('pull_request', 'closed')).toBe(false);
     expect(isSupportedPullRequestEvent('issue_comment', 'opened')).toBe(false);
   });
 
