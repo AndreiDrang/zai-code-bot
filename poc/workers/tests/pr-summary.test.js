@@ -78,10 +78,6 @@ const validSummary = {
     unresolvedQuestions: [],
     resolvedQuestions: 0,
   },
-  riskAssessment: {
-    security: 'low',
-    breaking: 'none',
-  },
 };
 
 describe('handlePrSummaryJob', () => {
@@ -147,15 +143,9 @@ describe('handlePrSummaryJob', () => {
 });
 
 describe('validatePrSummary', () => {
-  it('rejects unknown fields and invalid risk values', () => {
+  it('rejects unknown fields', () => {
     expect(() => validatePrSummary({ ...validSummary, extra: true })).toThrow(
       'Unexpected summary fields',
     );
-    expect(() =>
-      validatePrSummary({
-        ...validSummary,
-        riskAssessment: { security: 'critical', breaking: 'none' },
-      }),
-    ).toThrow('riskAssessment.security');
   });
 });

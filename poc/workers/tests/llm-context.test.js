@@ -61,13 +61,12 @@ describe('buildContextBlock (review layout)', () => {
           unresolvedQuestions: ['Should this be cached?'],
           resolvedQuestions: 2,
         },
-        riskAssessment: { security: 'low', breaking: 'none' },
       },
     });
     expect(block).toContain('## Generated PR summary');
     expect(block).toContain('Adds greeting support.');
     expect(block).toContain('Should this be cached?');
-    expect(block).toContain('security=low');
+    expect(block).not.toContain('**Risk:**');
   });
 
   it('renders full commit messages and file statistics for the summary layout', () => {

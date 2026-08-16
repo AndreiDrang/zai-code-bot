@@ -14,9 +14,6 @@ const MODEL_TIMEOUT_MS = 45000;
 const MODEL_MAX_RETRIES = 3;
 const MODEL_BASE_DELAY_MS = 2000;
 
-const SECURITY_LEVELS = new Set(['none', 'low', 'medium', 'high', 'unknown']);
-const BREAKING_LEVELS = new Set(['none', 'possible', 'likely', 'confirmed', 'unknown']);
-
 /**
  * Generates the structured initial PR context after `pr_context` has written
  * all source slices. This job deliberately does not publish a GitHub comment:
@@ -233,10 +230,6 @@ function buildPrSummaryUserPrompt({ slices, meta, manifest, maxBytes }) {
     '      "A question that remains unresolved in the provided discussion."',
     '    ],',
     '    "resolvedQuestions": 0',
-    '  },',
-    '  "riskAssessment": {',
-    '    "security": "none | low | medium | high | unknown",',
-    '    "breaking": "none | possible | likely | confirmed | unknown"',
     '  }',
     '}',
   ].join('\n');
@@ -244,7 +237,7 @@ function buildPrSummaryUserPrompt({ slices, meta, manifest, maxBytes }) {
 
 export function validatePrSummary(value) {
   if (!isPlainObject(value)) throw new TypeError('summary must be an object');
-  assertExactKeys(value, ['prSummary', 'keyChanges', 'conversationSummary', 'riskAssessment']);
+  assertExactKeys(value, ['prSummary', 'keyChanges', 'conversationSummary']);
   const prSummary = boundedString(value.prSummary, 1500, 'prSummary');
   if (!Array.isArray(value.keyChanges) || value.keyChanges.length > 20) {
     throw new TypeError('keyChanges must be an array with at most 20 items');
@@ -280,16 +273,6 @@ export function validatePrSummary(value) {
     throw new TypeError('resolvedQuestions must be a non-negative integer');
   }
 
-  const risk = value.riskAssessment;
-  if (!isPlainObject(risk)) throw new TypeError('riskAssessment must be an object');
-  assertExactKeys(risk, ['security', 'breaking']);
-  if (!SECURITY_LEVELS.has(risk.security)) {
-    throw new TypeError('riskAssessment.security has an invalid value');
-  }
-  if (!BREAKING_LEVELS.has(risk.breaking)) {
-    throw new TypeError('riskAssessment.breaking has an invalid value');
-  }
-
   return {
     prSummary,
     keyChanges,
@@ -297,10 +280,6 @@ export function validatePrSummary(value) {
       mainTopic,
       unresolvedQuestions,
       resolvedQuestions: conversation.resolvedQuestions,
-    },
-    riskAssessment: {
-      security: risk.security,
-      breaking: risk.breaking,
     },
   };
 }

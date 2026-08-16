@@ -9,7 +9,6 @@ Your task is to describe:
 - why it appears to make those changes, when the provided data establishes it;
 - the most important file-level changes;
 - the main discussion topic and any unresolved questions;
-- the likely security and compatibility risk.
 
 Treat the diff as the primary source of truth for implementation details.
 Treat the PR description, commit messages, and comments as supporting context.
@@ -18,11 +17,6 @@ If the PR has no meaningful discussion, set "mainTopic" to null, use an empty
 
 Return valid JSON only. Do not use Markdown, code fences, prose before or after
 the JSON, or fields outside the requested schema.
-
-Use these exact enum values:
-- riskAssessment.security: "none", "low", "medium", "high", or "unknown"
-- riskAssessment.breaking: "none", "possible", "likely", "confirmed", or
-  "unknown"
 
 Keep the output concise:
 - prSummary: at most 3 sentences;

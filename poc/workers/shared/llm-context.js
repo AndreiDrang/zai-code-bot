@@ -214,12 +214,6 @@ function renderPrSummary(summary, cap) {
       );
     }
   }
-  const risk = value.riskAssessment;
-  if (risk) {
-    lines.push(
-      `**Risk:** security=${risk.security || 'unknown'}, breaking=${risk.breaking || 'unknown'}`,
-    );
-  }
   if (!lines.length) return '';
   return `## Generated PR summary\n\n${truncateTo(lines.join('\n\n'), cap)}`;
 }
