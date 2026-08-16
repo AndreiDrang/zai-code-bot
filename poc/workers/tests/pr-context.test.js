@@ -10,13 +10,7 @@ vi.mock('../shared/storage/config.js', () => ({
 }));
 
 import { handlePrContextJob } from '../zai-heavy-worker/src/handlers/pr-context.js';
-import { getRepositoryConfig } from '../shared/storage/config.js';
-import {
-  prContextKey,
-  prContextV2DiffKey,
-  prContextV2Key,
-  prCardKey,
-} from '../shared/storage/keys.js';
+import { prContextDiffKey, prContextKey, prCardKey } from '../shared/storage/keys.js';
 
 // JSON.parse can throw on malformed input; wrap it so the test bodies stay
 // assertion-focused (and satisfy the unchecked-throwing-call guard).
@@ -112,16 +106,13 @@ describe('handlePrContextJob — gather', () => {
     });
     expect(res).toMatchObject({ status: 'success', action: 'pr_context' });
 
-    // V1 is retained for compatibility while V2 stores per-file patches.
     const keys = bucket.put.mock.calls.map((c) => c[0]);
-    for (const kind of ['manifest', 'files', 'diff', 'commits', 'description', 'comments']) {
+    for (const kind of ['manifest', 'files', 'commits', 'description', 'comments']) {
       expect(keys).toContain(prContextKey(10, 7, kind));
     }
-    for (const kind of ['files', 'commits', 'description', 'comments']) {
-      expect(keys).toContain(prContextV2Key(10, 7, kind));
-    }
-    // V2 manifest is the complete snapshot's commit marker.
-    expect(bucket.put.mock.calls.at(-1)[0]).toBe(prContextV2Key(10, 7, 'manifest'));
+    expect(keys).not.toContain('v1/prs/10/7/context/diff.diff');
+    // The V2 manifest is the complete snapshot's commit marker.
+    expect(bucket.put.mock.calls.at(-1)[0]).toBe(prContextKey(10, 7, 'manifest'));
 
     // pr-card keyed by (repo, pr), 30d TTL, carries the head inside.
     expect(cache.put).toHaveBeenCalledWith(
@@ -140,7 +131,7 @@ describe('handlePrContextJob — gather', () => {
 
   it('skips a redelivery when the per-PR manifest already describes this same head', async () => {
     const bucket = fakeR2({
-      [prContextV2Key(10, 7, 'manifest')]: JSON.stringify({ schemaVersion: 2, headSha: 'abc' }),
+      [prContextKey(10, 7, 'manifest')]: JSON.stringify({ schemaVersion: 2, headSha: 'abc' }),
     });
     const cache = fakeCache();
     const github = makeGithub();
@@ -158,7 +149,10 @@ describe('handlePrContextJob — gather', () => {
 
   it('re-gathers (overwrites) when the manifest exists for a DIFFERENT head', async () => {
     const bucket = fakeR2({
-      [prContextKey(10, 7, 'manifest')]: JSON.stringify({ headSha: 'older-head' }),
+      [prContextKey(10, 7, 'manifest')]: JSON.stringify({
+        schemaVersion: 2,
+        headSha: 'older-head',
+      }),
     });
     const github = makeGithub();
     const res = await handlePrContextJob({
@@ -186,13 +180,6 @@ describe('handlePrContextJob — gather', () => {
     });
     const manifest = parseJson(bucket.store.get(prContextKey(10, 7, 'manifest')));
     expect(manifest).toMatchObject({
-      headSha: 'abc',
-      counts: { files: 2, commits: 1, issueComments: 1, reviewComments: 0 },
-      aggregates: { changedFiles: 2, additions: 10, deletions: 2 },
-      contextPrefix: 'v1/prs/10/7/context',
-    });
-    const v2Manifest = parseJson(bucket.store.get(prContextV2Key(10, 7, 'manifest')));
-    expect(v2Manifest).toMatchObject({
       schemaVersion: 2,
       headSha: 'abc',
       contextPrefix: 'v2/prs/10/7/context',
@@ -239,21 +226,17 @@ describe('handlePrContextJob — gather', () => {
     });
   });
 
-  it('truncates the diff to the configured byte budget', async () => {
-    getRepositoryConfig.mockResolvedValueOnce({
-      enabled: true,
-      autoPreview: true,
-      maxFiles: 100,
-      maxContextBytes: 100,
-    });
+  it('does not fetch or store an aggregate diff artifact', async () => {
     const bucket = fakeR2();
+    const github = makeGithub({ getPrDiff: vi.fn().mockResolvedValue('x'.repeat(5000)) });
     await handlePrContextJob({
-      github: makeGithub({ getPrDiff: vi.fn().mockResolvedValue('x'.repeat(5000)) }),
+      github,
       env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
       db: {},
       job: baseJob,
     });
-    expect(bucket.store.get(prContextKey(10, 7, 'diff')).length).toBe(100);
+    expect(github.getPrDiff).not.toHaveBeenCalled();
+    expect([...bucket.store.keys()]).not.toContain('v2/prs/10/7/context/diff.diff');
   });
 
   it('degrades gracefully when a context slice fails', async () => {
@@ -270,14 +253,13 @@ describe('handlePrContextJob — gather', () => {
     expect(res.status).toBe('success');
     const manifest = parseJson(bucket.store.get(prContextKey(10, 7, 'manifest')));
     expect(manifest.counts.files).toBe(0); // files slice failed → []
-    expect(manifest.truncated.diffBytes).toBe(0); // diff slice failed → ''
-    expect(manifest.truncated.diffSource).toBe('none'); // no unified, no patches
+    expect(manifest.counts.diffsAvailable).toBe(0);
+    expect(manifest.counts.diffsUnavailable).toBe(0);
   });
 
-  it('reconstructs the diff from per-file patches when the unified diff is unavailable (>300-file PRs)', async () => {
+  it('stores each changed-file patch without fetching an aggregate unified diff', async () => {
     const bucket = fakeR2();
     const github = makeGithub({
-      getPrDiff: vi.fn().mockResolvedValue(''), // GitHub 406 "diff too_large" swallowed to ''
       getPrFiles: vi.fn().mockResolvedValue([
         {
           filename: 'a.js',
@@ -303,14 +285,8 @@ describe('handlePrContextJob — gather', () => {
       db: {},
       job: baseJob,
     });
-    const storedDiff = bucket.store.get(prContextKey(10, 7, 'diff'));
-    expect(storedDiff).toContain('a.js');
-    expect(storedDiff).toContain('b.js');
-    expect(storedDiff).toContain('@@ -1 +1 @@');
-    expect(storedDiff).toContain('+new');
-    const manifest = parseJson(bucket.store.get(prContextKey(10, 7, 'manifest')));
-    expect(manifest.truncated.diffSource).toBe('reconstructed');
-    const files = parseJson(bucket.store.get(prContextV2Key(10, 7, 'files')));
+    expect(github.getPrDiff).not.toHaveBeenCalled();
+    const files = parseJson(bucket.store.get(prContextKey(10, 7, 'files')));
     expect(files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -323,8 +299,8 @@ describe('handlePrContextJob — gather', () => {
         }),
       ]),
     );
-    expect(bucket.store.get(prContextV2DiffKey(10, 7, 'a.js'))).toContain('@@ -1 +1 @@');
-    expect(bucket.store.get(prContextV2DiffKey(10, 7, 'b.js'))).toContain('+added');
+    expect(bucket.store.get(prContextDiffKey(10, 7, 'a.js'))).toContain('@@ -1 +1 @@');
+    expect(bucket.store.get(prContextDiffKey(10, 7, 'b.js'))).toContain('+added');
   });
 
   it('marks a binary or unavailable patch explicitly instead of silently truncating it', async () => {
@@ -347,7 +323,7 @@ describe('handlePrContextJob — gather', () => {
       db: {},
       job: baseJob,
     });
-    const files = parseJson(bucket.store.get(prContextV2Key(10, 7, 'files')));
+    const files = parseJson(bucket.store.get(prContextKey(10, 7, 'files')));
     expect(files).toEqual([
       expect.objectContaining({
         path: 'assets/logo.png',
@@ -355,7 +331,7 @@ describe('handlePrContextJob — gather', () => {
         diff: { state: 'unavailable', reason: 'binary_file', bytes: null },
       }),
     ]);
-    expect(bucket.store.has(prContextV2DiffKey(10, 7, 'assets/logo.png'))).toBe(false);
+    expect(bucket.store.has(prContextDiffKey(10, 7, 'assets/logo.png'))).toBe(false);
   });
 
   it('still succeeds with no R2/KV bindings (writes are no-ops)', async () => {

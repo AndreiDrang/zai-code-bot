@@ -4,7 +4,7 @@ import { prContextKey } from './storage/keys.js';
  * Comment-slice helpers shared by the eager gather (heavy worker) and the
  * incremental comment refresh (main worker).
  *
- * The `comments` context slice (`v1/prs/{repo}/{pr}/context/comments.json`) has
+ * The `comments` context slice (`v2/prs/{repo}/{pr}/context/comments.json`) has
  * TWO writers — the gather, which re-captures every slice on each new head, and
  * the comment-refresh, which keeps the slice fresh between pushes when an
  * `issue_comment` event fires. Both writers MUST produce the identical shape, so

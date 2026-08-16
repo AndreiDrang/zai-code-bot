@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createContextService } from '../shared/context/context-service.js';
-import { prContextV2DiffKey, prContextV2Key } from '../shared/storage/keys.js';
+import { prContextDiffKey, prContextKey } from '../shared/storage/keys.js';
 
 function fakeBucket(objects) {
   return {
@@ -11,11 +11,11 @@ function fakeBucket(objects) {
 }
 
 function createSnapshot() {
-  const patchKey = prContextV2DiffKey(10, 7, 'src/cache.ts');
+  const patchKey = prContextDiffKey(10, 7, 'src/cache.ts');
   const objects = new Map([
-    [prContextV2Key(10, 7, 'manifest'), JSON.stringify({ schemaVersion: 2, headSha: 'abc' })],
+    [prContextKey(10, 7, 'manifest'), JSON.stringify({ schemaVersion: 2, headSha: 'abc' })],
     [
-      prContextV2Key(10, 7, 'files'),
+      prContextKey(10, 7, 'files'),
       JSON.stringify([
         {
           path: 'src/cache.ts',
@@ -31,9 +31,9 @@ function createSnapshot() {
       ]),
     ],
     [patchKey, '@@ -1 +1 @@\n+cache'],
-    [prContextV2Key(10, 7, 'description'), 'Add cache'],
-    [prContextV2Key(10, 7, 'commits'), '[]'],
-    [prContextV2Key(10, 7, 'comments'), '{"issue":[],"review":[]}'],
+    [prContextKey(10, 7, 'description'), 'Add cache'],
+    [prContextKey(10, 7, 'commits'), '[]'],
+    [prContextKey(10, 7, 'comments'), '{"issue":[],"review":[]}'],
   ]);
   return { objects, patchKey };
 }

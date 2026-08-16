@@ -1,8 +1,8 @@
 import {
-  readContextV2Diff,
-  readContextV2Files,
-  readContextV2Manifest,
-  readContextV2Slice,
+  readContextDiff,
+  readContextFiles,
+  readContextManifest,
+  readContextSlice,
 } from '../pr-context-reader.js';
 import { normalizeRepositoryPath } from '../storage/keys.js';
 import {
@@ -31,7 +31,7 @@ export function createContextService({
   let filesPromise;
 
   const getManifest = async () => {
-    manifestPromise ||= readContextV2Manifest(bucket, repositoryId, prNumber);
+    manifestPromise ||= readContextManifest(bucket, repositoryId, prNumber);
     const manifest = await manifestPromise;
     if (!manifest) return { status: 'missing', manifest: null };
     if (expectedHeadSha && manifest.headSha !== expectedHeadSha) {
@@ -43,7 +43,7 @@ export function createContextService({
   const listChangedFiles = async ({ pathPrefix, limit = 500 } = {}) => {
     const snapshot = await getManifest();
     if (snapshot.status !== 'available') return { ...snapshot, files: [] };
-    filesPromise ||= readContextV2Files(bucket, repositoryId, prNumber);
+    filesPromise ||= readContextFiles(bucket, repositoryId, prNumber);
     const files = await filesPromise;
     if (!Array.isArray(files)) {
       return { status: 'missing', manifest: snapshot.manifest, files: [] };
@@ -92,7 +92,7 @@ export function createContextService({
       };
     }
 
-    const text = await readContextV2Diff(bucket, repositoryId, prNumber, file);
+    const text = await readContextDiff(bucket, repositoryId, prNumber, file);
     if (text == null) {
       return {
         status: 'unavailable',
@@ -228,7 +228,7 @@ export function createContextService({
   const getDescription = async ({ maxBytes = 50 * 1024 } = {}) => {
     const snapshot = await getManifest();
     if (snapshot.status !== 'available') return snapshot;
-    const body = await readContextV2Slice(bucket, repositoryId, prNumber, 'description');
+    const body = await readContextSlice(bucket, repositoryId, prNumber, 'description');
     const text = String(body ?? '');
     if (utf8ByteLength(text) > maxBytes) {
       return {
@@ -252,7 +252,7 @@ export function createContextService({
   const getCommits = async ({ limit = 30 } = {}) => {
     const snapshot = await getManifest();
     if (snapshot.status !== 'available') return snapshot;
-    const commits = await readContextV2Slice(bucket, repositoryId, prNumber, 'commits');
+    const commits = await readContextSlice(bucket, repositoryId, prNumber, 'commits');
     const values = Array.isArray(commits) ? commits : [];
     const maxCommits = Math.min(Math.max(Number(limit) || 30, 1), 30);
     return {
@@ -267,7 +267,7 @@ export function createContextService({
   const getComments = async ({ path, limit = 50 } = {}) => {
     const snapshot = await getManifest();
     if (snapshot.status !== 'available') return snapshot;
-    const comments = await readContextV2Slice(bucket, repositoryId, prNumber, 'comments');
+    const comments = await readContextSlice(bucket, repositoryId, prNumber, 'comments');
     const groups = [comments?.issue, comments?.review].filter(Array.isArray).flat();
     let filtered = groups;
     if (path != null) {
@@ -290,8 +290,8 @@ export function createContextService({
   };
 
   /**
-   * Produces an aggregate, unified-diff-shaped view only for compatibility
-   * consumers. Storage remains per-file and no stored artifact is truncated.
+   * Produces a bounded, aggregate unified-diff-shaped view for prompt builders.
+   * Storage remains per-file and no stored artifact is truncated.
    * Files that do not fit are omitted as whole artifacts and reported.
    */
   const getCombinedDiff = async ({ maxBytes } = {}) => {
@@ -339,9 +339,9 @@ export function createContextService({
     const snapshot = await getManifest();
     if (snapshot.status !== 'available') return { ...snapshot, slices: null };
     const [description, commits, comments, combined] = await Promise.all([
-      readContextV2Slice(bucket, repositoryId, prNumber, 'description'),
-      readContextV2Slice(bucket, repositoryId, prNumber, 'commits'),
-      readContextV2Slice(bucket, repositoryId, prNumber, 'comments'),
+      readContextSlice(bucket, repositoryId, prNumber, 'description'),
+      readContextSlice(bucket, repositoryId, prNumber, 'commits'),
+      readContextSlice(bucket, repositoryId, prNumber, 'comments'),
       getCombinedDiff({ maxBytes: maxDiffBytes }),
     ]);
     const indexed = await listFiles();

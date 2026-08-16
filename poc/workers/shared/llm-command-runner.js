@@ -2,7 +2,7 @@
  * Shared lifecycle runner for the review LLM command. Encapsulates the durable
  * queue pipeline so the handler shrinks to its prompt + identity:
  *
- *   config → load 5 context slices (live diff fallback) → no-diff guard
+ *   config → load V2 context slices (live diff fallback) → no-diff guard
  *     → API-key guard → system+user prompt → Z.ai → persist result to
  *     `/context/{command}.md` (overwrite) → marker-idempotent comment.
  *
@@ -21,12 +21,7 @@
 import { BOT_FOOTER } from './constants.js';
 import { createLogger } from './logging.js';
 import { resolveSecretValue } from './secrets.js';
-import {
-  readContextManifest,
-  readContextSlice,
-  readPrSummary,
-  renderContextSummary,
-} from './pr-context-reader.js';
+import { readPrSummary, renderContextSummary } from './pr-context-reader.js';
 import { createContextService } from './context/context-service.js';
 import { getRepositoryConfig } from './storage/config.js';
 import { prCommandResultKey } from './storage/keys.js';
@@ -97,32 +92,15 @@ export async function runLlmCommand(
     prNumber,
     expectedHeadSha: headSha,
   });
-  const v2Snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
-  const manifest =
-    v2Snapshot.status === 'available'
-      ? v2Snapshot.manifest
-      : await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber);
+  const snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
+  const manifest = snapshot.status === 'available' ? snapshot.manifest : null;
   const storedSummary = await readPrSummary(env?.BOT_ARTIFACTS, repoId, prNumber);
   const prSummary =
     manifest?.headSha && storedSummary?.headSha === manifest.headSha ? storedSummary.summary : null;
 
-  // --- Prefer V2's per-file snapshot; retain V1 reads during dual-write. ---
-  let diff;
-  let description;
-  let files;
-  let commits;
-  let comments;
-  if (v2Snapshot.status === 'available') {
-    ({ diff, description, files, commits, comments } = v2Snapshot.slices);
-  } else {
-    [diff, description, files, commits, comments] = await Promise.all([
-      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'diff'),
-      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'description'),
-      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'files'),
-      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'commits'),
-      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'comments'),
-    ]);
-  }
+  // --- Build from the committed V2 snapshot; use GitHub only as a live-diff
+  // fallback when no snapshot diff is available. ---
+  let { diff, description, files, commits, comments } = snapshot.slices || {};
   if (!diff || (typeof diff === 'string' && !diff.trim())) {
     diff = await github.getPrDiff(owner, name, prNumber).catch(() => '');
   }

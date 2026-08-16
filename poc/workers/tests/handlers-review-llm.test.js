@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { prContextKey, prCommandResultKey } from '../shared/storage/keys.js';
+import { prCommandResultKey, prContextDiffKey, prContextKey } from '../shared/storage/keys.js';
 import { REVIEW_MARKER } from '../shared/constants.js';
 
 // Hoisted mocks — vi.mock factories run before imports, so the fns live here.
@@ -35,7 +35,7 @@ const job = {
 };
 
 /**
- * Fake R2 (context slices + manifest, with a put() spy) + KV.
+ * Fake R2 (V2 context artifacts + manifest, with a put() spy) + KV.
  * The real pr-context-reader runs against this bucket.
  */
 function makeEnv({
@@ -46,39 +46,65 @@ function makeEnv({
   withComments = true,
   apiKey = 'zai-key',
 } = {}) {
+  const patchKey = prContextDiffKey(REPO_ID, PR, 'a/f');
+  const objects = new Map([
+    [
+      prContextKey(REPO_ID, PR, 'manifest'),
+      JSON.stringify({
+        schemaVersion: 2,
+        headSha: HEAD,
+        counts: { files: 2, commits: 1, issueComments: 0, reviewComments: 0 },
+        aggregates: { additions: 5, deletions: 1 },
+      }),
+    ],
+    [
+      prContextKey(REPO_ID, PR, 'files'),
+      withFiles
+        ? JSON.stringify([
+            {
+              path: 'a/f',
+              status: 'modified',
+              additions: 3,
+              deletions: 1,
+              diff: withDiff
+                ? { state: 'available', key: patchKey, bytes: 6, sha256: 'hash' }
+                : { state: 'unavailable', reason: 'patch_unavailable', bytes: null },
+            },
+            {
+              path: 'b/g',
+              status: 'added',
+              additions: 2,
+              deletions: 0,
+              diff: { state: 'unavailable', reason: 'patch_unavailable', bytes: null },
+            },
+          ])
+        : null,
+    ],
+    [prContextKey(REPO_ID, PR, 'description'), withDescription ? 'A feature' : null],
+    [
+      prContextKey(REPO_ID, PR, 'commits'),
+      withCommits
+        ? JSON.stringify([
+            {
+              sha: 'cccc111',
+              title: 'Add feature',
+              message: 'Add feature',
+              author: 'author',
+              date: '2024-01-01',
+            },
+          ])
+        : null,
+    ],
+    [
+      prContextKey(REPO_ID, PR, 'comments'),
+      withComments ? JSON.stringify({ issue: [], review: [] }) : null,
+    ],
+    [patchKey, withDiff ? '@@ -1 +1 @@\n+line' : null],
+  ]);
   const bucket = {
     get: vi.fn(async (key) => {
-      if (key === prContextKey(REPO_ID, PR, 'manifest'))
-        return {
-          text: async () =>
-            JSON.stringify({
-              headSha: HEAD,
-              counts: { files: 2, commits: 1, issueComments: 0, reviewComments: 0 },
-              aggregates: { additions: 5, deletions: 1 },
-            }),
-        };
-      if (withDiff && key === prContextKey(REPO_ID, PR, 'diff'))
-        return { text: async () => 'diff --git a/f b/f\n+line' };
-      if (withFiles && key === prContextKey(REPO_ID, PR, 'files'))
-        return { text: async () => JSON.stringify([{ filename: 'a/f' }, { filename: 'b/g' }]) };
-      if (withDescription && key === prContextKey(REPO_ID, PR, 'description'))
-        return { text: async () => 'A feature' };
-      if (withCommits && key === prContextKey(REPO_ID, PR, 'commits'))
-        return {
-          text: async () =>
-            JSON.stringify([
-              {
-                sha: 'cccc111',
-                title: 'Add feature',
-                message: 'Add feature',
-                author: 'author',
-                date: '2024-01-01',
-              },
-            ]),
-        };
-      if (withComments && key === prContextKey(REPO_ID, PR, 'comments'))
-        return { text: async () => JSON.stringify({ issue: [], review: [] }) };
-      return null;
+      const value = objects.get(key);
+      return value == null ? null : { text: async () => value };
     }),
     put: vi.fn(),
   };

@@ -1,9 +1,4 @@
-import {
-  prContextKey,
-  prContextV2DiffKey,
-  prContextV2Key,
-  prCardKey,
-} from '../../../shared/storage/keys.js';
+import { prContextDiffKey, prContextKey, prCardKey } from '../../../shared/storage/keys.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
 import { createLogger } from '../../../shared/logging.js';
 import { projectComments } from '../../../shared/pr-comments.js';
@@ -18,8 +13,8 @@ import {
 /**
  * Eager PR-context gather job.
  *
- * Writes the PR's task context to R2 under per-PR keys. V1 is dual-written
- * temporarily for compatibility; V2 stores one patch per file under
+ * Writes the PR's task context to R2 under a V2 per-PR snapshot. Each changed
+ * file stores one patch under
  * `v2/prs/{repo}/{pr}/context/diffs/`. A small PR card is written to KV so
  * command handlers can read the PR shape without calling getPullRequest.
  *
@@ -29,7 +24,6 @@ import {
  */
 
 const PR_CARD_TTL_SECONDS = 30 * 24 * 60 * 60; // 30d — matches the R2 context lifecycle
-const DEFAULT_MAX_CONTEXT_BYTES = 200000;
 const COMMIT_CAP = 100;
 
 export async function handlePrContextJob({ github, env, db, job }) {
@@ -37,11 +31,9 @@ export async function handlePrContextJob({ github, env, db, job }) {
   const bucket = env.BOT_ARTIFACTS;
   const cache = env.BOT_CACHE;
   const { repository_id: repoId, pr_number: prNumber, head_sha: headSha } = job;
-  const legacyManifestKey = prContextKey(repoId, prNumber, 'manifest');
-  const manifestKey = prContextV2Key(repoId, prNumber, 'manifest');
+  const manifestKey = prContextKey(repoId, prNumber, 'manifest');
 
-  // V1-only snapshots are re-gathered once so V2 is backfilled. Subsequent
-  // redeliveries skip only when the V2 manifest describes this same head.
+  // Redeliveries skip only when the committed V2 manifest describes this head.
   const existingHead = await readManifestHead(bucket, manifestKey);
   if (existingHead && existingHead === headSha) {
     const summaryJob = await ensureSummaryJob(db, bucket, job, env, logger);
@@ -54,17 +46,15 @@ export async function handlePrContextJob({ github, env, db, job }) {
   }
 
   const config = await getRepositoryConfig(db, cache, repoId);
-  const maxBytes = Number(config.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
   const maxFiles = Math.max(1, Number(config.maxFiles) || 100);
   const owner = job.repository_owner;
   const name = job.repository_name;
 
   // Fetch all slices in parallel; a single slice failure degrades but does not
   // abort the gather (the manifest records what was actually captured).
-  const [pullRequest, filesPage, diff, commits, comments] = await Promise.all([
+  const [pullRequest, filesPage, commits, comments] = await Promise.all([
     github.getPullRequest(owner, name, prNumber).catch(() => null),
     github.getPrFiles(owner, name, prNumber, 1, Math.min(maxFiles, 100)).catch(() => []),
-    github.getPrDiff(owner, name, prNumber).catch(() => ''),
     github.getPrCommits(owner, name, prNumber, 1, COMMIT_CAP).catch(() => []),
     github
       .getPrComments(owner, name, prNumber, { maxComments: 100 })
@@ -83,17 +73,8 @@ export async function handlePrContextJob({ github, env, db, job }) {
     };
   }
 
-  // Compact projections — store what consumers need, not raw API blobs. The
-  // raw page is kept separately so the diff can be reconstructed from the
-  // per-file patches when GitHub refuses the unified diff (PRs > 300 files).
+  // Compact projections — store what consumers need, not raw API blobs.
   const rawFiles = Array.isArray(filesPage) ? filesPage : [];
-  const files = rawFiles.slice(0, maxFiles).map((f) => ({
-    filename: f.filename,
-    status: f.status,
-    additions: f.additions,
-    deletions: f.deletions,
-    changes: f.changes,
-  }));
   const commitsPayload = (Array.isArray(commits) ? commits : []).slice(0, COMMIT_CAP).map((c) => {
     const message = String(c.commit?.message || '');
     return {
@@ -108,66 +89,29 @@ export async function handlePrContextJob({ github, env, db, job }) {
   // (shared/pr-comments.js), so the gather and the issue_comment refresh never
   // drift in the stored slice shape. Includes `updated_at` so edits are visible.
   const commentsPayload = projectComments(comments);
-  const v2Diffs = await buildV2DiffArtifacts(rawFiles.slice(0, maxFiles), repoId, prNumber);
+  const diffArtifacts = await buildDiffArtifacts(rawFiles.slice(0, maxFiles), repoId, prNumber);
 
-  // V1 compatibility only: existing consumers still read one aggregate diff.
-  // V2 persists individual patches without this LLM prompt budget or silent
-  // storage truncation. GitHub's unified diff remains the preferred legacy
-  // representation, with per-file patches as its fallback.
-  const unifiedDiff = typeof diff === 'string' && diff.length ? diff : '';
-  let diffSource = 'none';
-  if (unifiedDiff) {
-    diffSource = 'unified';
-  } else if (rawFiles.some((f) => typeof f.patch === 'string' && f.patch.length)) {
-    diffSource = 'reconstructed';
-  }
-  const diffText = (unifiedDiff || reconstructDiff(rawFiles.slice(0, maxFiles))).slice(0, maxBytes);
-
-  const aggregates = aggregateFiles(files);
+  const aggregates = aggregateFiles(diffArtifacts.files);
   const gatheredAt = new Date().toISOString();
 
-  // V1 continues dual-writing for compatibility. V2 stores one patch object
-  // per file; its manifest is written last and commits a complete snapshot.
+  // Store each patch independently. The manifest is written last and commits
+  // a complete V2 snapshot to readers.
   if (bucket?.put) {
-    const k = (kind) => prContextKey(repoId, prNumber, kind);
     await Promise.all([
-      putJson(bucket, k('files'), files),
-      putText(bucket, k('diff'), diffText, 'text/x-diff'),
-      putJson(bucket, k('commits'), commitsPayload),
-      putText(bucket, k('description'), pullRequest?.body || '', 'text/markdown'),
-      putJson(bucket, k('comments'), commentsPayload),
-      ...v2Diffs.artifacts.map((artifact) =>
+      ...diffArtifacts.artifacts.map((artifact) =>
         putText(bucket, artifact.key, artifact.patch, 'text/x-diff'),
       ),
-      putJson(bucket, prContextV2Key(repoId, prNumber, 'files'), v2Diffs.files),
-      putJson(bucket, prContextV2Key(repoId, prNumber, 'commits'), commitsPayload),
+      putJson(bucket, prContextKey(repoId, prNumber, 'files'), diffArtifacts.files),
+      putJson(bucket, prContextKey(repoId, prNumber, 'commits'), commitsPayload),
       putText(
         bucket,
-        prContextV2Key(repoId, prNumber, 'description'),
+        prContextKey(repoId, prNumber, 'description'),
         pullRequest?.body || '',
         'text/markdown',
       ),
-      putJson(bucket, prContextV2Key(repoId, prNumber, 'comments'), commentsPayload),
+      putJson(bucket, prContextKey(repoId, prNumber, 'comments'), commentsPayload),
     ]);
 
-    const legacyManifest = {
-      repositoryId: repoId,
-      prNumber,
-      headSha,
-      baseSha: pullRequest?.base?.sha ?? job.base_sha ?? null,
-      title: pullRequest?.title ?? job.title ?? null,
-      authorLogin: pullRequest?.user?.login ?? job.author_login ?? null,
-      gatheredAt,
-      contextPrefix: `v1/prs/${repoId}/${prNumber}/context`,
-      aggregates,
-      counts: {
-        files: files.length,
-        commits: commitsPayload.length,
-        issueComments: commentsPayload.issue.length,
-        reviewComments: commentsPayload.review.length,
-      },
-      truncated: { diffBytes: diffText.length, maxBytes, diffSource },
-    };
     const manifest = {
       schemaVersion: 2,
       repositoryId: repoId,
@@ -187,22 +131,21 @@ export async function handlePrContextJob({ github, env, db, job }) {
       },
       aggregates: {
         ...aggregates,
-        storedDiffBytes: v2Diffs.storedDiffBytes,
+        storedDiffBytes: diffArtifacts.storedDiffBytes,
       },
       counts: {
-        files: v2Diffs.files.length,
+        files: diffArtifacts.files.length,
         commits: commitsPayload.length,
         issueComments: commentsPayload.issue.length,
         reviewComments: commentsPayload.review.length,
-        diffsAvailable: v2Diffs.artifacts.length,
-        diffsUnavailable: v2Diffs.files.length - v2Diffs.artifacts.length,
+        diffsAvailable: diffArtifacts.artifacts.length,
+        diffsUnavailable: diffArtifacts.files.length - diffArtifacts.artifacts.length,
       },
       limits: {
         maxFileDiffBytes: MAX_SNAPSHOT_FILE_DIFF_BYTES,
         maxTotalDiffBytes: MAX_SNAPSHOT_TOTAL_DIFF_BYTES,
       },
     };
-    await putJson(bucket, legacyManifestKey, legacyManifest);
     await putJson(bucket, manifestKey, manifest);
   }
 
@@ -239,7 +182,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
     repo: job.repository_full_name,
     pr: prNumber,
     headSha,
-    files: files.length,
+    files: diffArtifacts.files.length,
     commits: commitsPayload.length,
   });
 
@@ -247,7 +190,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
     status: 'success',
     action: 'pr_context',
     counts: {
-      files: files.length,
+      files: diffArtifacts.files.length,
       commits: commitsPayload.length,
       comments: commentsPayload.issue.length + commentsPayload.review.length,
     },
@@ -304,7 +247,7 @@ function aggregateFiles(files) {
   return { changedFiles: files.length, additions, deletions };
 }
 
-async function buildV2DiffArtifacts(rawFiles, repoId, prNumber) {
+async function buildDiffArtifacts(rawFiles, repoId, prNumber) {
   const files = [];
   const artifacts = [];
   let storedDiffBytes = 0;
@@ -348,7 +291,7 @@ async function buildV2DiffArtifacts(rawFiles, repoId, prNumber) {
 
     let key;
     try {
-      key = prContextV2DiffKey(repoId, prNumber, path);
+      key = prContextDiffKey(repoId, prNumber, path);
     } catch {
       entry.diff = { state: 'unavailable', reason: 'invalid_path', bytes };
       files.push(entry);
@@ -372,27 +315,6 @@ async function sha256Hex(value) {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Build a unified-diff-shaped string from the per-file `patch` fields returned
- * by the List-Files API. This is the GitHub-recommended fallback when the PR's
- * unified .diff media type is refused ("diff exceeded the maximum number of
- * files (300)") or otherwise unavailable. Output is bounded by the caller via
- * maxBytes before it reaches R2.
- */
-function reconstructDiff(files) {
-  const parts = [];
-  for (const f of files) {
-    if (typeof f.patch !== 'string' || !f.patch) continue;
-    parts.push(
-      `diff --git a/${f.filename} b/${f.filename}`,
-      `--- a/${f.filename}`,
-      `+++ b/${f.filename}`,
-      f.patch,
-    );
-  }
-  return parts.join('\n');
 }
 
 function putJson(bucket, key, value) {

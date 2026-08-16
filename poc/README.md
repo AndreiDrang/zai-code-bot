@@ -51,15 +51,17 @@ and authorization; it posts the command list without creating a D1 job or
 publishing to the Queue.
 
 Pull-request `opened`, `reopened`, `synchronize`, and `ready_for_review` events
-create a `pr_context` job. The gatherer stores bounded files, diff, commits,
-description, and comments in R2. After the manifest is committed, it creates an
-idempotent `pr_summary` job for the same PR head and publishes it immediately
-when the heavy worker's queue producer is available; the D1 outbox remains the
-recovery path. That job sends all five gathered slices to Z.ai, validates the
-structured JSON response, and stores it at
-`v1/prs/{repositoryId}/{prNumber}/context/pr-summary.json`. A later review
-command uses a matching-head summary as auxiliary context and still treats the
-raw diff as authoritative.
+create a `pr_context` job. The gatherer stores V2 context in R2 under
+`v2/prs/{repositoryId}/{prNumber}/context/`: manifest, files, commits,
+description, comments, and one patch artifact for each changed text file. After
+the manifest is committed, it creates an idempotent `pr_summary` job for the
+same PR head and publishes it immediately when the heavy worker's queue
+producer is available; the D1 outbox remains the recovery path. That job sends
+bounded context reconstructed from the V2 per-file patches to Z.ai, validates
+the structured JSON response, and stores it at
+`v2/prs/{repositoryId}/{prNumber}/context/pr-summary.json`. A later review
+command uses a matching-head summary as auxiliary context and treats the
+reconstructed snapshot diff as authoritative.
 
 ## Configuration
 

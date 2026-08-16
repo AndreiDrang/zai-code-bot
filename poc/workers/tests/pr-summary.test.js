@@ -13,12 +13,7 @@ vi.mock('../shared/zai-client.js', () => ({
   createZaiClient: vi.fn(() => ({ call: mocks.zaiCall })),
 }));
 
-import {
-  prContextKey,
-  prContextV2DiffKey,
-  prContextV2Key,
-  prSummaryKey,
-} from '../shared/storage/keys.js';
+import { prContextDiffKey, prContextKey, prSummaryKey } from '../shared/storage/keys.js';
 import {
   handlePrSummaryJob,
   validatePrSummary,
@@ -35,7 +30,7 @@ const job = {
 };
 
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   headSha: 'abc',
   baseSha: 'base',
   title: 'Add X',
@@ -46,8 +41,12 @@ const manifest = {
 };
 
 function fakeBucket() {
+  const patchKey = prContextDiffKey(10, 7, 'src/x.js');
   const store = new Map([
-    [prContextKey(10, 7, 'manifest'), JSON.stringify(manifest)],
+    [
+      prContextKey(10, 7, 'manifest'),
+      JSON.stringify({ ...manifest, artifacts: { files: 'files.json' } }),
+    ],
     [prContextKey(10, 7, 'description'), 'Adds X.'],
     [
       prContextKey(10, 7, 'commits'),
@@ -55,40 +54,6 @@ function fakeBucket() {
     ],
     [
       prContextKey(10, 7, 'files'),
-      JSON.stringify([{ filename: 'src/x.js', additions: 2, deletions: 1 }]),
-    ],
-    [
-      prContextKey(10, 7, 'comments'),
-      JSON.stringify({ issue: [{ user: 'u', body: 'Why?' }], review: [] }),
-    ],
-    [prContextKey(10, 7, 'diff'), 'diff --git a/src/x.js b/src/x.js\n+new'],
-  ]);
-  return {
-    store,
-    get: vi.fn(async (key) => {
-      if (!store.has(key)) return null;
-      return { text: async () => store.get(key) };
-    }),
-    put: vi.fn(async (key, value) => {
-      store.set(key, value);
-    }),
-  };
-}
-
-function fakeV2Bucket() {
-  const patchKey = prContextV2DiffKey(10, 7, 'src/x.js');
-  const store = new Map([
-    [
-      prContextV2Key(10, 7, 'manifest'),
-      JSON.stringify({ ...manifest, schemaVersion: 2, artifacts: { files: 'files.json' } }),
-    ],
-    [prContextV2Key(10, 7, 'description'), 'Adds X.'],
-    [
-      prContextV2Key(10, 7, 'commits'),
-      JSON.stringify([{ sha: 'c1', title: 'Add X', message: 'Add X' }]),
-    ],
-    [
-      prContextV2Key(10, 7, 'files'),
       JSON.stringify([
         {
           path: 'src/x.js',
@@ -100,7 +65,7 @@ function fakeV2Bucket() {
       ]),
     ],
     [
-      prContextV2Key(10, 7, 'comments'),
+      prContextKey(10, 7, 'comments'),
       JSON.stringify({ issue: [{ user: 'u', body: 'Why?' }], review: [] }),
     ],
     [patchKey, '@@ -1 +1 @@\n+new'],
@@ -176,8 +141,8 @@ describe('handlePrSummaryJob', () => {
     expect(mocks.zaiCall).not.toHaveBeenCalled();
   });
 
-  it('prefers the V2 per-file snapshot when it is available', async () => {
-    const bucket = fakeV2Bucket();
+  it('loads the V2 per-file snapshot', async () => {
+    const bucket = fakeBucket();
     await expect(
       handlePrSummaryJob({
         env: { BOT_ARTIFACTS: bucket, BOT_CACHE: {}, ZAI_API_KEY: 'key' },
@@ -189,7 +154,7 @@ describe('handlePrSummaryJob', () => {
     const request = mocks.zaiCall.mock.calls[0][0];
     expect(request.messages[1].content).toContain('src/x.js (added, +2/-1)');
     expect(request.messages[1].content).toContain('@@ -1 +1 @@');
-    expect(bucket.get).not.toHaveBeenCalledWith(prContextKey(10, 7, 'diff'));
+    expect(bucket.get).not.toHaveBeenCalledWith('v2/prs/10/7/context/diff.diff');
   });
 
   it('rejects malformed model output before writing the artifact', async () => {

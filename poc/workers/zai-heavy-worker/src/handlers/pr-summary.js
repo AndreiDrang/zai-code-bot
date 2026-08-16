@@ -1,5 +1,4 @@
 import { buildContextBlock } from '../../../shared/llm-context.js';
-import { readContextManifest, readContextSlice } from '../../../shared/pr-context-reader.js';
 import { createContextService } from '../../../shared/context/context-service.js';
 import { createLogger } from '../../../shared/logging.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
@@ -40,39 +39,20 @@ export async function handlePrSummaryJob({ env, db, job }) {
     prNumber,
     expectedHeadSha: headSha,
   });
-  const v2Snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
-  let manifest;
-  let slices;
-  let usingV2 = false;
+  const snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
 
-  if (v2Snapshot.status === 'stale') {
+  if (snapshot.status === 'stale') {
     return {
       status: 'stale',
       action: 'pr_summary',
       repository: repoFullName,
       issue: prNumber,
       headSha,
-      currentHeadSha: v2Snapshot.manifest?.headSha || null,
+      currentHeadSha: snapshot.manifest?.headSha || null,
     };
   }
-  if (v2Snapshot.status === 'available') {
-    manifest = v2Snapshot.manifest;
-    slices = v2Snapshot.slices;
-    usingV2 = true;
-  } else {
-    // Existing snapshots remain readable during the dual-write rollout.
-    manifest = await readContextManifest(bucket, repoId, prNumber);
-    if (manifest) {
-      const [description, commits, files, comments, diff] = await Promise.all([
-        readContextSlice(bucket, repoId, prNumber, 'description'),
-        readContextSlice(bucket, repoId, prNumber, 'commits'),
-        readContextSlice(bucket, repoId, prNumber, 'files'),
-        readContextSlice(bucket, repoId, prNumber, 'comments'),
-        readContextSlice(bucket, repoId, prNumber, 'diff'),
-      ]);
-      slices = { description, commits, files, comments, diff };
-    }
-  }
+  const manifest = snapshot.status === 'available' ? snapshot.manifest : null;
+  const slices = snapshot.status === 'available' ? snapshot.slices : null;
 
   if (!manifest) {
     const error = new Error('PR context manifest is missing');
@@ -166,15 +146,13 @@ export async function handlePrSummaryJob({ env, db, job }) {
 
   // A newer synchronize event may have replaced the manifest while the model
   // was running. Never let an older answer overwrite the current summary.
-  const latestManifest = usingV2
-    ? (
-        await createContextService({
-          bucket,
-          repositoryId: repoId,
-          prNumber,
-        }).getManifest()
-      ).manifest
-    : await readContextManifest(bucket, repoId, prNumber);
+  const latestManifest = (
+    await createContextService({
+      bucket,
+      repositoryId: repoId,
+      prNumber,
+    }).getManifest()
+  ).manifest;
   if (!latestManifest || latestManifest.headSha !== headSha) {
     logger.warn('Discarded stale PR summary', {
       repo: repoFullName,

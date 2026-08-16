@@ -10,9 +10,10 @@
  *
  * The slice shapes are those the eager gather writes
  * (zai-heavy-worker/src/handlers/pr-context.js) and that
- * `readContextSlice` (shared/pr-context-reader.js) returns:
- *   - diff, description : string
- *   - files             : [{ filename, status, additions, deletions, changes }]
+ * Context Service supplies:
+ *   - diff, description : string (`diff` is bounded and assembled from V2
+ *                         per-file patch artifacts)
+ *   - files             : [{ path, status, additions, deletions, changes, diff }]
  *   - commits           : [{ sha, title, message, author, date }]
  *   - comments          : { issue: [{user, body, created_at, updated_at}],
  *                           review: [{user, body, path, line, updated_at}] }

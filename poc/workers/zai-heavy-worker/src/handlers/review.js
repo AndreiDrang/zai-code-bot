@@ -12,7 +12,7 @@
  * commits, conversation (issue + review comments), description, and the changed
  * file list (shared/llm-context.js → buildContextBlock, command:'review').
  *
- * The LLM result is stored at `v1/prs/{repo}/{pr}/context/review.md` (overwrite,
+ * The LLM result is stored at `v2/prs/{repo}/{pr}/context/review.md` (overwrite,
  * one object per command) — the per-PR "latest review". Its reader is
  * readCommandResult (shared/pr-context-reader.js).
  */
