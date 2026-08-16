@@ -5,7 +5,7 @@ compatibility_date = "2026-08-05"
 
 [vars]
 NODE_ENV = "production"
-ZAI_MODEL = "glm-5.2"
+ZAI_MODEL = "glm-5.3"
 R2_RETENTION_DAYS = "30"
 
 # Production resources shared with zai-main-worker.
