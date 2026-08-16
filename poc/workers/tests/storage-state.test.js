@@ -8,7 +8,7 @@ import {
   run,
   safeErrorCode,
 } from '../shared/storage/database.js';
-import { createPrContextJob, getJob } from '../shared/storage/deliveries.js';
+import { createPrContextJob, createPrSummaryJob, getJob } from '../shared/storage/deliveries.js';
 import { getRepositoryConfig, saveRepositoryConfig } from '../shared/storage/config.js';
 import {
   claimJob,
@@ -19,6 +19,7 @@ import {
   markJobRetryable,
   markJobSucceeded,
   markOutboxPublished,
+  publishOutboxJob,
   recordOutboxFailure,
   startAnalysisRun,
 } from '../shared/storage/jobs.js';
@@ -180,6 +181,37 @@ describe('D1 storage adapters', () => {
     expect(db.batch).toHaveBeenCalledOnce();
   });
 
+  it('creates a pr_summary job reusing the originating delivery', async () => {
+    const db = fakeDb({ firstValue: null });
+    let selectCount = 0;
+    const summaryJob = { ...job, kind: 'pr_summary' };
+    db.prepare = (sql) => ({
+      bind: (...bindings) => ({
+        sql,
+        bindings,
+        first: vi
+          .fn()
+          .mockResolvedValue(
+            sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : summaryJob) : null,
+          ),
+        run: vi.fn(),
+        all: vi.fn(),
+      }),
+    });
+
+    const result = await createPrSummaryJob(db, {
+      ...job,
+      kind: 'pr_context',
+      base_sha: 'base',
+    });
+
+    expect(result).toMatchObject({ created: true, job: summaryJob });
+    expect(db.batch).toHaveBeenCalledOnce();
+    const inserts = db.batch.mock.calls[0][0];
+    expect(inserts.some((statement) => statement.bindings.includes('pr_summary'))).toBe(true);
+    expect(inserts.some((statement) => statement.bindings.includes('delivery-1'))).toBe(true);
+  });
+
   it('sets a lease when claiming a queued job', async () => {
     const db = fakeDb();
     await claimJob(db, 'job-1', '2026-01-01T00:00:00.000Z');
@@ -207,6 +239,16 @@ describe('D1 storage adapters', () => {
     await recordOutboxFailure(db, 'job-1', 'queue_publish_failed', 10);
     await expect(listDueOutbox(db)).resolves.toEqual([{ job_id: 'job-1' }]);
     expect(db.batch).toHaveBeenCalled();
+  });
+
+  it('publishes an outbox job immediately when a producer binding is available', async () => {
+    const db = fakeDb();
+    const env = { BOT_JOBS: { send: vi.fn().mockResolvedValue(undefined) } };
+    await expect(publishOutboxJob(env, db, 'job-1')).resolves.toBe(true);
+    expect(env.BOT_JOBS.send).toHaveBeenCalledWith({ schemaVersion: 1, jobId: 'job-1' });
+    expect(db.statements.some((statement) => statement.sql.includes('published_at = ?'))).toBe(
+      true,
+    );
   });
 
   it('recovers an expired lease by resetting outbox publication', async () => {

@@ -16,9 +16,11 @@ recovers expired jobs and replays the outbox.
 ### `zai-heavy-worker`
 
 Private Queue consumer. It claims jobs in D1 and runs the `review`, `describe`,
-and internal `pr_context` handlers. It has no HTTP endpoint and no service
-binding. Results are published idempotently through marker-owned GitHub
-comments; `describe` also updates only its own section in the PR body.
+`pr_context`, and internal `pr_summary` handlers. It has no HTTP endpoint and
+no service binding. Review/describe results are published idempotently through
+marker-owned GitHub comments; `describe` also updates only its own section in
+the PR body. `pr_summary` stores structured JSON context in R2 and does not
+publish a GitHub comment.
 
 ## Command flow
 
@@ -50,8 +52,14 @@ publishing to the Queue.
 
 Pull-request `opened`, `reopened`, `synchronize`, and `ready_for_review` events
 create a `pr_context` job. The gatherer stores bounded files, diff, commits,
-description, and comments in R2. A later review or describe command reuses that
-snapshot and falls back to GitHub when a slice is unavailable.
+description, and comments in R2. After the manifest is committed, it creates an
+idempotent `pr_summary` job for the same PR head and publishes it immediately
+when the heavy worker's queue producer is available; the D1 outbox remains the
+recovery path. That job sends all five gathered slices to Z.ai, validates the
+structured JSON response, and stores it at
+`v1/prs/{repositoryId}/{prNumber}/context/pr-summary.json`. A later review
+command uses a matching-head summary as auxiliary context and still treats the
+raw diff as authoritative.
 
 ## Configuration
 

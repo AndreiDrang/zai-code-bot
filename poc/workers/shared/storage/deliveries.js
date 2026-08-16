@@ -1,8 +1,9 @@
-import { PR_CONTEXT_JOB_KIND, STORAGE_SCHEMA_VERSION } from './keys.js';
+import { PR_CONTEXT_JOB_KIND, PR_SUMMARY_JOB_KIND, STORAGE_SCHEMA_VERSION } from './keys.js';
 import { batch, first, prepare } from './database.js';
 
 const JOB_BASE = `
-  SELECT j.job_id, j.delivery_id, j.kind, j.repository_id, j.pr_number, j.head_sha,
+  SELECT j.job_id, j.delivery_id, j.kind, j.repository_id, j.pr_number,
+         j.head_sha, p.base_sha,
          j.status, j.attempt_count, j.available_at, j.claimed_at, j.lease_expires_at,
          j.completed_at, j.last_error_code, j.last_failure_at, j.config_version,
          r.owner AS repository_owner, r.name AS repository_name, r.full_name AS repository_full_name,
@@ -153,6 +154,39 @@ async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().t
  */
 export function createPrContextJob(db, event, now) {
   return createPrJob(db, event, PR_CONTEXT_JOB_KIND, { ownsDelivery: true }, now);
+}
+
+/**
+ * Records the structured PR-summary job produced by a successful context
+ * gather. It shares the originating webhook delivery, but has its own kind and
+ * outbox row, so the existing main-worker outbox replay publishes it to the
+ * heavy worker without placing data in the queue message.
+ */
+export function createPrSummaryJob(db, contextJob, now) {
+  return createPrJob(
+    db,
+    {
+      deliveryId: contextJob.delivery_id,
+      eventName: 'pull_request',
+      action: 'context_ready',
+      repositoryId: contextJob.repository_id,
+      repository: {
+        fullName: contextJob.repository_full_name,
+        owner: contextJob.repository_owner,
+        name: contextJob.repository_name,
+        defaultBranch: null,
+      },
+      prNumber: contextJob.pr_number,
+      headSha: contextJob.head_sha,
+      baseSha: contextJob.base_sha,
+      title: contextJob.title,
+      authorLogin: contextJob.author_login,
+      state: contextJob.state,
+    },
+    PR_SUMMARY_JOB_KIND,
+    { ownsDelivery: false },
+    now,
+  );
 }
 
 /**

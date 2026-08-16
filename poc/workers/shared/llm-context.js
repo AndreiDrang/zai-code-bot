@@ -32,12 +32,13 @@ const DIFF_WRAPPER_OVERHEAD = 40;
  *
  * @param {Object} opts
  * @param {Object} opts.slices - { diff, description, files, commits, comments }
- * @param {string} opts.command - command name selecting the layout ('review')
+ * @param {string} opts.command - command name selecting the layout ('review'|'pr-summary')
  * @param {number} [opts.budgetBytes=200000] - total soft cap for the block
  * @param {Object} [opts.meta] - optional { title, author } prepended as a header
+ * @param {Object} [opts.summary] - previously generated summary for review context
  * @returns {string} Markdown block (may be shorter than budget; never throws)
  */
-export function buildContextBlock({ slices, command, budgetBytes = 200000, meta } = {}) {
+export function buildContextBlock({ slices, command, budgetBytes = 200000, meta, summary } = {}) {
   const layout = LAYOUTS[command];
   if (!layout) {
     throw new Error(`buildContextBlock: no layout for command "${command}"`);
@@ -50,17 +51,21 @@ export function buildContextBlock({ slices, command, budgetBytes = 200000, meta 
 
   // Secondary slices are rendered first under fixed sub-caps; the diff (primary)
   // absorbs the budget left over so it always gets the lion's share.
+  const summaryCap = Math.min(layout.summaryCap || 0, Math.floor(budgetBytes * 0.08));
   const descriptionCap = Math.min(layout.descriptionCap, Math.floor(budgetBytes * 0.05));
   const commitsCap = Math.min(layout.commitsCap, Math.floor(budgetBytes * 0.06));
   const commentsCap = Math.min(layout.commentsCap, Math.floor(budgetBytes * 0.08));
   const filesCap = Math.min(layout.filesCap, Math.floor(budgetBytes * 0.03));
 
+  const generatedSummary = renderPrSummary(summary, summaryCap);
   const description = renderDescription(s.description, descriptionCap);
-  const commits = layout.includeCommits ? renderCommits(s.commits, commitsCap) : '';
+  const commits = layout.includeCommits
+    ? renderCommits(s.commits, commitsCap, layout.includeCommitMessages)
+    : '';
   const comments = layout.includeComments ? renderComments(s.comments, commentsCap) : '';
-  const files = renderFiles(s.files, filesCap);
+  const files = renderFiles(s.files, filesCap, layout.includeFileStats);
 
-  parts.push(description, commits, comments, files);
+  parts.push(generatedSummary, description, commits, comments, files);
 
   // Diff is rendered last and absorbs the remaining budget. The diff wrapper
   // (`## Diff\n\n```diff\n…\n````) adds fixed markdown overhead the cap must
@@ -78,12 +83,23 @@ export function buildContextBlock({ slices, command, budgetBytes = 200000, meta 
  */
 const LAYOUTS = {
   review: {
+    summaryCap: 6000,
     includeCommits: true,
     includeComments: true,
     descriptionCap: 4000,
     commitsCap: 6000,
     commentsCap: 8000,
     filesCap: 3000,
+  },
+  'pr-summary': {
+    includeCommits: true,
+    includeCommitMessages: true,
+    includeComments: true,
+    includeFileStats: true,
+    descriptionCap: 8000,
+    commitsCap: 12000,
+    commentsCap: 20000,
+    filesCap: 8000,
   },
 };
 
@@ -97,14 +113,18 @@ function renderDescription(description, cap) {
   return `## Description\n\n${truncateTo(text, cap)}`;
 }
 
-function renderCommits(commits, cap) {
+function renderCommits(commits, cap, includeMessages = false) {
   const list = Array.isArray(commits) ? commits : [];
   if (!list.length) return '';
   const lines = list.map((c) => {
     const sha = c?.sha ? `\`${String(c.sha).slice(0, 7)}\`` : '`(no-sha)`';
     const title = c?.title ? truncateTo(String(c.title).replace(/\n/g, ' '), 160) : '(no subject)';
     const author = c?.author ? ` — ${c.author}` : '';
-    return `- ${sha} ${title}${author}`;
+    const message =
+      includeMessages && c?.message && String(c.message) !== String(c.title || '')
+        ? `\n  ${truncateTo(String(c.message), 1200)}`
+        : '';
+    return `- ${sha} ${title}${author}${message}`;
   });
   const body = truncateTo(lines.join('\n'), cap);
   return `## Commits (${list.length})\n\n${body}`;
@@ -146,13 +166,62 @@ function formatReviewComment(c) {
   return `${user}${loc}: ${body}`;
 }
 
-function renderFiles(files, cap) {
+function renderFiles(files, cap, includeStats = false) {
   const list = Array.isArray(files) ? files : [];
   if (!list.length) return '';
-  const names = list.map((f) => f?.filename).filter(Boolean);
-  if (!names.length) return '';
-  const body = truncateTo(names.map((n) => `- ${n}`).join('\n'), cap);
-  return `## Changed files (${names.length})\n\n${body}`;
+  const entries = list
+    .filter((f) => f?.filename)
+    .map((f) => {
+      if (!includeStats) return `- ${f.filename}`;
+      return (
+        `- ${f.filename} (${f.status || 'changed'}, ` +
+        `+${Number(f.additions) || 0}/-${Number(f.deletions) || 0})`
+      );
+    });
+  if (!entries.length) return '';
+  const body = truncateTo(entries.join('\n'), cap);
+  return `## Changed files (${entries.length})\n\n${body}`;
+}
+
+function renderPrSummary(summary, cap) {
+  if (!summary || cap <= 0) return '';
+  const value = summary.summary || summary;
+  if (!value || typeof value !== 'object') return '';
+
+  const lines = [];
+  if (value.prSummary) lines.push(`**Summary:** ${String(value.prSummary)}`);
+  if (Array.isArray(value.keyChanges) && value.keyChanges.length) {
+    lines.push(
+      '**Key changes:**\n' +
+        value.keyChanges
+          .filter((change) => change?.file && change?.change)
+          .map((change) => `- \`${change.file}\`: ${change.change}`)
+          .join('\n'),
+    );
+  }
+  const conversation = value.conversationSummary;
+  if (conversation) {
+    lines.push(
+      `**Conversation:** ${conversation.mainTopic || 'No meaningful discussion recorded.'}`,
+    );
+    if (
+      Array.isArray(conversation.unresolvedQuestions) &&
+      conversation.unresolvedQuestions.length
+    ) {
+      lines.push(
+        '**Unresolved questions:**\n' +
+          conversation.unresolvedQuestions.map((question) => `- ${question}`).join('\n'),
+      );
+    }
+  }
+  const risk = value.riskAssessment;
+  if (risk) {
+    lines.push(
+      `**Risk:** security=${risk.security || 'unknown'}, breaking=${risk.breaking || 'unknown'}`,
+    );
+  }
+  if (!lines.length) return '';
+  return `## Generated PR summary\n\n${truncateTo(lines.join('\n\n'), cap)}`;
 }
 
 function renderDiff(diff, cap) {

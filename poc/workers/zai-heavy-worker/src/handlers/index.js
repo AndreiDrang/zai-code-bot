@@ -5,6 +5,7 @@
 import { handleDescribeCommand } from './describe.js';
 import { handleReviewCommand } from './review.js';
 import { handlePrContextJob } from './pr-context.js';
+import { handlePrSummaryJob } from './pr-summary.js';
 
 /**
  * @param {string} commandType
@@ -18,6 +19,8 @@ export function getHeavyHandler(commandType) {
       return handleReviewCommand;
     case 'pr_context':
       return handlePrContextJob;
+    case 'pr_summary':
+      return handlePrSummaryJob;
     default:
       return null;
   }

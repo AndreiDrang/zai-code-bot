@@ -24,6 +24,7 @@ import { resolveSecretValue } from './secrets.js';
 import {
   readContextManifest,
   readContextSlice,
+  readPrSummary,
   renderContextSummary,
 } from './pr-context-reader.js';
 import { getRepositoryConfig } from './storage/config.js';
@@ -87,6 +88,9 @@ export async function runLlmCommand(
   const config = await getRepositoryConfig(db, env?.BOT_CACHE, repoId);
   const maxBytes = Number(config?.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
   const manifest = await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber);
+  const storedSummary = await readPrSummary(env?.BOT_ARTIFACTS, repoId, prNumber);
+  const prSummary =
+    manifest?.headSha && storedSummary?.headSha === manifest.headSha ? storedSummary.summary : null;
 
   // --- Load all 5 gathered slices (per-PR latest); live fallback for diff. ---
   let diff = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'diff');
@@ -134,7 +138,13 @@ export async function runLlmCommand(
 
   // --- Build prompt + call Z.ai. ---
   const model = env?.ZAI_MODEL || 'glm-5.2';
-  const userContent = buildUserPrompt({ slices, meta: { title, author }, manifest, maxBytes });
+  const userContent = buildUserPrompt({
+    slices,
+    meta: { title, author },
+    manifest,
+    prSummary,
+    maxBytes,
+  });
   const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userContent },

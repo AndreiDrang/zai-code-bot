@@ -2,6 +2,8 @@ import { prContextKey, prCardKey } from '../../../shared/storage/keys.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
 import { createLogger } from '../../../shared/logging.js';
 import { projectComments } from '../../../shared/pr-comments.js';
+import { createPrSummaryJob } from '../../../shared/storage/deliveries.js';
+import { publishOutboxJob } from '../../../shared/storage/jobs.js';
 
 /**
  * Eager PR-context gather job.
@@ -12,9 +14,9 @@ import { projectComments } from '../../../shared/pr-comments.js';
  * reused by the review and describe handlers (no re-fetch); the KV card lets
  * command handlers read the PR's shape without calling getPullRequest.
  *
- * No LLM, no comment. Idempotent per PR head: the per-PR manifest is read and a
- * gather for the SAME headSha short-circuits a redelivery; a newer head
- * overwrites the snapshot in place.
+ * After the source context is committed, this schedules a separate `pr_summary`
+ * job. The summary job owns the LLM call and is published through the shared D1
+ * outbox, so this gather remains retryable and does not call the provider.
  */
 
 const PR_CARD_TTL_SECONDS = 30 * 24 * 60 * 60; // 30d — matches the R2 context lifecycle
@@ -32,19 +34,15 @@ export async function handlePrContextJob({ github, env, db, job }) {
   // and skip only if it describes THIS SAME head (a redelivery). A different
   // head means a newer commit landed → overwrite the snapshot. `get` (not
   // `head`) because we need the headSha stamp inside the manifest.
-  let existingHead = null;
-  if (bucket?.get) {
-    const existing = await bucket.get(manifestKey).catch(() => null);
-    if (existing) {
-      try {
-        existingHead = (JSON.parse(await existing.text()) || {}).headSha ?? null;
-      } catch {
-        /* corrupt manifest → re-gather */
-      }
-    }
-  }
+  const existingHead = await readManifestHead(bucket, manifestKey);
   if (existingHead && existingHead === headSha) {
-    return { status: 'skipped', action: 'pr_context', reason: 'same_head_manifest_exists' };
+    const summaryJob = await ensureSummaryJob(db, bucket, job, env, logger);
+    return {
+      status: 'skipped',
+      action: 'pr_context',
+      reason: 'same_head_manifest_exists',
+      summaryJobId: summaryJob?.job?.job_id || null,
+    };
   }
 
   const config = await getRepositoryConfig(db, cache, repoId);
@@ -64,6 +62,18 @@ export async function handlePrContextJob({ github, env, db, job }) {
       .getPrComments(owner, name, prNumber, { maxComments: 100 })
       .catch(() => ({ issue: [], review: [] })),
   ]);
+
+  // A delayed delivery can finish after a newer synchronize event. Do not
+  // write a snapshot for an old webhook head when GitHub already tells us
+  // about the newer one.
+  if (pullRequest?.head?.sha && pullRequest.head.sha !== headSha) {
+    return {
+      status: 'stale',
+      action: 'pr_context',
+      headSha,
+      currentHeadSha: pullRequest.head.sha,
+    };
+  }
 
   // Compact projections — store what consumers need, not raw API blobs. The
   // raw page is kept separately so the diff can be reconstructed from the
@@ -123,6 +133,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
       repositoryId: repoId,
       prNumber,
       headSha,
+      baseSha: pullRequest?.base?.sha ?? job.base_sha ?? null,
       title: pullRequest?.title ?? job.title ?? null,
       authorLogin: pullRequest?.user?.login ?? job.author_login ?? null,
       gatheredAt,
@@ -165,6 +176,8 @@ export async function handlePrContextJob({ github, env, db, job }) {
       });
   }
 
+  const summaryJob = await ensureSummaryJob(db, bucket, job, env, logger);
+
   logger.info('Gathered PR context', {
     repo: job.repository_full_name,
     pr: prNumber,
@@ -181,7 +194,38 @@ export async function handlePrContextJob({ github, env, db, job }) {
       commits: commitsPayload.length,
       comments: commentsPayload.issue.length + commentsPayload.review.length,
     },
+    summaryJobId: summaryJob?.job?.job_id || null,
   };
+}
+
+async function ensureSummaryJob(db, bucket, job, env, logger) {
+  // A local/unit gather without D1 or R2 is still useful for the source
+  // collection tests, but cannot produce a durable LLM job.
+  if (!bucket?.put || !db?.prepare) return null;
+  const summaryJob = await createPrSummaryJob(db, job);
+  if (summaryJob.created && env?.BOT_JOBS?.send) {
+    try {
+      await publishOutboxJob(env, db, summaryJob.job.job_id);
+    } catch (error) {
+      // The outbox remains unpublished and the main-worker cron will replay it.
+      logger.warn('PR summary enqueue deferred to outbox replay', {
+        jobId: summaryJob.job.job_id,
+        message: error?.message,
+      });
+    }
+  }
+  return summaryJob;
+}
+
+async function readManifestHead(bucket, manifestKey) {
+  if (!bucket?.get) return null;
+  const object = await bucket.get(manifestKey).catch(() => null);
+  if (!object) return null;
+  try {
+    return (JSON.parse(await object.text()) || {}).headSha ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function aggregateFiles(files) {

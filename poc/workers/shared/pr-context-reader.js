@@ -1,4 +1,4 @@
-import { prCardKey, prContextKey, prCommandResultKey } from './storage/keys.js';
+import { prCardKey, prContextKey, prCommandResultKey, prSummaryKey } from './storage/keys.js';
 
 /**
  * Read-helpers for the PR-context tier, shared by the review and describe
@@ -74,6 +74,23 @@ export async function readCommandResult(bucket, repositoryId, prNumber, command)
     const object = await bucket.get(prCommandResultKey(repositoryId, prNumber, command));
     if (!object) return null;
     return await object.text();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads the latest generated structured PR summary. The caller is responsible
+ * for comparing `headSha` with the current context manifest before using it.
+ * @returns {Promise<Object|null>}
+ */
+export async function readPrSummary(bucket, repositoryId, prNumber) {
+  if (!bucket?.get || repositoryId == null || prNumber == null) return null;
+  try {
+    const object = await bucket.get(prSummaryKey(repositoryId, prNumber));
+    if (!object) return null;
+    const value = JSON.parse(await object.text());
+    return value?.schemaVersion === 1 && value?.summary ? value : null;
   } catch {
     return null;
   }

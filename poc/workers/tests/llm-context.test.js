@@ -49,6 +49,39 @@ describe('buildContextBlock (review layout)', () => {
     expect(block).toContain('+hello');
   });
 
+  it('includes a generated summary in review context when it matches the current snapshot', () => {
+    const block = buildContextBlock({
+      slices,
+      command: 'review',
+      summary: {
+        prSummary: 'Adds greeting support.',
+        keyChanges: [{ file: 'src/greet.js', change: 'Adds greeting logic.' }],
+        conversationSummary: {
+          mainTopic: 'API shape',
+          unresolvedQuestions: ['Should this be cached?'],
+          resolvedQuestions: 2,
+        },
+        riskAssessment: { security: 'low', breaking: 'none' },
+      },
+    });
+    expect(block).toContain('## Generated PR summary');
+    expect(block).toContain('Adds greeting support.');
+    expect(block).toContain('Should this be cached?');
+    expect(block).toContain('security=low');
+  });
+
+  it('renders full commit messages and file statistics for the summary layout', () => {
+    const block = buildContextBlock({
+      command: 'pr-summary',
+      slices: {
+        commits: [{ sha: 'abc', title: 'Add X', message: 'Add X\n\nWhy this exists', author: 'A' }],
+        files: [{ filename: 'src/x.js', status: 'added', additions: 4, deletions: 1 }],
+      },
+    });
+    expect(block).toContain('Why this exists');
+    expect(block).toContain('src/x.js (added, +4/-1)');
+  });
+
   it('never throws on missing/empty slices — yields a diff-only block', () => {
     const block = buildContextBlock({
       slices: { diff: 'only diff' },

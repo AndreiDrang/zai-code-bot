@@ -50,8 +50,14 @@ export async function handleReviewCommand(ctx) {
  * primary) followed by the response-format instructions. The runner calls this
  * with the freshly loaded slices + meta.
  */
-function buildReviewUserPrompt({ slices, meta, maxBytes }) {
-  const context = buildContextBlock({ slices, command: 'review', budgetBytes: maxBytes, meta });
+function buildReviewUserPrompt({ slices, meta, prSummary, maxBytes }) {
+  const context = buildContextBlock({
+    slices,
+    command: 'review',
+    budgetBytes: maxBytes,
+    meta,
+    summary: prSummary,
+  });
   return [
     'Review the following pull request.',
     '',

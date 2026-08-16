@@ -1,4 +1,4 @@
-# zai-heavy-worker — consumes durable review and describe jobs.
+# zai-heavy-worker — consumes durable review, describe, and PR-context jobs.
 name = "zai-heavy-worker"
 main = "src/index.js"
 compatibility_date = "2026-08-05"
@@ -23,6 +23,10 @@ database_id = "2f6c5cd9-ec01-44ad-8ea8-fb1bb5523226"
 [[r2_buckets]]
 binding = "BOT_ARTIFACTS"
 bucket_name = "bot-storage"
+
+[[queues.producers]]
+binding = "BOT_JOBS"
+queue = "bot-jobs"
 
 # R2 lifecycle for the PR-context tier: objects under `v1/prs/` (the gather
 # output) expire after R2_RETENTION_DAYS (30). This is a BUCKET-level rule —

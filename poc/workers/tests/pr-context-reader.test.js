@@ -3,9 +3,15 @@ import {
   readPrCard,
   readContextManifest,
   readCommandResult,
+  readPrSummary,
   renderContextSummary,
 } from '../shared/pr-context-reader.js';
-import { prCardKey, prContextKey, prCommandResultKey } from '../shared/storage/keys.js';
+import {
+  prCardKey,
+  prContextKey,
+  prCommandResultKey,
+  prSummaryKey,
+} from '../shared/storage/keys.js';
 
 describe('readPrCard — KV pr-card', () => {
   it('returns the parsed card on a hit', async () => {
@@ -70,6 +76,45 @@ describe('readCommandResult — R2 latest command output', () => {
     await expect(readCommandResult(null, 10, 7, 'review')).resolves.toBeNull();
     await expect(readCommandResult({ get: vi.fn() }, 10, null, 'review')).resolves.toBeNull();
     await expect(readCommandResult({ get: vi.fn() }, 10, 7, null)).resolves.toBeNull();
+  });
+});
+
+describe('readPrSummary — structured PR context', () => {
+  it('returns a schema-versioned summary on a hit', async () => {
+    const value = {
+      schemaVersion: 1,
+      headSha: 'abc',
+      summary: { prSummary: 'Adds X' },
+    };
+    const bucket = {
+      get: vi.fn().mockResolvedValue({ text: () => Promise.resolve(JSON.stringify(value)) }),
+    };
+    await expect(readPrSummary(bucket, 10, 7)).resolves.toEqual(value);
+    expect(bucket.get).toHaveBeenCalledWith(prSummaryKey(10, 7));
+  });
+
+  it('returns null for missing, malformed, or unsupported summaries', async () => {
+    await expect(
+      readPrSummary({ get: vi.fn().mockResolvedValue(null) }, 10, 7),
+    ).resolves.toBeNull();
+    await expect(
+      readPrSummary(
+        { get: vi.fn().mockResolvedValue({ text: () => Promise.resolve('not-json') }) },
+        10,
+        7,
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      readPrSummary(
+        {
+          get: vi.fn().mockResolvedValue({
+            text: () => Promise.resolve(JSON.stringify({ schemaVersion: 2, summary: {} })),
+          }),
+        },
+        10,
+        7,
+      ),
+    ).resolves.toBeNull();
   });
 });
 

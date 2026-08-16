@@ -4,7 +4,8 @@
 
 export const STORAGE_SCHEMA_VERSION = 1;
 export const PR_CONTEXT_JOB_KIND = 'pr_context';
-export const SUPPORTED_JOB_KINDS = [PR_CONTEXT_JOB_KIND, 'review', 'describe'];
+export const PR_SUMMARY_JOB_KIND = 'pr_summary';
+export const SUPPORTED_JOB_KINDS = [PR_CONTEXT_JOB_KIND, PR_SUMMARY_JOB_KIND, 'review', 'describe'];
 
 /**
  * R2 context kinds gathered per PR. Each maps to a deterministic object under
@@ -91,4 +92,13 @@ export function prContextKey(repositoryId, prNumber, kind) {
  */
 export function prCommandResultKey(repositoryId, prNumber, command) {
   return `v${STORAGE_SCHEMA_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/${component(command, 'command')}.md`;
+}
+
+/**
+ * R2 key for the generated, structured PR context used as auxiliary input by
+ * future LLM commands. It is keyed per PR and overwritten only when a newer
+ * manifest/headSha has been summarized.
+ */
+export function prSummaryKey(repositoryId, prNumber) {
+  return `v${STORAGE_SCHEMA_VERSION}/prs/${component(repositoryId, 'repository id')}/${component(prNumber, 'pr number')}/context/pr-summary.json`;
 }

@@ -276,6 +276,17 @@ export async function markOutboxPublished(db, jobId, now = new Date().toISOStrin
   );
 }
 
+/**
+ * Publishes a job directly when a worker has a producer binding. The D1 outbox
+ * remains the recovery path for crashes or queue errors.
+ */
+export async function publishOutboxJob(env, db, jobId, now = new Date().toISOString()) {
+  if (!env?.BOT_JOBS?.send) return false;
+  await env.BOT_JOBS.send(queueMessage(jobId));
+  await markOutboxPublished(db, jobId, now);
+  return true;
+}
+
 export async function recordOutboxFailure(db, jobId, errorCode, delaySeconds, now = new Date()) {
   const timestamp = now.toISOString();
   const nextAttemptAt = new Date(now.getTime() + delaySeconds * 1000).toISOString();
