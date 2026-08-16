@@ -3,5 +3,4 @@
 # Keys are the `binding` names (= env vars the code reads); in production these
 # are injected from the Cloudflare Secrets Store (store 629e5dd...).
 GITHUB_TOKEN=ghp_local_replace_me
-ZAI_INTERNAL_TOKEN=local-internal-token
 ZAI_API_KEY=local-zai-key

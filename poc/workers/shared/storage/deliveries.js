@@ -1,4 +1,4 @@
-import { PR_PREVIEW_JOB_KIND, PR_CONTEXT_JOB_KIND, STORAGE_SCHEMA_VERSION } from './keys.js';
+import { PR_CONTEXT_JOB_KIND, STORAGE_SCHEMA_VERSION } from './keys.js';
 import { batch, first, prepare } from './database.js';
 
 const JOB_BASE = `
@@ -147,20 +147,12 @@ async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().t
 }
 
 /**
- * Records a pull_request delivery and creates its metadata-only preview job.
- * Owns the delivery row (the context job created alongside reuses it).
- */
-export function createPrPreviewJob(db, event, now) {
-  return createPrJob(db, event, PR_PREVIEW_JOB_KIND, { ownsDelivery: true }, now);
-}
-
-/**
  * Records (or returns the existing) eager PR-context gather job for a delivery.
- * Reuses the delivery + PR rows already written by the preview job; idempotent
- * on (delivery_id, 'pr_context'). Only created for headSha-producing actions.
+ * Owns the delivery row and is idempotent on (delivery_id, 'pr_context').
+ * Only created for headSha-producing actions.
  */
 export function createPrContextJob(db, event, now) {
-  return createPrJob(db, event, PR_CONTEXT_JOB_KIND, { ownsDelivery: false }, now);
+  return createPrJob(db, event, PR_CONTEXT_JOB_KIND, { ownsDelivery: true }, now);
 }
 
 /**

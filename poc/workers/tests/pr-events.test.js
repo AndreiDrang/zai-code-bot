@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-// Pure unit tests for the PR-preview event gate. These run the REAL predicate
-// (no mocks) so the edited/title gate is actually exercised — the bug was that
-// `edited` was absent from the whitelist, so a title change never became a job.
+// Pure unit tests for the PR-context event gate.
 
 import {
-  SUPPORTED_PR_ACTIONS,
   isSupportedPullRequestEvent,
   isPrDescriptionEditEvent,
   planDescriptionRefresh,
@@ -13,44 +10,15 @@ import {
 } from '../zai-main-worker/src/pr-events.js';
 
 describe('isSupportedPullRequestEvent', () => {
-  it('whitelists edited and closed', () => {
-    expect(SUPPORTED_PR_ACTIONS).toContain('edited');
-    expect(SUPPORTED_PR_ACTIONS).toContain('closed');
-  });
-
-  it('accepts the always-supported actions without a payload', () => {
-    for (const action of ['opened', 'reopened', 'synchronize', 'ready_for_review', 'closed']) {
+  it('accepts head-producing actions', () => {
+    for (const action of ['opened', 'reopened', 'synchronize', 'ready_for_review']) {
       expect(isSupportedPullRequestEvent('pull_request', action)).toBe(true);
     }
   });
 
-  it('accepts an edited event only when the title changed', () => {
-    expect(
-      isSupportedPullRequestEvent('pull_request', 'edited', {
-        changes: { title: { from: 'Cloudflare migration' } },
-      }),
-    ).toBe(true);
-  });
-
-  it('rejects an edited event when only the body changed (no wasteful re-render)', () => {
-    expect(
-      isSupportedPullRequestEvent('pull_request', 'edited', {
-        changes: { body: { from: 'old body' } },
-      }),
-    ).toBe(false);
-  });
-
-  it('rejects an edited event when only the base branch changed', () => {
-    expect(
-      isSupportedPullRequestEvent('pull_request', 'edited', {
-        changes: { base: { ref: { from: 'main' } } },
-      }),
-    ).toBe(false);
-  });
-
-  it('rejects an edited event with no changes block (defensive)', () => {
-    expect(isSupportedPullRequestEvent('pull_request', 'edited', {})).toBe(false);
+  it('rejects events that do not produce new review context', () => {
     expect(isSupportedPullRequestEvent('pull_request', 'edited')).toBe(false);
+    expect(isSupportedPullRequestEvent('pull_request', 'closed')).toBe(false);
   });
 
   it('rejects unsupported actions', () => {
@@ -167,33 +135,4 @@ describe('extractPullRequestEvent', () => {
     expect(extractPullRequestEvent(basePayload(), '')).toBeNull();
   });
 
-  it('extracts state=closed and closedBy=sender from a closed event', () => {
-    const closedPayload = {
-      ...basePayload(),
-      action: 'closed',
-      pull_request: { ...basePayload().pull_request, state: 'closed' },
-      sender: { login: 'AndreiDrang' },
-    };
-    const event = extractPullRequestEvent(closedPayload, 'delivery-43-closed', 'closed');
-    expect(event.state).toBe('closed');
-    expect(event.closedBy).toBe('AndreiDrang');
-    expect(event.authorLogin).toBe('AndreiDrang');
-    expect(event.action).toBe('closed');
-  });
-
-  it('does not populate closedBy for non-close actions', () => {
-    // opened/synchronize carry a sender too, but only `closed` sets closedBy.
-    const opened = extractPullRequestEvent(
-      { ...basePayload(), action: 'opened', sender: { login: 'someone' } },
-      'delivery-1',
-      'opened',
-    );
-    expect(opened.closedBy).toBeNull();
-    const sync = extractPullRequestEvent(
-      { ...basePayload(), action: 'synchronize', sender: { login: 'someone' } },
-      'delivery-2',
-      'synchronize',
-    );
-    expect(sync.closedBy).toBeNull();
-  });
 });

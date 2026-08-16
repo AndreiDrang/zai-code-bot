@@ -60,10 +60,8 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 );
 
 -- ---------------------------------------------------------------------- jobs
--- A webhook delivery may spawn more than one job (pr_preview + pr_context for
--- the same head); the composite UNIQUE(delivery_id, kind) keeps the same
--- (delivery, kind) pair race-safe. lease_expires_at/last_failure_at bound worker
--- leases.
+-- The initial schema allowed preview and impact jobs. Migration 0002 narrows
+-- this constraint to the current review/describe command surface.
 CREATE TABLE IF NOT EXISTS jobs (
   job_id TEXT PRIMARY KEY,
   delivery_id TEXT NOT NULL REFERENCES webhook_deliveries(delivery_id),

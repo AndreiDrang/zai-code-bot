@@ -4,7 +4,6 @@ import {
   readContextManifest,
   readCommandResult,
   renderContextSummary,
-  renderPrCardShape,
 } from '../shared/pr-context-reader.js';
 import { prCardKey, prContextKey, prCommandResultKey } from '../shared/storage/keys.js';
 
@@ -92,20 +91,4 @@ describe('renderers', () => {
     expect(renderContextSummary(null)).toBe('');
   });
 
-  it('renderPrCardShape renders a one-line identity', () => {
-    expect(
-      renderPrCardShape({
-        prNumber: 7,
-        authorLogin: 'author',
-        headSha: 'abc',
-        changedFiles: 3,
-        additions: 9,
-        deletions: 1,
-      }),
-    ).toBe('PR context: #7 by @author at `abc` — 3 files (+9/−1).');
-  });
-
-  it('renderPrCardShape is empty without a card', () => {
-    expect(renderPrCardShape(null)).toBe('');
-  });
 });

@@ -9,7 +9,7 @@ import { projectComments } from '../../../shared/pr-comments.js';
  * Writes the PR's TASK CONTEXT to R2 under per-PR keys
  * (`v1/prs/{repo}/{pr}/context/{kind}` — keyed per PR, not per head) and a
  * small PR "card" to KV (`v1:pr-card:{repo}:{pr}`). R2 context is the blob tier
- * reused by the heavy review/impact handlers (no re-fetch); the KV card lets
+ * reused by the review and describe handlers (no re-fetch); the KV card lets
  * command handlers read the PR's shape without calling getPullRequest.
  *
  * No LLM, no comment. Idempotent per PR head: the per-PR manifest is read and a

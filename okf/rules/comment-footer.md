@@ -5,7 +5,7 @@ description: Every bot comment ends with the identical shared BOT_FOOTER attribu
 source_paths:
   - poc/workers/shared/constants.js
   - poc/workers/shared/commands.js
-  - poc/workers/shared/pr-preview.js
+  - poc/workers/shared/comments.js
 confidence: observed
 status: current
 tags:
@@ -16,9 +16,8 @@ tags:
 
 # Unified bot comment footer
 
-Every comment the bot posts ends with the same attribution, so a PR thread has
-consistent, unmistakable branding regardless of which path produced the
-message — preview, `/zai` command reply, help text, stub notice, or error.
+Every command comment the bot posts ends with the same attribution, so review
+and describe results have consistent branding.
 
 # Footer text
 
@@ -34,18 +33,13 @@ Rendered in Markdown it reads: **Powered by AndreiDrang, Z.ai and Cloudflare Wor
 
 - There is exactly one source of truth: the `BOT_FOOTER` constant. Message
   producers interpolate it; none hard-code the attribution string.
-- The footer precedes the message's hidden marker (e.g.
-  `<!-- zai-pr-preview -->`), so the marker stays the last parseable token.
-- All message paths apply it: the PR preview (`renderPrPreview`), command
-  replies and help (`formatHelp`, `formatCommandNotAvailable`), the heavy stub
-  notices (`ask`/`explain`/`describe`/`review`/`impact`), and the error
-  comments in both workers (the `help` error, the unauthorized-command notice,
-  and the heavy-command failure comment).
+- The footer precedes the message's hidden marker, so the marker stays the last
+  parseable token.
+- Review and describe status/result comments apply it.
 
 # Relationships
 
-- The [Durable PR-preview pipeline](/workflows/pr-preview-pipeline.md) and the
-  [one-live-comment publication](/state/comment-publication.md) both emit
+- The [one-live-comment publication](/state/comment-publication.md) emits
   footer-terminated bodies.
 - The hidden markers that the footer precedes are documented under
   [comment publication](/state/comment-publication.md).

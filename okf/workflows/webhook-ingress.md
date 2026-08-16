@@ -42,7 +42,7 @@ to a plain string before HMAC prevents the secret from stringifying to
 Once past the gates, the handler forks by event type:
 
 - **Pull request events** (`opened`, `reopened`, `synchronize`,
-  `ready_for_review`) enter the [durable PR-preview pipeline](/workflows/pr-preview-pipeline.md)
+  `ready_for_review`) enter the [PR-context pipeline](/workflows/pr-context-pipeline.md)
   — they never reach the command parser. Main returns `202 Accepted`.
 - **Command comments** are classified by [command routing](/workflows/command-routing.md)
   into light (inline) or heavy (delegated).

@@ -5,8 +5,8 @@
  *
  * Pattern adapted from tb-news-ai-analyzer/scripts/generate-prompt.mjs.
  *
- * The generated files are COMMITTED (like dist/index.js in the parent GitHub
- * Action) so `wrangler deploy` works without a prebuild step. Re-run this
+ * The generated files are committed so `wrangler deploy` works without a
+ * prebuild step. Re-run this
  * script whenever a `.txt` prompt changes:
  *
  *     npm run generate:prompts

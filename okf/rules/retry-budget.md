@@ -58,5 +58,5 @@ when the database is unavailable.
 
 - Drives the [job lifecycle](/state/job-lifecycle.md) state machine.
 - Enforced in the heavy worker's queue consumer
-  ([PR-preview pipeline](/workflows/pr-preview-pipeline.md)).
+  ([PR-context pipeline](/workflows/pr-context-pipeline.md)).
 - No DLQ by design — see the [storage authority model](/architecture/storage-authority-model.md).

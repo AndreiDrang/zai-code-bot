@@ -8,7 +8,7 @@ import {
   run,
   safeErrorCode,
 } from '../shared/storage/database.js';
-import { createPrPreviewJob, createPrContextJob, getJob } from '../shared/storage/deliveries.js';
+import { createPrContextJob, getJob } from '../shared/storage/deliveries.js';
 import { getRepositoryConfig, saveRepositoryConfig } from '../shared/storage/config.js';
 import {
   claimJob,
@@ -27,7 +27,7 @@ import { claimPublication, upsertComment } from '../shared/comments.js';
 const job = {
   job_id: 'job-1',
   delivery_id: 'delivery-1',
-  kind: 'pr_preview',
+  kind: 'review',
   repository_id: 10,
   pr_number: 7,
   head_sha: 'abc',
@@ -90,7 +90,7 @@ describe('D1 storage adapters', () => {
   it('returns an existing delivery without creating a second transaction', async () => {
     const db = fakeDb();
     await expect(
-      createPrPreviewJob(db, {
+      createPrContextJob(db, {
         deliveryId: 'delivery-1',
         repositoryId: 10,
         repository: { owner: 'o', name: 'r', fullName: 'o/r' },
@@ -102,7 +102,7 @@ describe('D1 storage adapters', () => {
   });
 
   it('rejects incomplete delivery input', async () => {
-    await expect(createPrPreviewJob(fakeDb(), { deliveryId: 'only-id' })).rejects.toThrow(
+    await expect(createPrContextJob(fakeDb(), { deliveryId: 'only-id' })).rejects.toThrow(
       'Missing PR event field',
     );
   });
@@ -126,7 +126,7 @@ describe('D1 storage adapters', () => {
         return statement;
       },
     });
-    const result = await createPrPreviewJob(db, {
+    const result = await createPrContextJob(db, {
       deliveryId: 'delivery-1',
       action: 'opened',
       repositoryId: 10,
@@ -147,7 +147,7 @@ describe('D1 storage adapters', () => {
     await expect(getJob(fakeDb(), 'job-1')).resolves.toBe(job);
   });
 
-  it('creates a pr_context job reusing the delivery row', async () => {
+  it('creates a pr_context job with its delivery row', async () => {
     const db = fakeDb({ firstValue: null });
     let selectCount = 0;
     const contextJob = { ...job, kind: 'pr_context' };
@@ -222,13 +222,10 @@ describe('D1 storage adapters', () => {
   });
 
   it('lists expired running jobs in a bounded batch', async () => {
-    const db = fakeDb({ allValue: [{ job_id: 'job-1', attempt_count: 2, kind: 'pr_preview' }] });
-    await expect(listExpiredRunningJobs(db, 10, '2026-01-01T00:00:00.000Z')).resolves.toEqual([
-      { job_id: 'job-1', attempt_count: 2, kind: 'pr_preview' },
-    ]);
-  });
-
-  it('uses defaults when no repository configuration exists', async () => {
+    const db = fakeDb({     const db = fakeDb({ allValue: [{ job_id: 'job-1', attempt_count: 2, kind: 'review' }] });
+iredRunningJobs(db, 10, '2026-01-01T00:00:00.000Z')).resolves.toEqual([
+      { job_id: 'job-1',      { job_id: 'job-1', attempt_count: 2, kind: 'review' },
+s defaults when no repository configuration exists', async () => {
     const cache = { put: vi.fn().mockRejectedValue(new Error('cache down')) };
     await expect(
       getRepositoryConfig(fakeDb({ firstValue: null }), cache, 10),
@@ -276,8 +273,8 @@ describe('marker-scoped comment persistence', () => {
         first: vi.fn().mockResolvedValue({
           repository_id: 10,
           pr_number: 7,
-          comment_kind: 'pr_preview',
-          github_comment_id: null,
+          comment_kind:           comment_kind: 'review',
+_id: null,
           status: 'publishing',
         }),
       }),
@@ -286,8 +283,8 @@ describe('marker-scoped comment persistence', () => {
       claimPublication(db, {
         repositoryId: 10,
         prNumber: 7,
-        commentKind: 'pr_preview',
-        marker: '<!-- marker -->',
+        commentKind: 'pr        commentKind: 'review',
+rker -->',
         jobId: 'job-1',
       }),
     ).resolves.toMatchObject({ status: 'publishing' });
@@ -295,8 +292,8 @@ describe('marker-scoped comment persistence', () => {
       claimPublication(db, {
         repositoryId: 10,
         prNumber: 7,
-        commentKind: 'pr_preview',
-        marker: '<!-- marker -->',
+        commentKind: 'pr        commentKind: 'review',
+rker -->',
         jobId: 'job-2',
       }),
     ).resolves.toBeNull();
@@ -318,8 +315,8 @@ describe('marker-scoped comment persistence', () => {
         issueNumber: 7,
         repositoryId: 10,
         headSha: 'abc',
-        commentKind: 'pr_preview',
-        marker: '<!-- marker -->',
+        commentKind: 'pr        commentKind: 'review',
+rker -->',
         body: 'body',
         jobId: 'job-1',
       }),
@@ -346,8 +343,8 @@ describe('marker-scoped comment persistence', () => {
         issueNumber: 7,
         repositoryId: 10,
         headSha: 'abc',
-        commentKind: 'pr_preview',
-        marker: '<!-- marker -->',
+        commentKind: 'pr        commentKind: 'review',
+rker -->',
         body: 'body',
         jobId: 'job-1',
       }),

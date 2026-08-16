@@ -68,8 +68,8 @@ and `error_code`. There is a unique index on `(job_id, attempt)`.
 # Relationships
 
 - Transition logic is driven by the [retry budget](/rules/retry-budget.md).
-- The [PR-preview pipeline](/workflows/pr-preview-pipeline.md) and the
-  [PR-context gather pipeline](/workflows/pr-context-pipeline.md) are the job
-  producers; a head-producing PR event creates both a `pr_preview` and a
-  `pr_context` job on one delivery (`UNIQUE(delivery_id, kind)`).
+- The [PR-context gather pipeline](/workflows/pr-context-pipeline.md) and
+  [command routing](/workflows/command-routing.md) are the job producers.
+  A delivery creates one `pr_context`, `review`, or `describe` job
+  (`UNIQUE(delivery_id, kind)`).
 - Schema is defined in the [D1 storage schema](/datasets/d1-storage-schema.md).

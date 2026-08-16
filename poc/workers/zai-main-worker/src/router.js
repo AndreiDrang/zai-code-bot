@@ -1,9 +1,8 @@
 /**
  * Command router for the main worker.
  *
- * Single source of truth for light-vs-heavy classification. The main worker
- * handles LIGHT commands inline; HEAVY commands are delegated to the heavy
- * worker. Reclassify a command by editing `ROUTE` below.
+ * Single source of truth for command classification. Both supported commands
+ * are durable LLM jobs handled by the queue consumer.
  */
 
 import { LIGHT_COMMANDS, HEAVY_COMMANDS, AVAILABLE_COMMANDS } from '../../shared/constants.js';

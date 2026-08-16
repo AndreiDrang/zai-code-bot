@@ -24,7 +24,8 @@ pattern closes this gap.
 
 # Mechanism
 
-`createPrPreviewJob()` writes three rows in a **single D1 batch**:
+`createPrContextJob()` and `createCommandJob()` write three rows in a **single
+D1 batch**:
 
 1. `webhook_deliveries` — the idempotent delivery record.
 2. `jobs` — the durable job in `queued` status.

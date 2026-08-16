@@ -2,11 +2,10 @@
  * zai-main-worker — entrypoint.
  *
  * Receives GitHub webhooks, enforces validation gates, parses the command,
- * authorizes the commenter, then either runs a LIGHT command inline or
- * delegates a HEAVY command to zai-heavy-worker via a Service Binding.
+ * authorizes the commenter, and enqueues the supported LLM command.
  *
- * GitHub webhooks time out (~10s), so heavy work is ALWAYS offloaded: the
- * main worker acks fast and never blocks on review/impact.
+ * GitHub webhooks time out (~10s), so LLM work is always offloaded: this worker
+ * acknowledges quickly and never blocks on review or describe.
  */
 
 import { GitHubClient } from '../../shared/github.js';
@@ -14,11 +13,9 @@ import { verifyWebhookSignature } from '../../shared/crypto.js';
 import { resolveSecretValue } from '../../shared/secrets.js';
 import { parseCommand, isCommand, formatCommandNotAvailable } from '../../shared/commands.js';
 import { authorizeCommenter } from '../../shared/auth.js';
-import { createLogger, logPerformance, generateCorrelationId } from '../../shared/logging.js';
+import { createLogger, generateCorrelationId } from '../../shared/logging.js';
 import { COMMENT_MARKER, BOT_FOOTER } from '../../shared/constants.js';
 import { classifyCommand } from './router.js';
-import { buildDelegationPayload, delegateToHeavy } from './delegator.js';
-import { getLightHandler } from './handlers/index.js';
 import {
   extractPullRequestEvent,
   isSupportedPullRequestEvent,
@@ -32,11 +29,7 @@ import {
   replayDueOutbox,
   sweepExpiredStorage,
 } from './job-enqueuer.js';
-import {
-  createPrPreviewJob,
-  createPrContextJob,
-  createCommandJob,
-} from '../../shared/storage/deliveries.js';
+import { createPrContextJob, createCommandJob } from '../../shared/storage/deliveries.js';
 import { refreshCommentsSlice } from '../../shared/pr-comments.js';
 import { refreshDescriptionSlice } from '../../shared/pr-description.js';
 import { isPrCommentRefreshEvent, planCommentsRefresh } from './comment-events.js';
@@ -45,8 +38,6 @@ export default {
   async fetch(request, env, ctx) {
     const logger = createLogger(env, 'zai-main-worker');
     const correlationId = generateCorrelationId();
-    const startTime = Date.now();
-
     try {
       // --- Gate 1: method ---
       if (request.method !== 'POST') {
@@ -86,7 +77,7 @@ export default {
       // --- Mirror PR conversation comments into the comments context slice ---
       // issue_comment created/edited/deleted on a PR trigger a full re-fetch of
       // the conversation (getPrComments) that overwrites comments.json, so the
-      // heavy review/impact/ask/explain handlers see fresh talk between gathers.
+      // The review handler sees fresh talk between gathers.
       // Best-effort + non-blocking: GitHub is acked immediately and the slice is
       // derivative (the next gather re-captures it from scratch). Runs for ALL
       // PR comments, command or not — a /zai command still flows through below.
@@ -101,8 +92,7 @@ export default {
       // pull_request.edited with changes.body carries the NEW body IN the
       // payload itself, so this refresh needs NO API call — it writes
       // pull_request.body straight to description.md (matching the gather's
-      // `pullRequest.body || ''`). Best-effort, non-blocking. An edit to BOTH
-      // title and body still re-renders the preview in the block below.
+      // `pullRequest.body || ''`). Best-effort and non-blocking.
       if (isPrDescriptionEditEvent(ghEvent, webhookData.action, payload, env)) {
         const plan = planDescriptionRefresh(payload);
         if (plan) {
@@ -112,9 +102,9 @@ export default {
         }
       }
 
-      // --- Durable PR event path ---
-      // PR events never enter the command parser. They are recorded in D1 and
-      // published as a small job ID so the heavy worker can retry safely.
+      // --- PR context path ---
+      // PR events never enter the command parser. Head-producing events gather
+      // context for the next review/describe command.
       if (isSupportedPullRequestEvent(webhookData.event, webhookData.action, payload)) {
         const prEvent = extractPullRequestEvent(
           payload,
@@ -125,26 +115,21 @@ export default {
           logger.error('PR storage is not configured or payload is incomplete', { correlationId });
           return new Response('Service Unavailable', { status: 503 });
         }
-        const preview = await createPrPreviewJob(env.BOT_DB, prEvent);
-        // Eager PR-context gather: only head-producing actions spawn a context
-        // job (edited/closed carry no new content). The gather is idempotent
-        // per head via the R2 manifest, so this avoids pointless job rows.
-        const context = CONTEXT_TRIGGER_ACTIONS.includes(prEvent.action)
-          ? await createPrContextJob(env.BOT_DB, prEvent)
-          : null;
+        if (!CONTEXT_TRIGGER_ACTIONS.includes(prEvent.action)) {
+          return json(200, { status: 'ignored', action: prEvent.action });
+        }
+        const context = await createPrContextJob(env.BOT_DB, prEvent);
         try {
-          await enqueueJob(env, preview.job.job_id);
-          if (context?.job) await enqueueJob(env, context.job.job_id);
+          await enqueueJob(env, context.job.job_id);
         } catch (error) {
           logger.error('PR job enqueue failed', { message: error?.message, correlationId });
           return new Response('Service Unavailable', { status: 503 });
         }
         return json(202, {
           status: 'accepted',
-          kind: 'pr_preview',
-          jobId: preview.job.job_id,
-          contextJobId: context?.job?.job_id ?? null,
-          duplicate: !preview.created,
+          kind: 'pr_context',
+          jobId: context.job.job_id,
+          duplicate: !context.created,
         });
       }
 
@@ -179,79 +164,38 @@ export default {
       const bucket = classifyCommand(parsed.type);
 
       if (bucket === 'heavy') {
-        // `review` is a durable queue job: the full {github, env, db, job, runId}
-        // context lets the handler persist a run-output artifact + record the
-        // attempt. The other heavy commands still delegate via the service
-        // binding until they get the same treatment; review on a non-PR comment
-        // (or when storage is unconfigured) also falls back to delegation.
-        if (parsed.type === 'review' && canRouteDurable(webhookData, env)) {
-          try {
-            const created = await createCommandDurableJob(
-              env,
-              github,
-              webhookData,
-              parsed.type,
-              request.headers.get('x-github-delivery'),
-            );
-            await enqueueJob(env, created.job.job_id);
-            logger.info('Enqueued durable command job', {
-              command: parsed.type,
-              repo: full_name,
-              jobId: created.job.job_id,
-              correlationId,
-            });
-            return json(202, {
-              status: 'accepted',
-              command: parsed.type,
-              jobId: created.job.job_id,
-              durable: true,
-            });
-          } catch (error) {
-            logger.error('Durable command job failed; falling back to delegation', {
-              command: parsed.type,
-              message: error?.message,
-              correlationId,
-            });
-            // Fall through to service-binding delegation as a safety net.
-          }
+        if (!canRouteDurable(webhookData, env)) {
+          return new Response('Service Unavailable', { status: 503 });
         }
-
-        // Offload to heavy worker; ack GitHub immediately.
-        delegateToHeavy(env, ctx, buildDelegationPayload(parsed, webhookData));
-        logger.info('Delegated heavy command', {
-          command: parsed.type,
-          repo: full_name,
-          correlationId,
-        });
-        return json(202, {
-          status: 'accepted',
-          command: parsed.type,
-          delegated: true,
-        });
-      }
-
-      if (bucket === 'light') {
-        const handler = getLightHandler(parsed.type);
-        if (handler) {
-          const result = await handler({
-            github,
+        try {
+          const created = await createCommandDurableJob(
             env,
-            parsed,
-            event: {
-              repository: webhookData.repository,
-              issue: webhookData.issue,
-              comment: webhookData.comment,
-            },
-          });
-          logPerformance(env, `light_${parsed.type}`, startTime, {
+            github,
+            webhookData,
+            parsed.type,
+            request.headers.get('x-github-delivery'),
+          );
+          await enqueueJob(env, created.job.job_id);
+          logger.info('Enqueued durable command job', {
+            command: parsed.type,
             repo: full_name,
+            jobId: created.job.job_id,
             correlationId,
           });
-          return json(200, result);
+          return json(202, {
+            status: 'accepted',
+            command: parsed.type,
+            jobId: created.job.job_id,
+            durable: true,
+          });
+        } catch (error) {
+          logger.error('Durable command job failed', {
+            command: parsed.type,
+            message: error?.message,
+            correlationId,
+          });
+          return new Response('Service Unavailable', { status: 503 });
         }
-        // Known light command without a handler yet → unsupported notice.
-        await postUnsupported(github, owner, name, webhookData.issue.number, parsed.type);
-        return json(200, { status: 'stub', command: parsed.type });
       }
 
       // Unsupported: valid /zai syntax but unknown command.
@@ -284,7 +228,11 @@ function extractWebhookData(payload, event) {
     action: payload.action,
     repository: payload.repository,
     pull_request: payload.pull_request,
-    issue: payload.issue,
+    issue:
+      payload.issue ||
+      (event === 'pull_request_review_comment'
+        ? { number: payload.pull_request?.number, pull_request: payload.pull_request }
+        : payload.issue),
     comment: payload.comment,
     sender: payload.sender,
     installation: payload.installation,
@@ -295,7 +243,8 @@ function getEventType(webhookData) {
   // Distinguish comment-bearing events from the payload shape. The raw
   // x-github-event header is logged separately; routing only cares whether
   // this is an issue/PR comment carrying a /zai command.
-  const { issue, pull_request } = webhookData;
+  const { event, issue, pull_request } = webhookData;
+  if (event === 'pull_request_review_comment') return 'pull_request_comment';
   if (pull_request) return 'pull_request';
   if (issue && issue.pull_request) return 'pull_request_comment';
   if (issue) return 'issue_comment';
@@ -377,7 +326,7 @@ async function postUnsupported(github, owner, name, issueNumber, commandType) {
 /**
  * Full-refresh of the PR `comments` context slice on an issue_comment event.
  * Builds a throwaway GitHubClient (this path runs before the command path
- * constructs one) and delegates to the shared refreshCommentsSlice. Errors are
+ * constructs one) and runs the shared refreshCommentsSlice. Errors are
  * swallowed by the caller's ctx.waitUntil — the slice is derivative.
  */
 async function refreshPrComments(env, plan) {

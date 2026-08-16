@@ -45,23 +45,16 @@ The features that were once layered in incrementally (formerly migrations
 - **One-live-comment publications** — `comment_publications` is keyed by
   `(repository_id, pr_number, comment_kind)` (NOT per head), with `status`,
   `lease_job_id`, `lease_expires_at` columns.
-- **Closed-by tracking** — `pull_requests.closed_by TEXT` holds the webhook
-  `sender` who closed the PR (NULL for open PRs), captured once from the
-  webhook because GitHub's PR API does not expose `closed_by`. Preserved across
-  non-close events via `COALESCE(excluded.closed_by, pull_requests.closed_by)`
-  in the `pull_requests` UPSERT.
-- **pr_context job kind** — `jobs.kind ∈ ('pr_preview', 'pr_context', 'review', 'impact')`.
+- **Job kinds** — `jobs.kind ∈ ('pr_context', 'review', 'describe')`.
 - **Composite delivery uniqueness** — `UNIQUE(delivery_id, kind)` lets one
-  webhook delivery spawn multiple job kinds (preview + context) while keeping
-  each `(delivery_id, kind)` pair race-safe. `createPrPreviewJob` owns the
-  delivery row (plain INSERT); `createPrContextJob` reuses it (INSERT OR IGNORE).
+  webhook delivery spawn a context or command job while keeping each
+  `(delivery_id, kind)` pair race-safe.
 
 # Key constraints
 
-- `UNIQUE(delivery_id, kind)` on `jobs` — a delivery may spawn multiple job
-  kinds (pr_preview + pr_context), but the same (delivery, kind) pair is unique
-  (race-safe idempotency).
-- `jobs.kind ∈ ('pr_preview', 'pr_context', 'review', 'impact')`.
+- `UNIQUE(delivery_id, kind)` on `jobs` — the same (delivery, kind) pair is
+  unique (race-safe idempotency).
+- `jobs.kind ∈ ('pr_context', 'review', 'describe')`.
 - `jobs.status ∈ ('queued', 'running', 'retryable', 'succeeded', 'failed', 'cancelled')`.
 - `artifacts.r2_key` is `UNIQUE`.
 - `comment_publications.status ∈ ('publishing', 'published')`.
@@ -84,9 +77,8 @@ documented in the migration header):
 - D1 rejects explicit `BEGIN`/`COMMIT`/`SAVEPOINT` in migration SQL (error
   `[7500]`); wrangler applies each statement in sequence.
 - D1 ignores `PRAGMA foreign_keys = OFF` — FK enforcement is always active, so
-  a table-rebuild-by-copy migration must handle child-table FK references
-  directly. The consolidated migration creates from scratch (no rebuild of a
-  populated parent), so it sidesteps this footgun entirely for fresh inits.
+  the command-surface migration rebuilds `jobs` together with its child tables
+  (`job_outbox`, `analysis_runs`, and `artifacts`).
 
 # Relationships
 

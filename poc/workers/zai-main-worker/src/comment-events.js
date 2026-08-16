@@ -2,7 +2,7 @@
  * `issue_comment` event classification for the main worker.
  *
  * PR conversation comments are mirrored into the `comments` context slice
- * (see shared/pr-comments.js) so the heavy review/impact/ask/explain handlers
+ * (see shared/pr-comments.js) so the review handler
  * see fresh conversation between gathers. This module holds the PURE predicates
  * + the refresh-plan builder so they can be unit-tested without standing up the
  * webhook fetch handler.

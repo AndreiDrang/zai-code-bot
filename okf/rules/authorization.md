@@ -1,7 +1,7 @@
 ---
 type: Business Rule
 title: Collaborator authorization
-description: Only repository collaborators may run /zai commands — stricter than the parent GitHub Actions bot, which authorizes any identifiable user.
+description: Only repository collaborators may run /zai commands.
 source_paths:
   - poc/workers/shared/auth.js
   - poc/workers/zai-main-worker/src/index.js
@@ -21,12 +21,10 @@ repository collaborator. This is gate 5 in the
 
 # Policy
 
-The POC policy is **stricter** than the parent GitHub Actions bot:
+The Workers policy requires collaborator status:
 
-| | Parent bot | POC workers |
-| --- | --- | --- |
-| Policy | Authorizes any identifiable user | Requires collaborator status |
-| Check | `checkAuthorization()` | `authorizeCommenter()` |
+| Policy | Requires collaborator status |
+| Check | `authorizeCommenter()` |
 
 The check calls GitHub's `GET /repos/{owner}/{repo}/collaborators/{username}`
 endpoint: `204` = collaborator (authorized), `404` = not (unauthorized). Other
@@ -43,9 +41,8 @@ invocation.
 # Failure behavior
 
 Unauthorized commenters receive a `403 Forbidden` response and a posted
-unauthorized comment. Note: the durable PR-preview path (triggered by
-`pull_request` webhooks) does **not** pass through this gate — it is triggered
-by PR events, not commands.
+unauthorized comment. PR context gather events do not pass through this gate;
+they are triggered by PR events, not commands.
 
 # Relationships
 

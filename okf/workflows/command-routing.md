@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Command routing
-description: classifyCommand splits /zai commands into light (inline, no LLM) or heavy (async, LLM call) based on a static allowlist.
+description: Routes the two supported LLM commands to durable Queue jobs.
 source_paths:
   - poc/workers/shared/constants.js
   - poc/workers/zai-main-worker/src/router.js
@@ -16,61 +16,28 @@ tags:
 
 # Command routing
 
-The router answers one question: does a `/zai` command run inline in the
-[webhook request](/workflows/webhook-ingress.md) or asynchronously on the
-heavy worker? The answer depends on whether the command makes an LLM API call,
-not on its category or complexity.
+The public command surface is intentionally limited to:
 
-# Classification
-
-Classification is a static array lookup — the single source of truth lives in
-`shared/constants.js` and is applied by `classifyCommand()` in `router.js`:
-
-| Bucket | Commands | Why |
+| Command | Route | Result |
 | --- | --- | --- |
-| **light** | `help` | Pure formatting, no LLM call — completes within the ~10s webhook budget |
-| **heavy** | `ask`, `explain`, `describe`, `review`, `impact` | Each makes a Z.ai LLM call — must run async on the heavy worker |
-| unsupported | anything else | Valid `/zai` syntax but unknown command |
+| `review` | durable Queue job | Full gathered PR context is sent to Z.ai and a marker-owned review comment is upserted |
+| `describe` | durable Queue job | Commit messages are sent to Z.ai and a marker-owned section of the PR body is updated |
 
-To reclassify a command, move it between the two arrays — nothing else changes.
+`LIGHT_COMMANDS` is empty. There is no inline command path and no legacy
+service-binding fallback. The main Worker validates the webhook, authorizes the
+commenter, creates a D1 job, publishes `{ schemaVersion, jobId }`, and returns
+`202`.
 
-# Why classification is by cost, not category
+Any other command remains syntactically parseable for a safe unsupported-command
+response but is not in `AVAILABLE_COMMANDS` and cannot reach a handler.
 
-`ask`, `explain`, and `describe` were initially misclassified as light because
-they produce short text. But all three call the Z.ai chat-completions API
-(`https://api.z.ai/...`), which can exceed the webhook deadline. Only `help` is
-truly light. This was corrected so the routing reflects execution cost.
+## Handler contract
 
-# Handler interfaces
+The Queue consumer calls handlers with:
 
-Light and heavy handlers use **different interfaces**, so moving a command
-between buckets requires recreating the handler, not just editing the array:
+```text
+{ github, env, db, job, runId }
+```
 
-- **Light handlers** receive `{ github, env, parsed, event }` where
-  `event.repository.owner.login` is available.
-- **Heavy handlers** receive `{ github, env, db, job, runId }` with a D1 job
-  row and the GitHub payload.
-
-# Current handler status
-
-| Command | Bucket | Status |
-| --- | --- | --- |
-| `help` | light | ✅ implemented |
-| `ask` | heavy | 🟡 stub |
-| `explain` | heavy | 🟡 stub |
-| `describe` | heavy | 🟡 stub |
-| `review` | heavy | ✅ implemented (durable LLM job) |
-| `impact` | heavy | 🟡 stub (legacy service-binding path) |
-
-`/zai review` is the first heavy command migrated onto the durable Queue + D1
-- R2 path (a real LLM job that persists its `response.json` as a run-output and
-publishes a marker-idempotent review comment). `ask`, `explain`, `describe`,
-and `impact` remain stubs on the legacy service-binding delegation; the plan is
-to route them through the same durable path as they gain LLM implementations.
-
-# Relationships
-
-- Called by [webhook ingress](/workflows/webhook-ingress.md) after the gate
-  chain.
-- The remaining heavy stubs use the legacy service-binding delegation (part of
-  the [two-worker split](/architecture/two-worker-split.md)).
+D1 owns the job lease and publication state. R2 is derivative and stores
+gathered context plus the latest command result.

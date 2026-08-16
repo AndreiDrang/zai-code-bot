@@ -3,9 +3,8 @@
  */
 
 export const STORAGE_SCHEMA_VERSION = 1;
-export const PR_PREVIEW_JOB_KIND = 'pr_preview';
 export const PR_CONTEXT_JOB_KIND = 'pr_context';
-export const SUPPORTED_JOB_KINDS = [PR_PREVIEW_JOB_KIND, PR_CONTEXT_JOB_KIND, 'review', 'impact'];
+export const SUPPORTED_JOB_KINDS = [PR_CONTEXT_JOB_KIND, 'review', 'describe'];
 
 /**
  * R2 context kinds gathered per PR. Each maps to a deterministic object under
@@ -84,7 +83,7 @@ export function prContextKey(repositoryId, prNumber, kind) {
  * stored under the same `/context/` prefix as the gathered slices but OUTSIDE
  * `PR_CONTEXT_KINDS` (those are gather inputs + the manifest contract).
  *
- * One object per (repo, PR, command): `v1/prs/{repo}/{pr}/context/review.md`.
+ * One object per (repo, PR, command): `v1/prs/{repo}/{pr}/context/{command}.md`.
  * Overwrite semantics — re-running `/zai review` replaces the latest result.
  * Written with a raw `bucket.put` (no D1 index, no manifest coupling), exactly
  * like the incremental slice refresh. Retention rides the same `v1/prs/`

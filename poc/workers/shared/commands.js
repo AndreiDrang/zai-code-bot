@@ -4,7 +4,7 @@
  * Pure module — safe to import from both workers.
  */
 
-import { COMMENT_MARKER, AVAILABLE_COMMANDS, BOT_FOOTER } from './constants.js';
+import { AVAILABLE_COMMANDS, BOT_FOOTER, COMMENT_MARKER } from './constants.js';
 
 // Invocation form: /zai only. The @zai-bot mention and /zai-bot slash forms
 // were removed — callers must invoke the bot with "/zai <command>".
@@ -51,38 +51,6 @@ export function getAvailableCommands() {
 }
 
 /**
- * Formats the help message.
- * @returns {string}
- */
-export function formatHelp() {
-  return `## 🤖 Z.ai Code Bot Help
-
-Available commands:
-
-### Code Review & Analysis
-- \`/zai review\` — Request a full code review of the Pull Request *(heavy)*
-- \`/zai explain <lines>\` — Explain specific lines of code (e.g. \`/zai explain 10-20\`) *(heavy)*
-- \`/zai ask <question>\` — Ask a question about the code *(heavy)*
-- \`/zai impact\` — Analyze the potential impact of changes *(heavy)*
-
-### Documentation
-- \`/zai describe\` — Generate PR description from commits *(heavy)*
-
-### Help
-- \`/zai help\` — Show this help message
-
-### Usage Notes
-- Example: \`/zai review\`
-- For line-specific commands, specify line numbers or ranges
-- *(heavy)* commands run on the dedicated heavy worker
-
----
-${BOT_FOOTER}
-
-${COMMENT_MARKER}`;
-}
-
-/**
  * Formats the "command not available" message.
  * @param {string} command
  * @returns {string}
@@ -92,7 +60,7 @@ export function formatCommandNotAvailable(command) {
 
 \`/zai ${command}\` isn't a recognized command.
 
-Run \`/zai help\` to see the available commands.
+Supported commands: \`/zai review\` and \`/zai describe\`.
 
 ---
 ${BOT_FOOTER}

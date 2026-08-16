@@ -24,7 +24,7 @@ describe('zai-main-worker/router', () => {
   describe('getAllCommands', () => {
     it('returns the full available command set', () => {
       expect(getAllCommands()).toEqual(AVAILABLE_COMMANDS);
-      expect(getAllCommands()).toHaveLength(6);
+      expect(getAllCommands()).toHaveLength(2);
     });
 
     it('returns a defensive copy', () => {

@@ -1,25 +1,19 @@
 /**
  * Z.ai chat-completions client for Cloudflare Workers.
  *
- * Ported from the parent GitHub Action's Node client (src/lib/api.js, which
- * uses Node's `https` module) to the Workers runtime (`fetch`). The
- * retry/backoff/categorize/error-sanitization logic is runtime-agnostic and is
- * preserved here; only the transport was rewritten.
+ * Uses the Workers `fetch` transport with retry, backoff, error categorization,
+ * and credential sanitization.
  *
  * Differences from the parent client:
  *  - transport: `fetch` + an `AbortController` timeout (no `https.request`);
  *  - `categorizeError` reads `error.status` (set from `response.status`)
  *    instead of regex-scraping the message;
- *  - `messages` (system + user) are passed BY THE CALLER — the parent baked a
- *    code-review system message into the request; here each handler owns its
- *    own prompt;
+ *  - `messages` (system + user) are passed by the caller, so each handler owns
+ *    its own prompt;
  *  - `fetch` and `sleep` are injectable so the unit tests stay deterministic
  *    (no real network, no real backoff delay).
  *
- * Returned shape of `call()` matches the parent: `{ success, data, usedFallback,
- * error }`, where `error` (when present) is `{ category, message, retryable,
- * attempts, totalDuration }` and `message` is already sanitized for logs/user
- * surfaces (no Bearer tokens / API keys leak).
+ * The returned error message is sanitized for logs and user surfaces.
  */
 
 const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';

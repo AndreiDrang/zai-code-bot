@@ -42,6 +42,7 @@ export class GitHubClient {
 
     if (data) {
       options.body = JSON.stringify(data);
+      options.headers['content-type'] = 'application/json';
     }
     if (opts.accept) {
       options.headers.Accept = opts.accept;
@@ -112,6 +113,11 @@ export class GitHubClient {
   /** Pull request info. */
   getPullRequest(owner, repo, prNumber) {
     return this.request('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`);
+  }
+
+  /** Updates the editable PR fields used by `/zai describe`. */
+  updatePullRequest(owner, repo, prNumber, data) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/pulls/${prNumber}`, data);
   }
 
   /** Pull request changed files (paginated by the caller). */

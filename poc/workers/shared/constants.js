@@ -1,28 +1,27 @@
 /**
- * Shared constants for Z.ai Code Bot (hybrid Workers).
+ * Shared constants for Z.ai Code Bot (Cloudflare Workers).
  *
  * Imported by BOTH zai-main-worker and zai-heavy-worker via relative path:
  *   import { ... } from '../../shared/constants.js'
  */
 
 // ---------------------------------------------------------------------------
-// Comment markers (idempotency / lookup) — keep in sync with parent bot.
+// Comment markers (idempotency / lookup).
 // ---------------------------------------------------------------------------
 export const COMMENT_MARKER = '<!-- zai-code-review -->';
-export const PR_PREVIEW_MARKER = '<!-- zai-pr-preview -->';
-export const PR_CLOSED_MARKER = '<!-- zai-pr-closed -->';
 export const REVIEW_MARKER = '<!-- zai-review -->';
-export const IMPACT_MARKER = '<!-- zai-impact -->';
+export const DESCRIBE_MARKER = '<!-- zai-describe -->';
 export const PROGRESS_MARKER = '<!-- zai-progress -->';
 
 // ---------------------------------------------------------------------------
 // Command classification — single source of truth for light vs heavy routing.
 // Reclassify a command by moving it between these two sets.
 // ---------------------------------------------------------------------------
-// LIGHT = completes inline within the webhook (~10s budget), NO LLM call.
-// HEAVY = makes a Z.ai LLM call (or heavy I/O); must run async on the heavy worker.
-export const LIGHT_COMMANDS = ['help'];
-export const HEAVY_COMMANDS = ['ask', 'explain', 'describe', 'review', 'impact'];
+// Both supported commands make an LLM call and run asynchronously on the queue
+// consumer. Keeping this list intentionally small prevents accidental command
+// surface expansion during the Workers migration.
+export const LIGHT_COMMANDS = [];
+export const HEAVY_COMMANDS = ['review', 'describe'];
 
 // Full allowlist (union of light + heavy). Anything else is "unsupported".
 export const AVAILABLE_COMMANDS = [...LIGHT_COMMANDS, ...HEAVY_COMMANDS];
@@ -39,12 +38,6 @@ export const EVENT_TYPES = {
 };
 
 // ---------------------------------------------------------------------------
-// Internal Worker-to-Worker delegation protocol
-// ---------------------------------------------------------------------------
-export const INTERNAL_TOKEN_HEADER = 'x-zai-internal-token';
-export const INTERNAL_PATH = '/handle';
-
-// ---------------------------------------------------------------------------
 // Default configuration
 // ---------------------------------------------------------------------------
 export const DEFAULT_CONFIG = {
@@ -54,9 +47,7 @@ export const DEFAULT_CONFIG = {
 };
 
 // ---------------------------------------------------------------------------
-// Shared footer — identical across EVERY bot comment. Append before the
-// hidden marker so the rendered attribution is uniform help, previews,
-// reviews, errors, and stubs alike.
+// Shared footer — identical across every bot comment.
 // ---------------------------------------------------------------------------
 export const BOT_FOOTER =
   '*Powered by [AndreiDrang](https://github.com/AndreiDrang), [Z.ai](https://z.ai) and [Cloudflare Workers](https://cloudflare.com)*';
@@ -66,11 +57,6 @@ export const BOT_FOOTER =
 // ---------------------------------------------------------------------------
 export const ERROR_MESSAGES = {
   UNAUTHORIZED: 'You do not have permission to run this command.',
-  UNKNOWN_COMMAND: 'Unknown command. Use /zai help to see available commands.',
+  UNKNOWN_COMMAND: 'Unknown command. Supported commands are /zai review and /zai describe.',
   INTERNAL_ERROR: 'An internal error occurred. Please try again later.',
-  POC_LIMITATION: 'This command is not available in the POC version. Only /zai help is supported.',
-};
-
-export const SUCCESS_MESSAGES = {
-  HELP_POSTED: 'Help message posted successfully!',
 };

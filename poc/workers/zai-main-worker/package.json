@@ -2,7 +2,7 @@
   "name": "zai-main-worker",
   "version": "0.2.0",
   "private": true,
-  "description": "Z.ai Code Bot main worker: webhook ingress, light commands, heavy-command delegation",
+  "description": "Z.ai Code Bot main worker: webhook ingress and durable job publishing",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

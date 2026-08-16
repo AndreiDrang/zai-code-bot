@@ -1,7 +1,6 @@
 /**
- * Shared lifecycle runner for heavy LLM commands (review, and later impact/
- * ask/explain/describe). Encapsulates the durable-queue pipeline every command
- * shares so a handler shrinks to its per-command prompt + identity:
+ * Shared lifecycle runner for the review LLM command. Encapsulates the durable
+ * queue pipeline so the handler shrinks to its prompt + identity:
  *
  *   config → load 5 context slices (live diff fallback) → no-diff guard
  *     → API-key guard → system+user prompt → Z.ai → persist result to

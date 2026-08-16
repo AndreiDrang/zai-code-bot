@@ -74,8 +74,7 @@ export function buildContextBlock({ slices, command, budgetBytes = 200000, meta 
 
 /**
  * Per-command layouts. Caps are absolute upper bounds (the budget-relative cap
- * applied in buildContextBlock may be smaller). Future commands (impact/ask/…
- * ) add entries here — the module is the single place slice selection lives.
+ * applied in buildContextBlock may be smaller).
  */
 const LAYOUTS = {
   review: {

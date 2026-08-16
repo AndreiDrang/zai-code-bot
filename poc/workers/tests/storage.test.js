@@ -7,7 +7,6 @@ import {
   repoConfigCacheKey,
   runArtifactKey,
 } from '../shared/storage/keys.js';
-import { renderPrPreview, renderPrClosed } from '../shared/pr-preview.js';
 import {
   extractPullRequestEvent,
   isSupportedPullRequestEvent,
@@ -35,7 +34,7 @@ describe('storage key contracts', () => {
   it('builds a per-command result key under the same /context/ prefix (overwrite)', () => {
     // One object per (repo, PR, command); re-running a command overwrites it.
     expect(prCommandResultKey(10, 7, 'review')).toBe('v1/prs/10/7/context/review.md');
-    expect(prCommandResultKey(10, 7, 'impact')).toBe('v1/prs/10/7/context/impact.md');
+    expect(prCommandResultKey(10, 7, 'describe')).toBe('v1/prs/10/7/context/describe.md');
   });
 
   it('rejects unsafe key components and unknown context kinds', () => {
@@ -76,41 +75,5 @@ describe('PR storage event contract', () => {
       headSha: 'abc',
       baseSha: 'def',
     });
-  });
-});
-
-describe('PR preview rendering', () => {
-  it('renders a metadata-only, marker-idempotent comment with escaped pipes', () => {
-    const body = renderPrPreview({
-      repository: 'o/repo',
-      prNumber: 7,
-      headSha: 'abc',
-      title: 'A | title',
-      authorLogin: 'user',
-    });
-    expect(body).toContain('## PR Preview');
-    expect(body).toContain('| **PR** | #7 |');
-    expect(body).toContain('| **Head** | `abc` |');
-    expect(body).toContain('A \\| title');
-    expect(body).toContain('<!-- zai-pr-preview -->');
-    // No per-file or stat rows leak into the brief.
-    expect(body).not.toContain('Files changed');
-    expect(body).not.toContain('Lines added');
-    expect(body).not.toContain('Lines deleted');
-    expect(body).not.toContain('Changed Files');
-  });
-});
-
-describe('PR closed rendering', () => {
-  it('renders a marker-idempotent "closed by" lifecycle comment', () => {
-    const body = renderPrClosed({ closedBy: 'AndreiDrang' });
-    expect(body).toContain('## 🔒 PR Closed');
-    expect(body).toContain('PR closed by @AndreiDrang');
-    expect(body).toContain('<!-- zai-pr-closed -->');
-    expect(body).toContain('Powered by');
-  });
-
-  it('falls back to unknown when closedBy is missing', () => {
-    expect(renderPrClosed({})).toContain('@unknown');
   });
 });

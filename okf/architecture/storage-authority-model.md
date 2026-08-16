@@ -56,7 +56,7 @@ R2 objects split into two grains with different keying and retention:
   indexed by the `artifacts` table, swept by the D1-backed retention cron. The
   `/zai review` handler is the first producer: it persists its Z.ai
   `response.json` as a run-output and links it to the run via
-  `result_artifact_id` (`analysis_runs` is the reader/index). Impact will follow.
+  `result_artifact_id` (`analysis_runs` is the reader/index).
 
 # KV is a read-through cache
 
@@ -82,7 +82,7 @@ data; retention targets the `v1/` prefix.
 
 - The [D1 storage schema](/datasets/d1-storage-schema.md) defines the
   authoritative tables.
-- The [PR-preview pipeline](/workflows/pr-preview-pipeline.md) writes to D1 and
+- The [PR-context pipeline](/workflows/pr-context-pipeline.md) writes to D1 and
   GitHub only; the [PR-context gather pipeline](/workflows/pr-context-pipeline.md)
   writes the R2 context + KV card.
 - The [transactional outbox](/contracts/transactional-outbox.md) bridges D1

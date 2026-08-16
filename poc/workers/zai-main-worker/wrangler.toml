@@ -1,5 +1,4 @@
-# zai-main-worker — receives GitHub webhooks, runs light commands,
-# delegates heavy commands to zai-heavy-worker via a Service Binding.
+# zai-main-worker — receives GitHub webhooks and publishes durable jobs.
 name = "zai-main-worker"
 main = "src/index.js"
 compatibility_date = "2026-08-05"
@@ -34,12 +33,6 @@ id = "a0fca8c009de4e57a0d241d5ebcaf055"
 binding = "BOT_JOBS"
 queue = "bot-jobs"
 
-# Worker-to-Worker delegation (internal to the Cloudflare account).
-# `env.HEAVY_WORKER.fetch(...)` is available inside the worker.
-[[services]]
-binding = "HEAVY_WORKER"
-service = "zai-heavy-worker"
-
 # Public ingress for GitHub webhooks.
 #   • Adding a route INFERS workers_dev=false on the next deploy → the
 #     *.workers.dev URL disappears. Point the GitHub webhook at
@@ -63,7 +56,6 @@ custom_domain = true
 # Store id: 629e5dd6594845a889e6ddabb26cc009
 #   GITHUB_WEBHOOK_SECRET  <- secret ZAI_GITHUB_WEBHOOK_KEY  (HMAC-SHA256 webhook secret)
 #   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT: repo + read:org)
-#   ZAI_INTERNAL_TOKEN     <- secret ZAI_INTERNAL_TOKEN       (shared main<->heavy auth)
 #   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once LLM calls land)
 [[secrets_store_secrets]]
 binding = "GITHUB_WEBHOOK_SECRET"
@@ -74,11 +66,6 @@ secret_name = "ZAI_GITHUB_WEBHOOK_KEY"
 binding = "GITHUB_TOKEN"
 store_id = "629e5dd6594845a889e6ddabb26cc009"
 secret_name = "ZAI_GITHUB_TOKEN"
-
-[[secrets_store_secrets]]
-binding = "ZAI_INTERNAL_TOKEN"
-store_id = "629e5dd6594845a889e6ddabb26cc009"
-secret_name = "ZAI_INTERNAL_TOKEN"
 
 [[secrets_store_secrets]]
 binding = "ZAI_API_KEY"

@@ -1,5 +1,4 @@
-# zai-heavy-worker — receives delegated heavy commands (review, impact)
-# from zai-main-worker via a Service Binding. Not exposed publicly.
+# zai-heavy-worker — consumes durable review and describe jobs.
 name = "zai-heavy-worker"
 main = "src/index.js"
 compatibility_date = "2026-08-05"
@@ -12,9 +11,8 @@ R2_RETENTION_DAYS = "30"
 # Production resources shared with zai-main-worker.
 # Replace placeholder IDs before deploy.
 
-# No public route: this worker is reached ONLY through the HEAVY_WORKER service
-# binding from zai-main-worker (which works without any public URL). Disable the
-# default workers.dev route so it has no public ingress at all.
+# No public route: this worker is reached ONLY through the Queue consumer.
+# Disable the default workers.dev route so it has no public ingress at all.
 workers_dev = false
 
 [[d1_databases]]
@@ -61,17 +59,11 @@ mode = "smart"
 # `secret_name` = key inside the store.
 # Store id: 629e5dd6594845a889e6ddabb26cc009
 #   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT for result comments)
-#   ZAI_INTERNAL_TOKEN     <- secret ZAI_INTERNAL_TOKEN       (must match zai-main-worker)
-#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once review/impact call the LLM)
+#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key)
 [[secrets_store_secrets]]
 binding = "GITHUB_TOKEN"
 store_id = "629e5dd6594845a889e6ddabb26cc009"
 secret_name = "ZAI_GITHUB_TOKEN"
-
-[[secrets_store_secrets]]
-binding = "ZAI_INTERNAL_TOKEN"
-store_id = "629e5dd6594845a889e6ddabb26cc009"
-secret_name = "ZAI_INTERNAL_TOKEN"
 
 [[secrets_store_secrets]]
 binding = "ZAI_API_KEY"

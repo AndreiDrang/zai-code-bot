@@ -42,14 +42,13 @@ format-check: dependencies
 	@npm run format:js:check
 
 # Validate both Workers locally via wrangler --dry-run (bundles + checks config,
-# makes NO API calls, needs no Cloudflare auth). Heavy runs first so that on a
-# real deploy the main worker's HEAVY_WORKER service binding has a target.
+# makes NO API calls, needs no Cloudflare auth).
 deploy-dry-run:
 	@cd $(WORKER_HEAVY) && wrangler deploy --dry-run
 	@cd $(WORKER_MAIN)  && wrangler deploy --dry-run
 
-# Publish both Workers. Heavy MUST deploy first: the main worker's
-# [[services]] binding points at zai-heavy-worker, which must already exist.
+# Publish both Workers. Deploy the heavy consumer first so Queue consumption is
+# ready before the main worker starts publishing jobs.
 deploy:
 	@cd $(WORKER_HEAVY) && wrangler deploy
 	@cd $(WORKER_MAIN)  && wrangler deploy

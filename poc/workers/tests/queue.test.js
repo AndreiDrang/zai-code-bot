@@ -35,7 +35,7 @@ function message() {
 function claimed(attempt_count = 1) {
   return {
     job_id: 'job-1',
-    kind: 'pr_preview',
+    kind: 'review',
     attempt_count,
     repository_owner: 'owner',
     repository_name: 'repo',
