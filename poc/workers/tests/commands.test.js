@@ -30,7 +30,9 @@ describe('shared/commands', () => {
   });
 
   it('renders a safe response for removed commands', () => {
-    expect(formatCommandNotAvailable('impact')).toContain('/zai impact');
+    const message = formatCommandNotAvailable('impact');
+    expect(message).toContain('/zai impact');
+    expect(message).toContain('/zai help');
   });
 
   it('renders the supported command list', () => {
