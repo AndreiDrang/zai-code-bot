@@ -170,11 +170,12 @@ function renderFiles(files, cap, includeStats = false) {
   const list = Array.isArray(files) ? files : [];
   if (!list.length) return '';
   const entries = list
-    .filter((f) => f?.filename)
+    .filter((f) => f?.filename || f?.path)
     .map((f) => {
-      if (!includeStats) return `- ${f.filename}`;
+      const path = f.filename || f.path;
+      if (!includeStats) return `- ${path}`;
       return (
-        `- ${f.filename} (${f.status || 'changed'}, ` +
+        `- ${path} (${f.status || 'changed'}, ` +
         `+${Number(f.additions) || 0}/-${Number(f.deletions) || 0})`
       );
     });

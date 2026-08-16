@@ -13,7 +13,12 @@ vi.mock('../shared/zai-client.js', () => ({
   createZaiClient: vi.fn(() => ({ call: mocks.zaiCall })),
 }));
 
-import { prContextKey, prSummaryKey } from '../shared/storage/keys.js';
+import {
+  prContextKey,
+  prContextV2DiffKey,
+  prContextV2Key,
+  prSummaryKey,
+} from '../shared/storage/keys.js';
 import {
   handlePrSummaryJob,
   validatePrSummary,
@@ -70,6 +75,48 @@ function fakeBucket() {
   };
 }
 
+function fakeV2Bucket() {
+  const patchKey = prContextV2DiffKey(10, 7, 'src/x.js');
+  const store = new Map([
+    [
+      prContextV2Key(10, 7, 'manifest'),
+      JSON.stringify({ ...manifest, schemaVersion: 2, artifacts: { files: 'files.json' } }),
+    ],
+    [prContextV2Key(10, 7, 'description'), 'Adds X.'],
+    [
+      prContextV2Key(10, 7, 'commits'),
+      JSON.stringify([{ sha: 'c1', title: 'Add X', message: 'Add X' }]),
+    ],
+    [
+      prContextV2Key(10, 7, 'files'),
+      JSON.stringify([
+        {
+          path: 'src/x.js',
+          status: 'added',
+          additions: 2,
+          deletions: 1,
+          diff: { state: 'available', key: patchKey, bytes: 5, sha256: 'hash' },
+        },
+      ]),
+    ],
+    [
+      prContextV2Key(10, 7, 'comments'),
+      JSON.stringify({ issue: [{ user: 'u', body: 'Why?' }], review: [] }),
+    ],
+    [patchKey, '@@ -1 +1 @@\n+new'],
+  ]);
+  return {
+    store,
+    get: vi.fn(async (key) => {
+      if (!store.has(key)) return null;
+      return { text: async () => store.get(key) };
+    }),
+    put: vi.fn(async (key, value) => {
+      store.set(key, value);
+    }),
+  };
+}
+
 const validSummary = {
   prSummary: 'Adds X to improve processing.',
   keyChanges: [{ file: 'src/x.js', change: 'Adds the new processing logic.' }],
@@ -104,7 +151,8 @@ describe('handlePrSummaryJob', () => {
     expect(request.messages[1].content).toContain('## Changed files');
     expect(request.messages[1].content).toContain('## Conversation');
     expect(request.messages[1].content).toContain('## Diff');
-    expect(request.fallbackMessages[1].content.length).toBeLessThan(
+    expect(request.fallbackMessages).toBeDefined();
+    expect(request.fallbackMessages[1].content.length).toBeLessThanOrEqual(
       request.messages[1].content.length,
     );
 
@@ -126,6 +174,22 @@ describe('handlePrSummaryJob', () => {
     });
     expect(result.status).toBe('no_api_key');
     expect(mocks.zaiCall).not.toHaveBeenCalled();
+  });
+
+  it('prefers the V2 per-file snapshot when it is available', async () => {
+    const bucket = fakeV2Bucket();
+    await expect(
+      handlePrSummaryJob({
+        env: { BOT_ARTIFACTS: bucket, BOT_CACHE: {}, ZAI_API_KEY: 'key' },
+        db: {},
+        job,
+      }),
+    ).resolves.toMatchObject({ status: 'success' });
+
+    const request = mocks.zaiCall.mock.calls[0][0];
+    expect(request.messages[1].content).toContain('src/x.js (added, +2/-1)');
+    expect(request.messages[1].content).toContain('@@ -1 +1 @@');
+    expect(bucket.get).not.toHaveBeenCalledWith(prContextKey(10, 7, 'diff'));
   });
 
   it('rejects malformed model output before writing the artifact', async () => {

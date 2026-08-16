@@ -81,6 +81,16 @@ describe('buildContextBlock (review layout)', () => {
     expect(block).toContain('src/x.js (added, +4/-1)');
   });
 
+  it('renders V2 file-index paths as changed files', () => {
+    const block = buildContextBlock({
+      command: 'pr-summary',
+      slices: {
+        files: [{ path: 'src/cache.ts', status: 'modified', additions: 4, deletions: 1 }],
+      },
+    });
+    expect(block).toContain('src/cache.ts (modified, +4/-1)');
+  });
+
   it('never throws on missing/empty slices — yields a diff-only block', () => {
     const block = buildContextBlock({
       slices: { diff: 'only diff' },

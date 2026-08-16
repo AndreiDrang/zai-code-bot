@@ -27,6 +27,7 @@ import {
   readPrSummary,
   renderContextSummary,
 } from './pr-context-reader.js';
+import { createContextService } from './context/context-service.js';
 import { getRepositoryConfig } from './storage/config.js';
 import { prCommandResultKey } from './storage/keys.js';
 import { upsertComment } from './comments.js';
@@ -87,18 +88,44 @@ export async function runLlmCommand(
 
   const config = await getRepositoryConfig(db, env?.BOT_CACHE, repoId);
   const maxBytes = Number(config?.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
-  const manifest = await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber);
+  const context = createContextService({
+    bucket: env?.BOT_ARTIFACTS,
+    github,
+    owner,
+    repository: name,
+    repositoryId: repoId,
+    prNumber,
+    expectedHeadSha: headSha,
+  });
+  const v2Snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
+  const manifest =
+    v2Snapshot.status === 'available'
+      ? v2Snapshot.manifest
+      : await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber);
   const storedSummary = await readPrSummary(env?.BOT_ARTIFACTS, repoId, prNumber);
   const prSummary =
     manifest?.headSha && storedSummary?.headSha === manifest.headSha ? storedSummary.summary : null;
 
-  // --- Load all 5 gathered slices (per-PR latest); live fallback for diff. ---
-  let diff = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'diff');
-  if (diff == null) diff = await github.getPrDiff(owner, name, prNumber).catch(() => '');
-  const description = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'description');
-  const files = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'files');
-  const commits = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'commits');
-  const comments = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'comments');
+  // --- Prefer V2's per-file snapshot; retain V1 reads during dual-write. ---
+  let diff;
+  let description;
+  let files;
+  let commits;
+  let comments;
+  if (v2Snapshot.status === 'available') {
+    ({ diff, description, files, commits, comments } = v2Snapshot.slices);
+  } else {
+    [diff, description, files, commits, comments] = await Promise.all([
+      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'diff'),
+      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'description'),
+      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'files'),
+      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'commits'),
+      readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'comments'),
+    ]);
+  }
+  if (!diff || (typeof diff === 'string' && !diff.trim())) {
+    diff = await github.getPrDiff(owner, name, prNumber).catch(() => '');
+  }
   const slices = { diff, description, files, commits, comments };
 
   // --- No-diff guard: nothing to act on → brief notice, job succeeds. ---
