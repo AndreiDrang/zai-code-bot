@@ -9,7 +9,8 @@ import { PR_SUMMARY_PROMPT } from '../../generated/prompts.js';
 
 const PROMPT_VERSION = 'pr-summary-v1';
 const DEFAULT_MAX_CONTEXT_BYTES = 200000;
-const MODEL_TIMEOUT_MS = 30000;
+const FALLBACK_MAX_CONTEXT_BYTES = 60000;
+const MODEL_TIMEOUT_MS = 45000;
 const MODEL_MAX_RETRIES = 3;
 const MODEL_BASE_DELAY_MS = 2000;
 
@@ -84,6 +85,16 @@ export async function handlePrSummaryJob({ env, db, job }) {
     manifest,
     maxBytes,
   });
+  const fallbackMaxBytes = Math.min(maxBytes, FALLBACK_MAX_CONTEXT_BYTES);
+  const fallbackUserContent =
+    fallbackMaxBytes < maxBytes
+      ? buildPrSummaryUserPrompt({
+          slices,
+          meta: { title: title || manifest.title, author: author || manifest.authorLogin },
+          manifest,
+          maxBytes: fallbackMaxBytes,
+        })
+      : null;
   const model = env?.ZAI_MODEL || 'glm-5.2';
   const client = createZaiClient({
     timeout: MODEL_TIMEOUT_MS,
@@ -97,6 +108,12 @@ export async function handlePrSummaryJob({ env, db, job }) {
       { role: 'system', content: PR_SUMMARY_PROMPT },
       { role: 'user', content: userContent },
     ],
+    fallbackMessages: fallbackUserContent
+      ? [
+          { role: 'system', content: PR_SUMMARY_PROMPT },
+          { role: 'user', content: fallbackUserContent },
+        ]
+      : undefined,
   });
 
   if (!result.success) {

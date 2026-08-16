@@ -103,13 +103,16 @@ export async function readPrSummary(bucket, repositoryId, prNumber) {
 }
 
 /**
- * R2 `head()` returns null for a missing object without producing the noisy
- * GetObject error span that a caught `get()` miss creates in Observability.
- * Keep the get-only fallback for the lightweight test doubles and older
- * bindings that do not expose head().
+ * R2 list preflight returns an empty object list for a missing key without
+ * producing a noisy GetObject/HeadObject error span in Observability. Keep
+ * head() and get()-only fallbacks for lightweight test doubles and older
+ * bindings.
  */
 async function getExistingObject(bucket, key) {
-  if (typeof bucket.head === 'function') {
+  if (typeof bucket.list === 'function') {
+    const result = await bucket.list({ prefix: key, limit: 1 });
+    if (!result?.objects?.some((object) => object.key === key)) return null;
+  } else if (typeof bucket.head === 'function') {
     const metadata = await bucket.head(key);
     if (!metadata) return null;
   }

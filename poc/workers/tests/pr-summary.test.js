@@ -108,6 +108,9 @@ describe('handlePrSummaryJob', () => {
     expect(request.messages[1].content).toContain('## Changed files');
     expect(request.messages[1].content).toContain('## Conversation');
     expect(request.messages[1].content).toContain('## Diff');
+    expect(request.fallbackMessages[1].content.length).toBeLessThan(
+      request.messages[1].content.length,
+    );
 
     const artifact = JSON.parse(bucket.store.get(prSummaryKey(10, 7)));
     expect(artifact).toMatchObject({

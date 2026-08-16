@@ -219,7 +219,14 @@ async function ensureSummaryJob(db, bucket, job, env, logger) {
 
 async function readManifestHead(bucket, manifestKey) {
   if (!bucket?.get) return null;
-  if (typeof bucket.head === 'function') {
+  if (typeof bucket.list === 'function') {
+    const listed = await bucket
+      .list({ prefix: manifestKey, limit: 1 })
+      .catch(() => null);
+    if (listed && !listed.objects?.some((object) => object.key === manifestKey)) {
+      return null;
+    }
+  } else if (typeof bucket.head === 'function') {
     const metadata = await bucket.head(manifestKey).catch(() => null);
     if (!metadata) return null;
   }

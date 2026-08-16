@@ -61,6 +61,19 @@ describe('readContextManifest — R2 manifest', () => {
     expect(bucket.head).toHaveBeenCalledWith(prContextKey(10, 7, 'manifest'));
     expect(bucket.get).not.toHaveBeenCalled();
   });
+
+  it('uses R2 list before get so a missing key does not create an error span', async () => {
+    const bucket = {
+      list: vi.fn().mockResolvedValue({ objects: [] }),
+      get: vi.fn(),
+    };
+    await expect(readContextManifest(bucket, 10, 7)).resolves.toBeNull();
+    expect(bucket.list).toHaveBeenCalledWith({
+      prefix: prContextKey(10, 7, 'manifest'),
+      limit: 1,
+    });
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
 });
 
 describe('readCommandResult — R2 latest command output', () => {
