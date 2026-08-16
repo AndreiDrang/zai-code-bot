@@ -1,7 +1,8 @@
 # Z.ai Code Bot Workers
 
 This directory contains the Cloudflare Workers implementation of Z.ai Code Bot.
-Only `/zai review` and `/zai describe` are supported.
+`/zai help`, `/zai review`, and `/zai describe` are supported. Help is handled
+inline by the main Worker; review and describe remain durable Queue jobs.
 
 ## Workers
 
@@ -43,6 +44,10 @@ sequenceDiagram
   H->>D: mark succeeded
 ```
 
+`/zai help` is handled inline by the main Worker after signature verification
+and authorization; it posts the command list without creating a D1 job or
+publishing to the Queue.
+
 Pull-request `opened`, `reopened`, `synchronize`, and `ready_for_review` events
 create a `pr_context` job. The gatherer stores bounded files, diff, commits,
 description, and comments in R2. A later review or describe command reuses that
@@ -62,6 +67,7 @@ and Queue bindings are shared by both workers.
 ## Commands
 
 ```text
+/zai help
 /zai review
 /zai describe
 ```

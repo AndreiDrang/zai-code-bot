@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Command routing
-description: Routes the two supported LLM commands to durable Queue jobs.
+description: Routes help inline and the two LLM commands to durable Queue jobs.
 source_paths:
   - poc/workers/shared/constants.js
   - poc/workers/zai-main-worker/src/router.js
@@ -20,13 +20,14 @@ The public command surface is intentionally limited to:
 
 | Command | Route | Result |
 | --- | --- | --- |
+| `help` | main Worker | Lists the supported commands without creating a job |
 | `review` | durable Queue job | Full gathered PR context is sent to Z.ai and a marker-owned review comment is upserted |
 | `describe` | durable Queue job | Commit messages are sent to Z.ai and a marker-owned section of the PR body is updated |
 
-`LIGHT_COMMANDS` is empty. There is no inline command path and no legacy
-service-binding fallback. The main Worker validates the webhook, authorizes the
-commenter, creates a D1 job, publishes `{ schemaVersion, jobId }`, and returns
-`202`.
+`LIGHT_COMMANDS` is empty for LLM work. Help is the only inline command path;
+there is no legacy service-binding fallback. For review and describe, the main
+Worker validates the webhook, authorizes the commenter, creates a D1 job,
+publishes `{ schemaVersion, jobId }`, and returns `202`.
 
 Any other command remains syntactically parseable for a safe unsupported-command
 response but is not in `AVAILABLE_COMMANDS` and cannot reach a handler.

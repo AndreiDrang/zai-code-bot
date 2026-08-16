@@ -1,7 +1,8 @@
 # Z.ai Code Bot Workers
 
-Cloudflare Workers that receive GitHub webhooks and provide two bot commands:
+Cloudflare Workers that receive GitHub webhooks and provide these bot commands:
 
+- `/zai help` — lists the available commands.
 - `/zai review` — runs a full-context pull-request review with Z.ai and updates
   one marker-owned review comment.
 - `/zai describe` — synthesizes a pull-request description from commit history

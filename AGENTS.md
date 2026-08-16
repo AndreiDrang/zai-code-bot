@@ -18,11 +18,12 @@ been removed. Do not recreate it.
 
 ## Supported product surface
 
+- `/zai help`
 - `/zai review`
 - `/zai describe`
 
-All other commands are intentionally unsupported. Both commands run through
-the durable Queue; there is no inline command path or legacy service binding.
+`/zai help` is handled inline by the main Worker. Review and describe run through
+the durable Queue; there is no legacy service binding.
 
 ## Important files
 

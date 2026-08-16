@@ -4,7 +4,7 @@
  * Pure module — safe to import from both workers.
  */
 
-import { AVAILABLE_COMMANDS, BOT_FOOTER, COMMENT_MARKER } from './constants.js';
+import { AVAILABLE_COMMANDS, BOT_FOOTER, COMMENT_MARKER, HELP_MARKER } from './constants.js';
 
 // Invocation form: /zai only. The @zai-bot mention and /zai-bot slash forms
 // were removed — callers must invoke the bot with "/zai <command>".
@@ -51,6 +51,27 @@ export function getAvailableCommands() {
 }
 
 /**
+ * Formats the command list shown by `/zai help`.
+ * @returns {string}
+ */
+export function formatHelp() {
+  return `## 🤖 Z.ai Code Bot
+
+Supported commands:
+
+- \`/zai help\` — show this command list.
+- \`/zai review\` — run a full-context pull-request review.
+- \`/zai describe\` — generate and update the pull-request description.
+
+The review and describe commands run asynchronously through Cloudflare Workers.
+
+---
+${BOT_FOOTER}
+
+${HELP_MARKER}`;
+}
+
+/**
  * Formats the "command not available" message.
  * @param {string} command
  * @returns {string}
@@ -60,7 +81,7 @@ export function formatCommandNotAvailable(command) {
 
 \`/zai ${command}\` isn't a recognized command.
 
-Supported commands: \`/zai review\` and \`/zai describe\`.
+Supported commands: \`/zai help\`, \`/zai review\`, and \`/zai describe\`.
 
 ---
 ${BOT_FOOTER}

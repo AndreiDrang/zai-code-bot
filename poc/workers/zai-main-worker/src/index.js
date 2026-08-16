@@ -11,10 +11,15 @@
 import { GitHubClient } from '../../shared/github.js';
 import { verifyWebhookSignature } from '../../shared/crypto.js';
 import { resolveSecretValue } from '../../shared/secrets.js';
-import { parseCommand, isCommand, formatCommandNotAvailable } from '../../shared/commands.js';
+import {
+  parseCommand,
+  isCommand,
+  formatCommandNotAvailable,
+  formatHelp,
+} from '../../shared/commands.js';
 import { authorizeCommenter } from '../../shared/auth.js';
 import { createLogger, generateCorrelationId } from '../../shared/logging.js';
-import { COMMENT_MARKER, BOT_FOOTER } from '../../shared/constants.js';
+import { COMMENT_MARKER, BOT_FOOTER, HELP_MARKER } from '../../shared/constants.js';
 import { classifyCommand } from './router.js';
 import {
   extractPullRequestEvent,
@@ -162,6 +167,11 @@ export default {
 
       // --- Route ---
       const bucket = classifyCommand(parsed.type);
+
+      if (bucket === 'help') {
+        await postHelp(github, owner, name, webhookData.issue.number);
+        return json(200, { status: 'help', command: parsed.type });
+      }
 
       if (bucket === 'heavy') {
         if (!canRouteDurable(webhookData, env)) {
@@ -318,6 +328,24 @@ async function postUnauthorizedComment(github, owner, name, issueNumber, usernam
 async function postUnsupported(github, owner, name, issueNumber, commandType) {
   try {
     await github.postComment(owner, name, issueNumber, formatCommandNotAvailable(commandType));
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function postHelp(github, owner, name, issueNumber) {
+  try {
+    const comments = await github.getIssueComments(owner, name, issueNumber);
+    const existing = Array.isArray(comments)
+      ? comments.find(
+          (comment) => typeof comment.body === 'string' && comment.body.includes(HELP_MARKER),
+        )
+      : null;
+    if (existing?.id) {
+      await github.updateComment(owner, name, existing.id, formatHelp());
+    } else {
+      await github.postComment(owner, name, issueNumber, formatHelp());
+    }
   } catch {
     /* best-effort */
   }

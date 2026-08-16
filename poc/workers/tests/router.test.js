@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { classifyCommand, getAllCommands } from '../zai-main-worker/src/router.js';
-import { AVAILABLE_COMMANDS, HEAVY_COMMANDS, LIGHT_COMMANDS } from '../shared/constants.js';
+import {
+  AVAILABLE_COMMANDS,
+  HEAVY_COMMANDS,
+  LIGHT_COMMANDS,
+  HELP_COMMANDS,
+} from '../shared/constants.js';
 
 describe('zai-main-worker/router', () => {
   describe('classifyCommand', () => {
+    it.each(HELP_COMMANDS.map((c) => [c]))('routes help command %s -> "help"', (cmd) => {
+      expect(classifyCommand(cmd)).toBe('help');
+    });
+
     it.each(LIGHT_COMMANDS.map((c) => [c]))('routes light command %s -> "light"', (cmd) => {
       expect(classifyCommand(cmd)).toBe('light');
     });
@@ -24,7 +33,7 @@ describe('zai-main-worker/router', () => {
   describe('getAllCommands', () => {
     it('returns the full available command set', () => {
       expect(getAllCommands()).toEqual(AVAILABLE_COMMANDS);
-      expect(getAllCommands()).toHaveLength(2);
+      expect(getAllCommands()).toHaveLength(3);
     });
 
     it('returns a defensive copy', () => {
