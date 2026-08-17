@@ -1,5 +1,8 @@
 # INTEGRATION TEST GUIDE
 
+**Scope:** `tests/integration/` only.
+**Parent:** `tests/AGENTS.md` (test-suite rules); root `AGENTS.md` (repo-wide invariants). This file defines only integration-local deltas.
+
 ## OVERVIEW
 Integration tests verify end-to-end GitHub event pipelines and visible bot behavior, not just isolated helper logic.
 
