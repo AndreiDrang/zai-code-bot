@@ -1,5 +1,8 @@
 # TEST SUITE GUIDE
 
+**Scope:** `tests/` and descendants.
+**Parent:** root `AGENTS.md` (repo-wide rules, validation commands). `tests/integration/AGENTS.md` is a child of this file covering e2e flows; this file defines test-suite-wide rules.
+
 ## OVERVIEW
 Repository test coverage mixes module-focused tests in `tests/*.test.js` and scenario-driven flows in `tests/integration/*`.
 
@@ -7,11 +10,11 @@ Repository test coverage mixes module-focused tests in `tests/*.test.js` and sce
 ```text
 tests/
 ├── *.test.js        # Module-level tests for lib/runtime units
-├── handlers/        # Handler-focused test cases (ask, explain, impact, review, scheduled)
-├── helpers/         # Shared mocks and fixtures utilities
-├── lib/             # Shared test helpers + code-scope tests
-├── fixtures/        # Static test payloads (issue-comment-event.json, pr-event.json)
-└── integration/     # End-to-end command/review pipeline checks
+├── handlers/        # Handler-focused tests (ask, explain, impact, review, scheduled)
+├── helpers/         # Shared mocks (helpers/mocks.js)
+├── lib/             # code-scope tests
+├── fixtures/        # Static payloads (issue-comment-event.json, pr-event.json)
+└── integration/     # End-to-end command/review pipeline checks (own AGENTS.md)
 ```
 
 ## WHERE TO LOOK
@@ -22,7 +25,7 @@ tests/
 | API and logging resilience | `tests/api.test.js`, `tests/logging.test.js` | Retry/error categorization |
 | Context, PR fetch, and batching | `tests/context.test.js`, `tests/pr-context.test.js`, `tests/changed-files.test.js`, `tests/auto-review.test.js` | Diff scoping, file-at-ref fetch, paginated/batched review |
 | Continuity and events | `tests/continuity.test.js`, `tests/events.test.js` | Hidden-marker state, event-type detection |
-| Code scope and window extraction | `tests/lib/code-scope.test.js` | Token budget, enclosing block, window extraction |
+| Code scope and window extraction | `tests/lib/code-scope.test.js` | Window extraction, enclosing block, target block |
 | Describe handler | `tests/describe.test.js` | PR description generation |
 | Scheduled pipeline | `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` | Config load + `validateAgentsConfig` scoping; `parseFileUpdatesFromResponse`; grounded `handleUpdateAgentsTask` flow incl. hallucination rejection; repo-context collection (tree/budgets/globs); validation guards incl. PR #15 regression |
 | Scheduled pipeline (integration) | (pending) | End-to-end schedule event → context → Z.ai mock → validated PR is still a gap; unit coverage of the grounded flow exists via the `handleUpdateAgentsTask` seam (`__callZaiForTest`). |
