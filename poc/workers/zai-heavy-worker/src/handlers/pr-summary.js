@@ -35,6 +35,7 @@ export async function handlePrSummaryJob({ env, db, job }) {
   const maxBytes = Number(config?.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
   const context = createContextService({
     bucket,
+    repositoryFullName: repoFullName,
     repositoryId: repoId,
     prNumber,
     expectedHeadSha: headSha,
@@ -48,26 +49,26 @@ export async function handlePrSummaryJob({ env, db, job }) {
       repository: repoFullName,
       issue: prNumber,
       headSha,
-      currentHeadSha: snapshot.manifest?.headSha || null,
+      currentHeadSha: snapshot.headSha,
     };
   }
-  const manifest = snapshot.status === 'available' ? snapshot.manifest : null;
+  const metadata = snapshot.status === 'available' ? snapshot.metadata : null;
   const slices = snapshot.status === 'available' ? snapshot.slices : null;
 
-  if (!manifest) {
+  if (!metadata) {
     const error = new Error('PR context manifest is missing');
     error.code = 'pr_summary_context_stale';
     error.retryable = true;
     throw error;
   }
-  if (manifest.headSha !== headSha) {
+  if (metadata.headSha !== headSha) {
     return {
       status: 'stale',
       action: 'pr_summary',
       repository: repoFullName,
       issue: prNumber,
       headSha,
-      currentHeadSha: manifest.headSha,
+      currentHeadSha: metadata.headSha,
     };
   }
 
@@ -90,8 +91,11 @@ export async function handlePrSummaryJob({ env, db, job }) {
 
   const userContent = buildPrSummaryUserPrompt({
     slices,
-    meta: { title: title || manifest.title, author: author || manifest.authorLogin },
-    manifest,
+    metadata: {
+      ...metadata,
+      title: title || metadata.title,
+      author: author || metadata.author,
+    },
     maxBytes,
   });
   const fallbackMaxBytes = Math.min(maxBytes, FALLBACK_MAX_CONTEXT_BYTES);
@@ -99,8 +103,11 @@ export async function handlePrSummaryJob({ env, db, job }) {
     fallbackMaxBytes < maxBytes
       ? buildPrSummaryUserPrompt({
           slices,
-          meta: { title: title || manifest.title, author: author || manifest.authorLogin },
-          manifest,
+          metadata: {
+            ...metadata,
+            title: title || metadata.title,
+            author: author || metadata.author,
+          },
           maxBytes: fallbackMaxBytes,
         })
       : null;
@@ -146,19 +153,17 @@ export async function handlePrSummaryJob({ env, db, job }) {
 
   // A newer synchronize event may have replaced the manifest while the model
   // was running. Never let an older answer overwrite the current summary.
-  const latestManifest = (
-    await createContextService({
-      bucket,
-      repositoryId: repoId,
-      prNumber,
-    }).getManifest()
-  ).manifest;
-  if (!latestManifest || latestManifest.headSha !== headSha) {
+  const latestSnapshot = await createContextService({
+    bucket,
+    repositoryId: repoId,
+    prNumber,
+  }).getSnapshotState();
+  if (latestSnapshot.headSha !== headSha) {
     logger.warn('Discarded stale PR summary', {
       repo: repoFullName,
       issue: prNumber,
       headSha,
-      currentHeadSha: latestManifest?.headSha || null,
+      currentHeadSha: latestSnapshot.headSha,
     });
     return {
       status: 'stale',
@@ -183,7 +188,7 @@ export async function handlePrSummaryJob({ env, db, job }) {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     headSha,
-    sourceManifestUpdatedAt: manifest.gatheredAt || null,
+    sourceManifestUpdatedAt: snapshot.gatheredAt,
     model,
     promptVersion: PROMPT_VERSION,
     summary,
@@ -210,26 +215,21 @@ export async function handlePrSummaryJob({ env, db, job }) {
   };
 }
 
-function buildPrSummaryUserPrompt({ slices, meta, manifest, maxBytes }) {
+function buildPrSummaryUserPrompt({ slices, metadata, maxBytes }) {
   const context = buildContextBlock({
     slices,
     command: 'pr-summary',
     budgetBytes: maxBytes,
-    meta,
+    meta: { title: metadata?.title, author: metadata?.author },
   });
-  const aggregates = manifest?.aggregates || {};
-  const counts = manifest?.counts || {};
   return [
     'Create a compact, factual context summary for this pull request.',
     'This summary will be used as background for future automated code reviews.',
     '',
-    `Pull request title:\n${meta?.title || '(unknown)'}`,
-    `\nPull request author:\n${meta?.author || '(unknown)'}`,
-    `\nBase commit:\n${manifest?.baseSha || '(unknown)'}`,
-    `\nHead commit:\n${manifest?.headSha || '(unknown)'}`,
-    `\nFiles changed: ${counts.files || 0} (+${aggregates.additions || 0}/-${
-      aggregates.deletions || 0
-    })`,
+    'Pull request metadata:',
+    '```json',
+    JSON.stringify(metadata),
+    '```',
     '',
     context || '(No source context was available.)',
     '',

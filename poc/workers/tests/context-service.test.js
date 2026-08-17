@@ -13,14 +13,27 @@ function fakeBucket(objects) {
 function createSnapshot() {
   const patchKey = prContextDiffKey(10, 7, 'src/cache.ts');
   const objects = new Map([
-    [prContextKey(10, 7, 'manifest'), JSON.stringify({ schemaVersion: 2, headSha: 'abc' })],
+    [
+      prContextKey(10, 7, 'manifest'),
+      JSON.stringify({
+        schemaVersion: 2,
+        headSha: 'abc',
+        baseSha: 'base',
+        title: 'Add cache',
+        authorLogin: 'author',
+        counts: { files: 2 },
+        aggregates: { additions: 3, deletions: 1, storedDiffBytes: 18 },
+        contextPrefix: 'v2/prs/10/7/context',
+        artifacts: { diffsPrefix: 'diffs/' },
+      }),
+    ],
     [
       prContextKey(10, 7, 'files'),
       JSON.stringify([
         {
           path: 'src/cache.ts',
           status: 'modified',
-          diff: { state: 'available', key: patchKey, bytes: 18, sha256: 'hash' },
+          diff: { state: 'available', bytes: 18, sha256: 'hash' },
         },
         {
           path: 'assets/logo.png',
@@ -55,19 +68,55 @@ describe('Context Service', () => {
       repository: 'repo',
     });
 
-    await expect(context.listChangedFiles()).resolves.toMatchObject({
+    const changedFiles = await context.listChangedFiles();
+    expect(changedFiles).toMatchObject({
       status: 'available',
       files: expect.arrayContaining([expect.objectContaining({ path: 'src/cache.ts' })]),
     });
+    expect(changedFiles.files).toContainEqual({
+      path: 'src/cache.ts',
+      status: 'modified',
+      additions: 0,
+      deletions: 0,
+      binary: false,
+    });
+    expect(changedFiles.files[0]).not.toHaveProperty('diff');
+    expect(changedFiles).not.toHaveProperty('manifest');
+    await expect(context.getPrMetadata()).resolves.toEqual({
+      status: 'available',
+      headSha: 'abc',
+      gatheredAt: null,
+      metadata: {
+        repository: 'owner/repo',
+        pullRequest: 7,
+        title: 'Add cache',
+        author: 'author',
+        baseSha: 'base',
+        headSha: 'abc',
+        changedFiles: 2,
+        additions: 3,
+        deletions: 1,
+      },
+    });
+    const snapshot = await context.getSnapshotSlices({ maxDiffBytes: 1000 });
+    expect(snapshot).not.toHaveProperty('manifest');
+    expect(snapshot.metadata).toMatchObject({
+      repository: 'owner/repo',
+      pullRequest: 7,
+      changedFiles: 2,
+    });
+    expect(snapshot.slices.files[0]).not.toHaveProperty('diff');
     await expect(context.listChangedFiles({ pathPrefix: 'src/' })).resolves.toMatchObject({
       files: [expect.objectContaining({ path: 'src/cache.ts' })],
     });
-    await expect(context.getDiff('src/cache.ts')).resolves.toMatchObject({
+    const diff = await context.getDiff('src/cache.ts');
+    expect(diff).toMatchObject({
       status: 'available',
       path: 'src/cache.ts',
       diff: '@@ -1 +1 @@\n+cache',
       truncated: false,
     });
+    expect(diff).not.toHaveProperty('sha256');
     await expect(context.getDiff('../secrets')).resolves.toMatchObject({ status: 'invalid_path' });
     await expect(context.getDiff('unknown.ts')).resolves.toMatchObject({ status: 'not_found' });
     await expect(context.getFile('src/cache.ts')).resolves.toMatchObject({
@@ -82,7 +131,7 @@ describe('Context Service', () => {
       returnedLines: 2,
     });
     await expect(context.getDescription()).resolves.toMatchObject({
-      title: null,
+      title: 'Add cache',
       body: 'Add cache',
       headSha: 'abc',
     });
@@ -120,7 +169,7 @@ describe('Context Service', () => {
       expectedHeadSha: 'newer',
     });
 
-    await expect(context.listFiles()).resolves.toMatchObject({ status: 'stale', files: [] });
+    await expect(context.listChangedFiles()).resolves.toMatchObject({ status: 'stale', files: [] });
   });
 
   it('validates source paths and line ranges', async () => {

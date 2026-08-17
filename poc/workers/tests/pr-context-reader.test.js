@@ -98,7 +98,6 @@ describe('context readers — V2 per-file artifacts', () => {
     path: 'src/cache.ts',
     diff: {
       state: 'available',
-      key: prContextDiffKey(10, 7, 'src/cache.ts'),
       bytes: 12,
       sha256: 'abc',
     },
@@ -125,15 +124,17 @@ describe('context readers — V2 per-file artifacts', () => {
     await expect(readContextDiff(bucket, 10, 7, file)).resolves.toContain('+cache');
   });
 
-  it('refuses a diff entry whose key does not match its indexed path', async () => {
-    const bucket = { get: vi.fn() };
+  it('derives the artifact key from the indexed path rather than file metadata', async () => {
+    const bucket = {
+      get: vi.fn().mockResolvedValue({ text: () => Promise.resolve('@@ -1 +1 @@\n+cache') }),
+    };
     await expect(
       readContextDiff(bucket, 10, 7, {
         ...file,
         diff: { ...file.diff, key: 'v2/prs/10/7/context/diffs/other.patch' },
       }),
-    ).resolves.toBeNull();
-    expect(bucket.get).not.toHaveBeenCalled();
+    ).resolves.toContain('+cache');
+    expect(bucket.get).toHaveBeenCalledWith(prContextDiffKey(10, 7, 'src/cache.ts'));
   });
 });
 

@@ -37,16 +37,15 @@ const manifest = {
   authorLogin: 'author',
   gatheredAt: '2026-01-01T00:00:00.000Z',
   counts: { files: 1, commits: 1, issueComments: 1, reviewComments: 0 },
-  aggregates: { additions: 2, deletions: 1 },
+  aggregates: { additions: 2, deletions: 1, storedDiffBytes: 5 },
+  contextPrefix: 'v2/prs/10/7/context',
+  artifacts: { files: 'files.json', diffsPrefix: 'diffs/' },
 };
 
 function fakeBucket() {
   const patchKey = prContextDiffKey(10, 7, 'src/x.js');
   const store = new Map([
-    [
-      prContextKey(10, 7, 'manifest'),
-      JSON.stringify({ ...manifest, artifacts: { files: 'files.json' } }),
-    ],
+    [prContextKey(10, 7, 'manifest'), JSON.stringify(manifest)],
     [prContextKey(10, 7, 'description'), 'Adds X.'],
     [
       prContextKey(10, 7, 'commits'),
@@ -60,7 +59,7 @@ function fakeBucket() {
           status: 'added',
           additions: 2,
           deletions: 1,
-          diff: { state: 'available', key: patchKey, bytes: 5, sha256: 'hash' },
+          diff: { state: 'available', bytes: 5, sha256: 'hash' },
         },
       ]),
     ],
@@ -116,6 +115,11 @@ describe('handlePrSummaryJob', () => {
     expect(request.messages[1].content).toContain('## Changed files');
     expect(request.messages[1].content).toContain('## Conversation');
     expect(request.messages[1].content).toContain('## Diff');
+    expect(request.messages[1].content).toContain('"repository":"owner/repo"');
+    expect(request.messages[1].content).toContain('"pullRequest":7');
+    expect(request.messages[1].content).not.toContain('contextPrefix');
+    expect(request.messages[1].content).not.toContain('diffsPrefix');
+    expect(request.messages[1].content).not.toContain('storedDiffBytes');
     expect(request.fallbackMessages).toBeDefined();
     expect(request.fallbackMessages[1].content.length).toBeLessThanOrEqual(
       request.messages[1].content.length,

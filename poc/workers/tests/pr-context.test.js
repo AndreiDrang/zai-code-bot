@@ -316,6 +316,7 @@ describe('handlePrContextJob — gather', () => {
         }),
       ]),
     );
+    expect(files.every((file) => !Object.hasOwn(file.diff, 'key'))).toBe(true);
     expect(bucket.store.get(prContextDiffKey(10, 7, 'a.js'))).toContain('@@ -1 +1 @@');
     expect(bucket.store.get(prContextDiffKey(10, 7, 'b.js'))).toContain('+added');
   });

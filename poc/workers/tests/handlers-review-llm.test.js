@@ -54,7 +54,9 @@ function makeEnv({
         schemaVersion: 2,
         headSha: HEAD,
         counts: { files: 2, commits: 1, issueComments: 0, reviewComments: 0 },
-        aggregates: { additions: 5, deletions: 1 },
+        aggregates: { additions: 5, deletions: 1, storedDiffBytes: 6 },
+        contextPrefix: 'v2/prs/10/7/context',
+        artifacts: { diffsPrefix: 'diffs/' },
       }),
     ],
     [
@@ -67,7 +69,7 @@ function makeEnv({
               additions: 3,
               deletions: 1,
               diff: withDiff
-                ? { state: 'available', key: patchKey, bytes: 6, sha256: 'hash' }
+                ? { state: 'available', bytes: 6, sha256: 'hash' }
                 : { state: 'unavailable', reason: 'patch_unavailable', bytes: null },
             },
             {
@@ -181,6 +183,11 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(userPrompt).toContain('## Description');
     expect(userPrompt).toContain('A feature');
     expect(userPrompt).toContain('## Changed files (2)');
+    expect(userPrompt).toContain('"repository":"o/r"');
+    expect(userPrompt).toContain('"pullRequest":7');
+    expect(userPrompt).not.toContain('contextPrefix');
+    expect(userPrompt).not.toContain('diffsPrefix');
+    expect(userPrompt).not.toContain('storedDiffBytes');
   });
 
   it('posts a "not configured" notice and skips the LLM when ZAI_API_KEY is unset', async () => {

@@ -76,18 +76,17 @@ export async function readContextFiles(bucket, repositoryId, prNumber) {
 }
 
 /**
- * Reads the patch identified by an already-indexed V2 file entry. The caller
- * must resolve `fileEntry` from files.json first; arbitrary user paths never
- * flow directly into an R2 key.
+ * Reads the patch identified by an already-indexed V2 file entry. The storage
+ * key is derived internally from the immutable PR identity and file path;
+ * files.json and callers never provide an R2 key.
  * @returns {Promise<string|null>}
  */
 export async function readContextDiff(bucket, repositoryId, prNumber, fileEntry) {
   if (!bucket?.get || repositoryId == null || prNumber == null) return null;
   if (fileEntry?.diff?.state !== 'available' || typeof fileEntry.path !== 'string') return null;
   try {
-    const expectedKey = prContextDiffKey(repositoryId, prNumber, fileEntry.path);
-    if (fileEntry.diff.key !== expectedKey) return null;
-    const object = await getExistingObject(bucket, expectedKey);
+    const key = prContextDiffKey(repositoryId, prNumber, fileEntry.path);
+    const object = await getExistingObject(bucket, key);
     return object ? await object.text() : null;
   } catch {
     return null;
@@ -156,11 +155,19 @@ async function getExistingObject(bucket, key) {
  */
 export function renderContextSummary(manifest) {
   if (!manifest) return '';
-  const c = manifest.counts || {};
-  const a = manifest.aggregates || {};
-  return [
+  const c = manifest.counts || { files: manifest.changedFiles };
+  const a = manifest.aggregates || {
+    additions: manifest.additions,
+    deletions: manifest.deletions,
+  };
+  const lines = [
     `PR context for \`${manifest.headSha}\` is gathered and ready:`,
     `- **${c.files ?? 0} files** changed (+${a.additions ?? 0}/−${a.deletions ?? 0})`,
-    `- **${c.commits ?? 0} commits**, **${(c.issueComments ?? 0) + (c.reviewComments ?? 0)} comments**`,
-  ].join('\n');
+  ];
+  if (manifest.counts) {
+    lines.push(
+      `- **${c.commits ?? 0} commits**, **${(c.issueComments ?? 0) + (c.reviewComments ?? 0)} comments**`,
+    );
+  }
+  return lines.join('\n');
 }

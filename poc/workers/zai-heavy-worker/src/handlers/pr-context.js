@@ -296,7 +296,6 @@ async function buildDiffArtifacts(rawFiles, repoId, prNumber) {
     }
     entry.diff = {
       state: 'available',
-      key,
       bytes,
       sha256: await sha256Hex(patch),
     };

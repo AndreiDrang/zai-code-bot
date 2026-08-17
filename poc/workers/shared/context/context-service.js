@@ -23,6 +23,7 @@ export function createContextService({
   github,
   owner,
   repository,
+  repositoryFullName,
   repositoryId,
   prNumber,
   expectedHeadSha,
@@ -30,7 +31,7 @@ export function createContextService({
   let manifestPromise;
   let filesPromise;
 
-  const getManifest = async () => {
+  const getManifestRecord = async () => {
     manifestPromise ||= readContextManifest(bucket, repositoryId, prNumber);
     const manifest = await manifestPromise;
     if (!manifest) return { status: 'missing', manifest: null };
@@ -40,14 +41,37 @@ export function createContextService({
     return { status: 'available', manifest };
   };
 
-  const listChangedFiles = async ({ pathPrefix, limit = 500 } = {}) => {
-    const snapshot = await getManifest();
+  const getSnapshotState = async () => toSnapshotState(await getManifestRecord());
+
+  const getPrMetadata = async () => {
+    const snapshot = await getManifestRecord();
+    return {
+      ...toSnapshotState(snapshot),
+      metadata: snapshot.manifest
+        ? toPrMetadata(snapshot.manifest, {
+            repositoryFullName,
+            owner,
+            repository,
+            prNumber,
+          })
+        : null,
+    };
+  };
+
+  const getFileIndex = async () => {
+    const snapshot = await getManifestRecord();
     if (snapshot.status !== 'available') return { ...snapshot, files: [] };
     filesPromise ||= readContextFiles(bucket, repositoryId, prNumber);
     const files = await filesPromise;
     if (!Array.isArray(files)) {
       return { status: 'missing', manifest: snapshot.manifest, files: [] };
     }
+    return { status: 'available', manifest: snapshot.manifest, files };
+  };
+
+  const listChangedFiles = async ({ pathPrefix, limit = 500 } = {}) => {
+    const indexed = await getFileIndex();
+    if (indexed.status !== 'available') return { status: indexed.status, files: [] };
     let prefix = null;
     if (pathPrefix != null) {
       try {
@@ -58,16 +82,15 @@ export function createContextService({
       }
     }
     const maxFiles = Math.min(Math.max(Number(limit) || 500, 1), 500);
-    const filtered = prefix ? files.filter((entry) => entry?.path?.startsWith(prefix)) : files;
+    const filtered = prefix
+      ? indexed.files.filter((entry) => entry?.path?.startsWith(prefix))
+      : indexed.files;
     return {
       status: 'available',
-      manifest: snapshot.manifest,
-      files: filtered.slice(0, maxFiles),
+      files: filtered.slice(0, maxFiles).map(toChangedFileDto),
       truncated: filtered.length > maxFiles,
     };
   };
-
-  const listFiles = listChangedFiles;
 
   const getDiff = async (path, { maxBytes = DEFAULT_CONTEXT_DIFF_RESULT_BYTES } = {}) => {
     let normalizedPath;
@@ -77,8 +100,10 @@ export function createContextService({
       return { status: 'invalid_path', path: String(path ?? '') };
     }
 
-    const indexed = await listFiles();
-    if (indexed.status !== 'available') return { ...indexed, path: normalizedPath };
+    const indexed = await getFileIndex();
+    if (indexed.status !== 'available') {
+      return { ...toSnapshotState(indexed), path: normalizedPath };
+    }
     const file = indexed.files.find((entry) => entry?.path === normalizedPath);
     if (!file) {
       return { status: 'not_found', path: normalizedPath, headSha: indexed.manifest.headSha };
@@ -108,7 +133,6 @@ export function createContextService({
         path: normalizedPath,
         headSha: indexed.manifest.headSha,
         bytes,
-        sha256: file.diff.sha256,
         diff: null,
         truncated: true,
       };
@@ -118,7 +142,6 @@ export function createContextService({
       path: normalizedPath,
       headSha: indexed.manifest.headSha,
       bytes,
-      sha256: file.diff.sha256,
       diff: text,
       truncated: false,
     };
@@ -226,8 +249,8 @@ export function createContextService({
   };
 
   const getDescription = async ({ maxBytes = 50 * 1024 } = {}) => {
-    const snapshot = await getManifest();
-    if (snapshot.status !== 'available') return snapshot;
+    const snapshot = await getManifestRecord();
+    if (snapshot.status !== 'available') return toSnapshotState(snapshot);
     const body = await readContextSlice(bucket, repositoryId, prNumber, 'description');
     const text = String(body ?? '');
     if (utf8ByteLength(text) > maxBytes) {
@@ -250,8 +273,8 @@ export function createContextService({
   };
 
   const getCommits = async ({ limit = 30 } = {}) => {
-    const snapshot = await getManifest();
-    if (snapshot.status !== 'available') return snapshot;
+    const snapshot = await getManifestRecord();
+    if (snapshot.status !== 'available') return toSnapshotState(snapshot);
     const commits = await readContextSlice(bucket, repositoryId, prNumber, 'commits');
     const values = Array.isArray(commits) ? commits : [];
     const maxCommits = Math.min(Math.max(Number(limit) || 30, 1), 30);
@@ -265,8 +288,8 @@ export function createContextService({
   };
 
   const getComments = async ({ path, limit = 50 } = {}) => {
-    const snapshot = await getManifest();
-    if (snapshot.status !== 'available') return snapshot;
+    const snapshot = await getManifestRecord();
+    if (snapshot.status !== 'available') return toSnapshotState(snapshot);
     const comments = await readContextSlice(bucket, repositoryId, prNumber, 'comments');
     const groups = [comments?.issue, comments?.review].filter(Array.isArray).flat();
     let filtered = groups;
@@ -295,9 +318,9 @@ export function createContextService({
    * Files that do not fit are omitted as whole artifacts and reported.
    */
   const getCombinedDiff = async ({ maxBytes } = {}) => {
-    const indexed = await listFiles();
+    const indexed = await getFileIndex();
     if (indexed.status !== 'available') {
-      return { ...indexed, diff: '', truncated: false, omittedPaths: [] };
+      return { ...toSnapshotState(indexed), diff: '', truncated: false, omittedPaths: [] };
     }
     const parts = [];
     const omittedPaths = [];
@@ -336,23 +359,31 @@ export function createContextService({
   };
 
   const getSnapshotSlices = async ({ maxDiffBytes } = {}) => {
-    const snapshot = await getManifest();
-    if (snapshot.status !== 'available') return { ...snapshot, slices: null };
+    const snapshot = await getManifestRecord();
+    if (snapshot.status !== 'available') {
+      return { ...toSnapshotState(snapshot), metadata: null, slices: null };
+    }
     const [description, commits, comments, combined] = await Promise.all([
       readContextSlice(bucket, repositoryId, prNumber, 'description'),
       readContextSlice(bucket, repositoryId, prNumber, 'commits'),
       readContextSlice(bucket, repositoryId, prNumber, 'comments'),
       getCombinedDiff({ maxBytes: maxDiffBytes }),
     ]);
-    const indexed = await listFiles();
+    const indexed = await getFileIndex();
     return {
       status: 'available',
-      manifest: snapshot.manifest,
+      metadata: toPrMetadata(snapshot.manifest, {
+        repositoryFullName,
+        owner,
+        repository,
+        prNumber,
+      }),
+      gatheredAt: snapshot.manifest.gatheredAt ?? null,
       slices: {
         description,
         commits,
         comments,
-        files: indexed.files,
+        files: indexed.files.map(toChangedFileDto),
         diff: combined.diff,
       },
       diff: combined,
@@ -360,8 +391,8 @@ export function createContextService({
   };
 
   return {
-    getManifest,
-    listFiles,
+    getSnapshotState,
+    getPrMetadata,
     listChangedFiles,
     getDiff,
     getFile,
@@ -371,5 +402,39 @@ export function createContextService({
     getComments,
     getCombinedDiff,
     getSnapshotSlices,
+  };
+}
+
+function toSnapshotState(snapshot) {
+  return {
+    status: snapshot.status,
+    headSha: snapshot.manifest?.headSha ?? null,
+    gatheredAt: snapshot.manifest?.gatheredAt ?? null,
+  };
+}
+
+function toPrMetadata(manifest, { repositoryFullName, owner, repository, prNumber }) {
+  const aggregates = manifest.aggregates || {};
+  const counts = manifest.counts || {};
+  return {
+    repository: repositoryFullName || (owner && repository ? `${owner}/${repository}` : null),
+    pullRequest: prNumber,
+    title: manifest.title ?? null,
+    author: manifest.authorLogin ?? null,
+    baseSha: manifest.baseSha ?? null,
+    headSha: manifest.headSha,
+    changedFiles: Number(counts.files ?? aggregates.changedFiles) || 0,
+    additions: Number(aggregates.additions) || 0,
+    deletions: Number(aggregates.deletions) || 0,
+  };
+}
+
+function toChangedFileDto(file) {
+  return {
+    path: file.path,
+    status: file.status || 'modified',
+    additions: Number(file.additions) || 0,
+    deletions: Number(file.deletions) || 0,
+    binary: Boolean(file.binary),
   };
 }

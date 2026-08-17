@@ -9,7 +9,7 @@
  * Each handler supplies:
  *   - `command`        : name ('review') — selects the buildContextBlock layout
  *   - `systemPrompt`   : the generated system message (generated/prompts.js)
- *   - `buildUserPrompt`: ({slices, meta, manifest, maxBytes}) => user string
+ *   - `buildUserPrompt`: ({slices, meta, metadata, maxBytes}) => user string
  *   - `commentMarker`/`commentKind`/`emoji`/`promptVersion`/`doneStatus`
  *
  * The command-result write (`prCommandResultKey`) is paired with the
@@ -88,15 +88,16 @@ export async function runLlmCommand(
     github,
     owner,
     repository: name,
+    repositoryFullName: repoFullName,
     repositoryId: repoId,
     prNumber,
     expectedHeadSha: headSha,
   });
   const snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
-  const manifest = snapshot.status === 'available' ? snapshot.manifest : null;
+  const metadata = snapshot.status === 'available' ? snapshot.metadata : null;
   const storedSummary = await readPrSummary(env?.BOT_ARTIFACTS, repoId, prNumber);
   const prSummary =
-    manifest?.headSha && storedSummary?.headSha === manifest.headSha ? storedSummary.summary : null;
+    metadata?.headSha && storedSummary?.headSha === metadata.headSha ? storedSummary.summary : null;
 
   // --- Build from the committed V2 snapshot; use GitHub only as a live-diff
   // fallback when no snapshot diff is available. ---
@@ -108,14 +109,14 @@ export async function runLlmCommand(
 
   // --- No-diff guard: nothing to act on → brief notice, job succeeds. ---
   if (!diff || (typeof diff === 'string' && !diff.trim())) {
-    await publishNotice(identity, manifest, {
+    await publishNotice(identity, metadata, {
       message: `No diff could be loaded for this PR, so there is nothing to ${command}.`,
     });
     return baseReturn('no_diff', {
       repository: repoFullName,
       issue: prNumber,
       headSha,
-      contextReady: Boolean(manifest),
+      contextReady: Boolean(metadata),
       command,
     });
   }
@@ -127,7 +128,7 @@ export async function runLlmCommand(
       repo: repoFullName,
       issue: prNumber,
     });
-    await publishNotice(identity, manifest, {
+    await publishNotice(identity, metadata, {
       message:
         `LLM ${command} is not configured on this deployment (\`ZAI_API_KEY\` is unset). ` +
         'The gathered PR context is ready and will be used once the key is configured.',
@@ -136,7 +137,7 @@ export async function runLlmCommand(
       repository: repoFullName,
       issue: prNumber,
       headSha,
-      contextReady: Boolean(manifest),
+      contextReady: Boolean(metadata),
       command,
     });
   }
@@ -146,7 +147,7 @@ export async function runLlmCommand(
   const userContent = buildUserPrompt({
     slices,
     meta: { title, author },
-    manifest,
+    metadata,
     prSummary,
     maxBytes,
   });
@@ -166,7 +167,7 @@ export async function runLlmCommand(
       category,
       attempts: result.error?.attempts,
     });
-    await publishNotice(identity, manifest, {
+    await publishNotice(identity, metadata, {
       message: `The LLM ${command} could not complete (${category}). Please retry with \`/zai ${command}\`.`,
     });
     return baseReturn('llm_failed', {
@@ -213,7 +214,7 @@ export async function runLlmCommand(
     headSha,
     model,
     promptVersion,
-    contextReady: Boolean(manifest),
+    contextReady: Boolean(metadata),
     resultStored,
     usedFallback: Boolean(result.usedFallback),
     command,
@@ -247,8 +248,8 @@ async function publishResult(identity, markdown) {
 }
 
 /** Publishes a short, marker-wrapped notice (no-diff / no-key / failure). */
-async function publishNotice(identity, manifest, { message }) {
-  const summary = renderContextSummary(manifest);
+async function publishNotice(identity, metadata, { message }) {
+  const summary = renderContextSummary(metadata);
   const head = identity.headSha ? ` for \`${identity.headSha.slice(0, 7)}\`` : '';
   const lines = [`## ${identity.emoji} /zai ${identity.command}${head}`, '', message];
   if (summary) lines.push('', summary);
