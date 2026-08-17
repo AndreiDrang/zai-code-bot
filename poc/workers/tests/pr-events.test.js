@@ -130,6 +130,18 @@ describe('extractPullRequestEvent', () => {
     expect(event.repository.fullName).toBe('AndreiDrang/zai-code-bot');
   });
 
+  it('uses the explicit action argument over the payload action (webhookData.action wins)', () => {
+    const event = extractPullRequestEvent(basePayload(), 'delivery-1', 'synchronize');
+    expect(event.action).toBe('synchronize');
+  });
+
+  it('falls back to repository.owner.name when owner.login is missing', () => {
+    const payload = basePayload();
+    payload.repository = { ...payload.repository, owner: { name: 'AndreiDrang' } };
+    const event = extractPullRequestEvent(payload, 'delivery-1');
+    expect(event.repository.owner).toBe('AndreiDrang');
+  });
+
   it('returns null when the payload is incomplete', () => {
     expect(extractPullRequestEvent({}, 'delivery-1')).toBeNull();
     expect(extractPullRequestEvent(basePayload(), '')).toBeNull();

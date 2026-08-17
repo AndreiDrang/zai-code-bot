@@ -65,10 +65,26 @@ describe('planCommentsRefresh', () => {
     });
   });
 
-  it('returns null when the repository / PR identity is incomplete', () => {
+  it('returns null when any part of the identity is incomplete', () => {
+    // no owner
     expect(
-      planCommentsRefresh({ ...prCommentEvent('created'), repository: { id: 10 } }),
+      planCommentsRefresh({ ...prCommentEvent('created'), repository: { id: 10, name: 'r' } }),
     ).toBeNull();
-    expect(planCommentsRefresh(prCommentEvent('created'))).not.toBeNull();
+    // no name
+    expect(
+      planCommentsRefresh({
+        ...prCommentEvent('created'),
+        repository: { id: 10, owner: { login: 'o' } },
+      }),
+    ).toBeNull();
+    // no repoId
+    expect(
+      planCommentsRefresh({
+        ...prCommentEvent('created'),
+        repository: { name: 'r', owner: { login: 'o' } },
+      }),
+    ).toBeNull();
+    // no PR number
+    expect(planCommentsRefresh({ ...prCommentEvent('created'), issue: {} })).toBeNull();
   });
 });
