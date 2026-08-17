@@ -31,17 +31,28 @@ export default defineConfig({
 
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      // Scope coverage to the pure, unit-testable surface (shared lib + the
-      // main worker's router). Worker entry points and the stubbed heavy
-      // handlers are exercised by integration tests, not unit tests.
-      include: ['workers/shared/**/*.js', 'workers/zai-main-worker/src/router.js'],
+      // 'lcov' feeds the CI Codecov upload (./coverage/lcov.info); keep the
+      // human-facing reporters for local runs.
+      reporter: ['text', 'json', 'html', 'lcov'],
+      // Scope coverage to the unit-testable surface: the shared lib plus the
+      // main worker (entrypoint included — index.js is exercised through
+      // workers/tests/index-fetch.test.js with mocked bindings). The heavy
+      // worker's LLM handlers are exercised via mocked integration tests
+      // (queue.test.js, handlers-review-llm.test.js), not unit coverage.
+      include: ['workers/shared/**/*.js', 'workers/zai-main-worker/src/**/*.js'],
       exclude: ['workers/tests/**', '**/*.d.ts'],
+      // Per-glob thresholds. The per-glob branch rollup computes shared/ at
+      // ~84% — remaining sub-80 files (llm-command-runner, zai-client) hold
+      // defensive-only tails that v8 counts as branches; ratchet further when
+      // those are refactored.
       thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 80,
-        statements: 80,
+        'workers/shared/**': { lines: 90, functions: 90, branches: 83, statements: 90 },
+        'workers/zai-main-worker/src/**': {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
       },
     },
   },

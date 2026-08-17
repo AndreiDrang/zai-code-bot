@@ -32,9 +32,12 @@ workers/
 - Tests import modules directly (e.g. `../shared/crypto.js`) and run under
   `vitest` with miniflare (see `vitest.config.js`); `TEST_ENV` can flip to
   `node` if miniflare breaks on the current Node version.
-- Coverage thresholds (80% lines/functions/branches/statements) apply only to
-  `workers/shared/**` and `zai-main-worker/src/router.js` — handler and
-  entrypoint coverage does not gate CI.
+- Coverage applies to `workers/shared/**` and all of `zai-main-worker/src/**`
+  (entrypoint included — `index.js` is tested via
+  `workers/tests/index-fetch.test.js` with mocked bindings; `job-enqueuer.js`
+  via `workers/tests/job-enqueuer.test.js`). Per-glob thresholds in
+  `vitest.config.js`: shared 90% lines/functions/statements + 83% branches;
+  main worker 90% across all metrics.
 
 ## Validation
 
