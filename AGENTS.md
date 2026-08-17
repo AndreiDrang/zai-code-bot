@@ -83,3 +83,14 @@ npm run deploy:heavy:dry-run
 
 CI additionally runs `npm audit --audit-level=moderate`. Workspace mechanics
 (script inventory, tests, coverage) are in `poc/AGENTS.md`.
+
+<!-- okf-knowledge:start -->
+## Open Knowledge Format (OKF)
+
+- OKF knowledge bundles live in an `okf/` directory under their documentation scope.
+- Before changing a documented domain, read the nearest `okf/index.md` and the relevant concept documents.
+- Update OKF when business rules, workflows, APIs, schemas, data contracts, architecture boundaries, operational playbooks, or canonical references materially change.
+- Preserve stable Concept IDs. When moving a concept, update incoming links, directory indexes, and `okf/log.md`.
+- After changes, validate frontmatter, internal links, indexes, duplicate resources, stale source paths, and lifecycle status.
+- Use the `okf-knowledge` skill to initialize, refresh, reconcile, or audit a bundle.
+<!-- okf-knowledge:end -->
