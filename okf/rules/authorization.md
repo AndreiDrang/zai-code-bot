@@ -4,6 +4,7 @@ title: Collaborator authorization
 description: Only repository collaborators may run /zai commands.
 source_paths:
   - poc/workers/shared/auth.js
+  - poc/workers/shared/github.js
   - poc/workers/zai-main-worker/src/index.js
 confidence: observed
 status: current
@@ -26,8 +27,10 @@ The Workers policy requires collaborator status:
 | Policy | Requires collaborator status |
 | Check | `authorizeCommenter()` |
 
-The check calls GitHub's `GET /repos/{owner}/{repo}/collaborators/{username}`
-endpoint: `204` = collaborator (authorized), `404` = not (unauthorized). Other
+The check runs over the shared GitHub REST client (`shared/github.js`,
+`GitHubClient` — the transport both workers use for all GitHub API I/O)
+and calls `GET /repos/{owner}/{repo}/collaborators/{username}`:
+`204` = collaborator (authorized), `404` = not (unauthorized). Other
 HTTP errors propagate as exceptions.
 
 # Centralization

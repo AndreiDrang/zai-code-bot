@@ -6,6 +6,7 @@ source_paths:
   - poc/workers/shared/llm-command-runner.js
   - poc/workers/shared/prompts/context-policy.js
   - poc/workers/shared/prompts/review.js
+  - poc/workers/zai-heavy-worker/generated/prompts.js
   - poc/workers/zai-heavy-worker/src/handlers/review.js
   - poc/workers/zai-heavy-worker/src/handlers/describe.js
   - poc/workers/shared/zai-client.js
@@ -32,6 +33,10 @@ config → load V2 context slices → no-context guard → API-key guard
   → marker-idempotent comment
 ```
 
+The model is selected at call time: `env.ZAI_MODEL` with a `glm-5.2`
+fallback in code — both wrangler configs currently deploy `glm-5.3`, so the
+fallback is not the effective model in production.
+
 ## review — agent mode
 
 `/zai review` is an **agentic** review. The prompt carries the inexpensive
@@ -47,7 +52,10 @@ The review workflow composes three independent inputs before it reaches
 
 1. A static system prompt: reviewer methodology, shared context-retrieval
    policy, untrusted-repository-content policy, and the Markdown output
-   contract.
+   contract. The base role prompt is human-authored in
+   `prompts/review.txt`, generated into `generated/prompts.js` by
+   `scripts/generate-prompts.mjs`, and composed with the shared policies by
+   `shared/prompts/review.js`.
 2. An untrusted user message containing semantic PR metadata and the gathered
    inexpensive slices. It contains no storage keys, checksums, raw diff, or
    full source.

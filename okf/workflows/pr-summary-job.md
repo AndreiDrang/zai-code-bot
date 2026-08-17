@@ -4,6 +4,7 @@ title: PR-summary job
 description: The internal pr_summary job converts a committed V2 snapshot into validated structured JSON (pr-summary.json) used as auxiliary review context — it never posts a GitHub comment.
 source_paths:
   - poc/workers/zai-heavy-worker/src/handlers/pr-summary.js
+  - poc/workers/zai-heavy-worker/generated/prompts.js
   - poc/workers/shared/llm-context.js
   - poc/workers/shared/pr-context-reader.js
   - poc/workers/shared/storage/deliveries.js
@@ -41,9 +42,12 @@ remains the recovery path.
    job's head, return `stale`/`context_stale` without calling the model; a
    post-model re-check discards an answer whose head was superseded while the
    model ran.
-3. Call Z.ai (`glm-5.2` default) with the generated `pr-summary.txt` system
-   prompt and a fallback user prompt capped at 60 KiB when the primary
-   (≤200 KiB, repo-configurable `maxContextBytes`) prompt times out.
+3. Call Z.ai (`env.ZAI_MODEL`; both wrangler configs currently deploy
+   `glm-5.3`, with `glm-5.2` as the code fallback) with the
+   `pr-summary.txt` system prompt (human-authored in `prompts/`, generated
+   into `generated/prompts.js`) and a fallback user prompt capped at 60 KiB
+   when the primary (≤200 KiB, repo-configurable `maxContextBytes`) prompt
+   times out.
 4. **Validate the JSON strictly** — `validatePrSummary()` enforces an exact
    shape: `prSummary` (≤1500 chars), `keyChanges[]` (≤20 items, `file` ≤300 /
    `change` ≤500 chars), `conversationSummary { mainTopic | null,

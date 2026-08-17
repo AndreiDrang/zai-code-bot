@@ -10,6 +10,7 @@ source_paths:
   - poc/workers/shared/context/context-limits.js
   - poc/workers/shared/context/context-errors.js
   - poc/workers/shared/prompts/context-policy.js
+  - poc/workers/shared/github.js
 confidence: observed
 status: current
 tags:

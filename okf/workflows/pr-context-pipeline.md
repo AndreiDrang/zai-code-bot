@@ -7,6 +7,7 @@ source_paths:
   - poc/workers/shared/pr-context-reader.js
   - poc/workers/shared/pr-comments.js
   - poc/workers/shared/pr-description.js
+  - poc/workers/shared/github.js
   - poc/workers/shared/context/context-limits.js
   - poc/workers/zai-main-worker/src/pr-events.js
 confidence: observed
