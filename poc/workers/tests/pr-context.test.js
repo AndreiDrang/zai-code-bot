@@ -131,9 +131,7 @@ describe('handlePrContextJob — gather', () => {
     const bucket = {
       store,
       head: vi.fn(async (key) => (store.has(key) ? { key } : null)),
-      get: vi.fn(async (key) =>
-        store.has(key) ? { text: async () => store.get(key) } : null,
-      ),
+      get: vi.fn(async (key) => (store.has(key) ? { text: async () => store.get(key) } : null)),
       put: vi.fn((key, value) => {
         if (key === manifestKey) {
           store.set(key, value);
@@ -151,9 +149,11 @@ describe('handlePrContextJob — gather', () => {
 
     const gathering = handlePrContextJob({
       github: makeGithub({
-        getAllPrFiles: vi.fn().mockResolvedValue([
-          { filename: 'a.js', status: 'modified', patch: '@@ -1 +1 @@\n+new' },
-        ]),
+        getAllPrFiles: vi
+          .fn()
+          .mockResolvedValue([
+            { filename: 'a.js', status: 'modified', patch: '@@ -1 +1 @@\n+new' },
+          ]),
       }),
       env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
       db: {},
