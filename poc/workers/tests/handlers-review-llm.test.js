@@ -353,6 +353,54 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     });
   });
 
+  it('returns every result from concurrent tool calls in the next agent request', async () => {
+    mocks.chat
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call-diff',
+                type: 'function',
+                function: { name: 'get_diff', arguments: '{"path":"a/f"}' },
+              },
+              {
+                id: 'call-comments',
+                type: 'function',
+                function: { name: 'get_comments', arguments: '{}' },
+              },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { message: { role: 'assistant', content: '## Summary\nChecked context.' } },
+      });
+
+    await expect(
+      handleReviewCommand({ github: makeGithub(), env: makeEnv(), db: {}, job, runId: 'run-1' }),
+    ).resolves.toMatchObject({ status: 'reviewed', agentIterations: 1, agentToolCalls: 2 });
+
+    const secondRequest = mocks.chat.mock.calls[1][0].messages;
+    const toolMessages = secondRequest.filter((message) => message.role === 'tool');
+    expect(toolMessages.map((message) => message.tool_call_id)).toEqual([
+      'call-diff',
+      'call-comments',
+    ]);
+    expect(JSON.parse(toolMessages[0].content)).toMatchObject({
+      ok: true,
+      data: { path: 'a/f', diff: '@@ -1 +1 @@\n+line' },
+    });
+    expect(JSON.parse(toolMessages[1].content)).toMatchObject({
+      ok: true,
+      data: { comments: [] },
+    });
+  });
+
   it('includes a stored PR summary when it matches the snapshot head', async () => {
     mocks.chat.mockResolvedValue({
       success: true,
