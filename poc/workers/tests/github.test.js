@@ -145,6 +145,25 @@ describe('shared/github (GitHubClient)', () => {
       expect(url).toContain('per_page=50');
     });
 
+    it('getAllPrFiles follows every page until GitHub returns a short page', async () => {
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        filename: `a-${index}.js`,
+      }));
+      const secondPage = [{ filename: 'b.js' }];
+      const getPrFiles = vi
+        .spyOn(client, 'getPrFiles')
+        .mockResolvedValueOnce(firstPage)
+        .mockResolvedValueOnce(secondPage);
+
+      await expect(client.getAllPrFiles('o', 'r', 7)).resolves.toEqual([
+        ...firstPage,
+        ...secondPage,
+      ]);
+      expect(getPrFiles).toHaveBeenNthCalledWith(1, 'o', 'r', 7, 1, 100);
+      expect(getPrFiles).toHaveBeenNthCalledWith(2, 'o', 'r', 7, 2, 100);
+      expect(getPrFiles).toHaveBeenCalledTimes(2);
+    });
+
     it('getFileContent requests raw content and returns text', async () => {
       fetchSpy.mockResolvedValue(new Response('file body', { status: 200 }));
       const result = await client.getFileContent('o', 'r', 'src/a.js', 'abc');

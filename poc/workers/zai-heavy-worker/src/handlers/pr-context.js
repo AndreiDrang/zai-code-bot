@@ -1,5 +1,4 @@
 import { prContextDiffKey, prContextKey, prCardKey } from '../../../shared/storage/keys.js';
-import { getRepositoryConfig } from '../../../shared/storage/config.js';
 import { createLogger } from '../../../shared/logging.js';
 import { projectComments } from '../../../shared/pr-comments.js';
 import { createPrSummaryJob } from '../../../shared/storage/deliveries.js';
@@ -45,8 +44,6 @@ export async function handlePrContextJob({ github, env, db, job }) {
     };
   }
 
-  const config = await getRepositoryConfig(db, cache, repoId);
-  const maxFiles = Math.max(1, Number(config.maxFiles) || 100);
   const owner = job.repository_owner;
   const name = job.repository_name;
 
@@ -54,7 +51,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
   // abort the gather (the manifest records what was actually captured).
   const [pullRequest, filesPage, commits, comments] = await Promise.all([
     github.getPullRequest(owner, name, prNumber).catch(() => null),
-    github.getPrFiles(owner, name, prNumber, 1, Math.min(maxFiles, 100)).catch(() => []),
+    github.getAllPrFiles(owner, name, prNumber).catch(() => []),
     github.getPrCommits(owner, name, prNumber, 1, COMMIT_CAP).catch(() => []),
     github
       .getPrComments(owner, name, prNumber, { maxComments: 100 })
@@ -89,7 +86,7 @@ export async function handlePrContextJob({ github, env, db, job }) {
   // (shared/pr-comments.js), so the gather and the issue_comment refresh never
   // drift in the stored slice shape. Includes `updated_at` so edits are visible.
   const commentsPayload = projectComments(comments);
-  const diffArtifacts = await buildDiffArtifacts(rawFiles.slice(0, maxFiles), repoId, prNumber);
+  const diffArtifacts = await buildDiffArtifacts(rawFiles, repoId, prNumber);
 
   const aggregates = aggregateFiles(diffArtifacts.files);
   const gatheredAt = new Date().toISOString();

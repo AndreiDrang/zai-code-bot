@@ -1,14 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../shared/storage/config.js', () => ({
-  getRepositoryConfig: vi.fn().mockResolvedValue({
-    enabled: true,
-    autoPreview: true,
-    maxFiles: 100,
-    maxContextBytes: 200000,
-  }),
-}));
-
 import { handlePrContextJob } from '../zai-heavy-worker/src/handlers/pr-context.js';
 import { prContextDiffKey, prContextKey, prCardKey } from '../shared/storage/keys.js';
 
@@ -70,7 +61,7 @@ function makeGithub(overrides = {}) {
       deletions: 2,
       head: { sha: 'abc' },
     }),
-    getPrFiles: vi.fn().mockResolvedValue([
+    getAllPrFiles: vi.fn().mockResolvedValue([
       { filename: 'a.js', status: 'modified', additions: 5, deletions: 1, changes: 6 },
       { filename: 'b.js', status: 'added', additions: 5, deletions: 1, changes: 6 },
     ]),
@@ -239,11 +230,37 @@ describe('handlePrContextJob — gather', () => {
     expect([...bucket.store.keys()]).not.toContain('v2/prs/10/7/context/diff.diff');
   });
 
+  it('indexes every changed file returned by paginated GitHub retrieval', async () => {
+    const bucket = fakeR2();
+    const allFiles = Array.from({ length: 101 }, (_, index) => ({
+      filename: `src/file-${index}.js`,
+      status: 'modified',
+      additions: 1,
+      deletions: 0,
+      changes: 1,
+    }));
+    const github = makeGithub({
+      getAllPrFiles: vi.fn().mockResolvedValue(allFiles),
+    });
+
+    await handlePrContextJob({
+      github,
+      env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
+      db: {},
+      job: baseJob,
+    });
+
+    expect(github.getAllPrFiles).toHaveBeenCalledWith('o', 'r', 7);
+    const files = parseJson(bucket.store.get(prContextKey(10, 7, 'files')));
+    expect(files).toHaveLength(101);
+    expect(files.at(-1)).toMatchObject({ path: 'src/file-100.js' });
+  });
+
   it('degrades gracefully when a context slice fails', async () => {
     const bucket = fakeR2();
     const res = await handlePrContextJob({
       github: makeGithub({
-        getPrFiles: vi.fn().mockRejectedValue(new Error('rate limit')),
+        getAllPrFiles: vi.fn().mockRejectedValue(new Error('rate limit')),
         getPrDiff: vi.fn().mockRejectedValue(new Error('rate limit')),
       }),
       env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
@@ -260,7 +277,7 @@ describe('handlePrContextJob — gather', () => {
   it('stores each changed-file patch without fetching an aggregate unified diff', async () => {
     const bucket = fakeR2();
     const github = makeGithub({
-      getPrFiles: vi.fn().mockResolvedValue([
+      getAllPrFiles: vi.fn().mockResolvedValue([
         {
           filename: 'a.js',
           status: 'modified',
@@ -306,7 +323,7 @@ describe('handlePrContextJob — gather', () => {
   it('marks a binary or unavailable patch explicitly instead of silently truncating it', async () => {
     const bucket = fakeR2();
     const github = makeGithub({
-      getPrFiles: vi.fn().mockResolvedValue([
+      getAllPrFiles: vi.fn().mockResolvedValue([
         {
           filename: 'assets/logo.png',
           status: 'modified',

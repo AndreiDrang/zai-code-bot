@@ -128,6 +128,26 @@ export class GitHubClient {
     );
   }
 
+  /**
+   * All changed files available from GitHub's PR-files endpoint.
+   *
+   * GitHub returns at most 100 files per page. Snapshot gathering must preserve
+   * the full PR delta, so callers must not use a single `getPrFiles` page as
+   * the complete file index. GitHub itself documents a 3,000-file ceiling for
+   * this endpoint; this method retrieves every page the endpoint exposes.
+   */
+  async getAllPrFiles(owner, repo, prNumber) {
+    const files = [];
+    const perPage = 100;
+
+    for (let page = 1; ; page += 1) {
+      const result = await this.getPrFiles(owner, repo, prNumber, page, perPage);
+      const currentPage = Array.isArray(result) ? result : [];
+      files.push(...currentPage);
+      if (currentPage.length < perPage) return files;
+    }
+  }
+
   /** Raw unified diff of a PR (Accept: GitHub diff media type). */
   getPrDiff(owner, repo, prNumber) {
     return this.request('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`, null, {
