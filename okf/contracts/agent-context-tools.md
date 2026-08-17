@@ -9,6 +9,7 @@ source_paths:
   - poc/workers/shared/context/context-service.js
   - poc/workers/shared/context/context-limits.js
   - poc/workers/shared/context/context-errors.js
+  - poc/workers/shared/prompts/context-policy.js
 confidence: observed
 status: current
 tags:
@@ -74,3 +75,11 @@ tool messages the model can react to.
 - Reads the snapshot written by the
   [PR-context gather pipeline](/workflows/pr-context-pipeline.md);
   `get_file`/`get_file_range` are the only live-GitHub readers.
+
+# LLM-facing descriptions
+
+  Tool definitions state each tool's semantic purpose, when it is useful, and
+  when a narrower or different tool is preferable. They do not expose R2/D1/KV,
+  artifact keys, checksums, or provider implementation. Shared retrieval policy
+  belongs in the workflow's system prompt, while a definition gives only local
+  guidance for that tool.

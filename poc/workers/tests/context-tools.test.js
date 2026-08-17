@@ -21,6 +21,19 @@ describe('Context Tools', () => {
     );
   });
 
+  it('describes semantic tool use without exposing storage implementation', () => {
+    const definitions = getContextToolDefinitions();
+    const diff = definitions.find((tool) => tool.name === 'get_diff');
+    const file = definitions.find((tool) => tool.name === 'get_file');
+    const range = definitions.find((tool) => tool.name === 'get_file_range');
+
+    expect(diff.description).toContain('changed by this pull request');
+    expect(diff.description).toContain('Do not use it for unchanged files');
+    expect(file.description).toContain('Prefer get_file_range');
+    expect(range.input_schema.properties.startLine.description).toContain('1-based inclusive');
+    expect(JSON.stringify(definitions)).not.toMatch(/\b(R2|D1|KV|storage key)\b/i);
+  });
+
   it('delegates tools to Context Service without an R2 binding', async () => {
     const context = {
       listChangedFiles: vi.fn().mockResolvedValue({ status: 'available', files: [] }),

@@ -6,6 +6,10 @@
 - **Create**: [LLM command execution](/workflows/llm-command-execution.md) — the shared `runLlmCommand` lifecycle: guards, direct/agent Z.ai call, `/context/{command}.md` result persistence, marker-idempotent publication. Previously this knowledge was spread across command routing and comment publication.
 - **Create**: [Agent context tools](/contracts/agent-context-tools.md) — the seven read-only LLM tools (list_changed_files, get_diff, get_file, get_file_range, get_description, get_commits, get_comments) over the immutable V2 snapshot, served through the Context Service DTO layer.
 - **Create**: [Agent tool-calling loop](/contracts/agent-runner.md) — the bounded provider-neutral runner (10 iterations / 30 tool calls / 120 s) with protocol validation and safe tool errors.
+- **Update**: Review prompt composition now separates the static review and
+  context-retrieval policy, the untrusted PR-specific initial context, and
+  tool-local descriptions. Repository content is explicitly untrusted; raw
+  storage implementation details never reach the model.
 - **Update**: Rewrote [PR-context gather pipeline](/workflows/pr-context-pipeline.md) for the V2 storage redesign — per-file `diffs/` patches under `v2/prs/`, 1 MiB/file + 20 MiB snapshot budgets with explicit skip reasons, manifest-as-commit-marker, four-point stale-head rejection, and pr_summary scheduling.
 - **Update**: [Storage authority model](/architecture/storage-authority-model.md) now describes the V2 context tier (including command results and pr-summary.json under the context prefix), the independent `PR_CONTEXT_STORAGE_VERSION`, and the Context Service as the sole application reader.
 - **Update**: [D1 storage schema](/datasets/d1-storage-schema.md) — migrations 0002 (command surface) and 0003 (pr_summary) were added after the single-migration consolidation; documented the CHECK-constraint rebuild pattern.
