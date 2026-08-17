@@ -1,6 +1,6 @@
 /**
  * Tool adapters intentionally receive Context Service, never an R2 binding.
- * They are provider-agnostic and are not yet registered with the LLM client.
+ * They are provider-agnostic; AgentRunner adapts their schemas for Z.ai.
  */
 export async function listFilesTool(args, context) {
   return context.listChangedFiles(args);

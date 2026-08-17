@@ -37,9 +37,17 @@ const DIFF_WRAPPER_OVERHEAD = 40;
  * @param {number} [opts.budgetBytes=200000] - total soft cap for the block
  * @param {Object} [opts.meta] - optional { title, author } prepended as a header
  * @param {Object} [opts.summary] - previously generated summary for review context
+ * @param {boolean} [opts.includeDiff=true] - whether to eagerly render the diff
  * @returns {string} Markdown block (may be shorter than budget; never throws)
  */
-export function buildContextBlock({ slices, command, budgetBytes = 200000, meta, summary } = {}) {
+export function buildContextBlock({
+  slices,
+  command,
+  budgetBytes = 200000,
+  meta,
+  summary,
+  includeDiff = true,
+} = {}) {
   const layout = LAYOUTS[command];
   if (!layout) {
     throw new Error(`buildContextBlock: no layout for command "${command}"`);
@@ -71,9 +79,11 @@ export function buildContextBlock({ slices, command, budgetBytes = 200000, meta,
   // Diff is rendered last and absorbs the remaining budget. The diff wrapper
   // (`## Diff\n\n```diff\n…\n````) adds fixed markdown overhead the cap must
   // reserve for so the final block stays under budgetBytes.
-  const overhead = parts.join('\n\n').length;
-  const diffCap = Math.max(2000, budgetBytes - overhead - DIFF_WRAPPER_OVERHEAD);
-  parts.push(renderDiff(s.diff, diffCap));
+  if (includeDiff) {
+    const overhead = parts.join('\n\n').length;
+    const diffCap = Math.max(2000, budgetBytes - overhead - DIFF_WRAPPER_OVERHEAD);
+    parts.push(renderDiff(s.diff, diffCap));
+  }
 
   return parts.filter(Boolean).join('\n\n');
 }

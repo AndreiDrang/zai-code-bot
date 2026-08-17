@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { executeContextTool, getContextToolDefinitions } from '../shared/context-tools/registry.js';
+import {
+  createContextToolRegistry,
+  executeContextTool,
+  getContextToolDefinitions,
+  toOpenAiToolDefinitions,
+} from '../shared/context-tools/registry.js';
 
 describe('Context Tools', () => {
   it('exposes provider-agnostic schemas', () => {
@@ -74,5 +79,23 @@ describe('Context Tools', () => {
     await expect(
       executeContextTool('get_diff', { path: 'src/cache.ts', extra: true }, context),
     ).rejects.toThrow('Unknown argument for get_diff: extra');
+  });
+
+  it('binds a Context Service once and adapts schemas for the Z.ai tool protocol', async () => {
+    const context = { getDescription: vi.fn().mockResolvedValue({ body: 'description' }) };
+    const registry = createContextToolRegistry(context);
+
+    await expect(registry.execute('get_description', {})).resolves.toEqual({ body: 'description' });
+    expect(toOpenAiToolDefinitions(registry.getDefinitions())).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'function',
+          function: expect.objectContaining({
+            name: 'get_diff',
+            parameters: expect.objectContaining({ type: 'object' }),
+          }),
+        }),
+      ]),
+    );
   });
 });

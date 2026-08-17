@@ -103,6 +103,19 @@ describe('buildContextBlock (review layout)', () => {
     expect(block).not.toContain('## Changed files');
   });
 
+  it('can retain all inexpensive review context while deferring the diff to tools', () => {
+    const block = buildContextBlock({
+      slices,
+      command: 'review',
+      includeDiff: false,
+    });
+    expect(block).toContain('## Description');
+    expect(block).toContain('## Commits (2)');
+    expect(block).toContain('## Conversation');
+    expect(block).toContain('## Changed files (2)');
+    expect(block).not.toContain('## Diff');
+  });
+
   it('returns an empty-ish block when no slices are present', () => {
     const block = buildContextBlock({ slices: {}, command: 'review' });
     expect(block.trim()).toBe('');

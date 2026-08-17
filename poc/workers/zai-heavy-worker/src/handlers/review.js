@@ -8,9 +8,9 @@
  * (generated/prompts.js, built from prompts/review.txt) and the response-format
  * instructions appended after the shared context block.
  *
- * Review now sends the FULL gathered context to the model: diff (primary), plus
- * commits, conversation (issue + review comments), description, and the changed
- * file list (shared/llm-context.js → buildContextBlock, command:'review').
+ * Review sends the full inexpensive context to the model: commits, conversation
+ * (issue + review comments), description, and the changed-file list. Individual
+ * diffs and source files are fetched lazily through Context Tools.
  *
  * The LLM result is stored at `v2/prs/{repo}/{pr}/context/review.md` (overwrite,
  * one object per command) — the per-PR "latest review". Its reader is
@@ -42,24 +42,28 @@ export async function handleReviewCommand(ctx) {
     emoji: '🔍',
     promptVersion: PROMPT_VERSION,
     doneStatus: 'reviewed',
+    agentTools: true,
   });
 }
 
 /**
- * Builds the review user prompt: the shared context block (all 5 slices, diff
- * primary) followed by the response-format instructions. The runner calls this
- * with the freshly loaded slices + meta.
+ * Builds the review user prompt: the inexpensive snapshot context followed by
+ * response-format instructions. The AgentRunner supplies tools for large diff
+ * and source artifacts.
  */
-function buildReviewUserPrompt({ slices, meta, metadata, prSummary, maxBytes }) {
+function buildReviewUserPrompt({ slices, meta, metadata, prSummary, maxBytes, includeDiff }) {
   const context = buildContextBlock({
     slices,
     command: 'review',
     budgetBytes: maxBytes,
     meta,
     summary: prSummary,
+    includeDiff,
   });
   return [
     'Review the following pull request.',
+    'The pull request metadata, description, commits, comments, and changed-file map are provided below.',
+    'Use the available tools to inspect a specific diff or repository file before reporting a concrete finding.',
     '',
     'Pull request metadata:',
     '```json',

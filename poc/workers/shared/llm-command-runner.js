@@ -2,8 +2,8 @@
  * Shared lifecycle runner for the review LLM command. Encapsulates the durable
  * queue pipeline so the handler shrinks to its prompt + identity:
  *
- *   config → load V2 context slices (live diff fallback) → no-diff guard
- *     → API-key guard → system+user prompt → Z.ai → persist result to
+ *   config → load V2 context slices → no-context guard → API-key guard
+ *     → system+user prompt → Z.ai / AgentRunner → persist result to
  *     `/context/{command}.md` (overwrite) → marker-idempotent comment.
  *
  * Each handler supplies:
@@ -23,6 +23,8 @@ import { createLogger } from './logging.js';
 import { resolveSecretValue } from './secrets.js';
 import { readPrSummary, renderContextSummary } from './pr-context-reader.js';
 import { createContextService } from './context/context-service.js';
+import { createContextToolRegistry, toOpenAiToolDefinitions } from './context-tools/registry.js';
+import { createAgentRunner } from './agent/runner.js';
 import { getRepositoryConfig } from './storage/config.js';
 import { prCommandResultKey } from './storage/keys.js';
 import { upsertComment } from './comments.js';
@@ -51,6 +53,7 @@ export async function runLlmCommand(
     emoji,
     promptVersion,
     doneStatus,
+    agentTools = false,
   },
 ) {
   const logger = createLogger(env, `zai-heavy-worker:${command}`);
@@ -93,7 +96,10 @@ export async function runLlmCommand(
     prNumber,
     expectedHeadSha: headSha,
   });
-  const snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
+  const snapshot = await context.getSnapshotSlices({
+    maxDiffBytes: maxBytes,
+    includeDiff: !agentTools,
+  });
   const metadata = snapshot.status === 'available' ? snapshot.metadata : null;
   const storedSummary = await readPrSummary(env?.BOT_ARTIFACTS, repoId, prNumber);
   const prSummary =
@@ -102,13 +108,16 @@ export async function runLlmCommand(
   // --- Build from the committed V2 snapshot; use GitHub only as a live-diff
   // fallback when no snapshot diff is available. ---
   let { diff, description, files, commits, comments } = snapshot.slices || {};
-  if (!diff || (typeof diff === 'string' && !diff.trim())) {
+  if (!agentTools && (!diff || (typeof diff === 'string' && !diff.trim()))) {
     diff = await github.getPrDiff(owner, name, prNumber).catch(() => '');
   }
   const slices = { diff, description, files, commits, comments };
 
   // --- No-diff guard: nothing to act on → brief notice, job succeeds. ---
-  if (!diff || (typeof diff === 'string' && !diff.trim())) {
+  const hasReviewableContext = agentTools
+    ? Array.isArray(files) && files.length > 0
+    : typeof diff === 'string' && Boolean(diff.trim());
+  if (!hasReviewableContext) {
     await publishNotice(identity, metadata, {
       message: `No diff could be loaded for this PR, so there is nothing to ${command}.`,
     });
@@ -150,13 +159,24 @@ export async function runLlmCommand(
     metadata,
     prSummary,
     maxBytes,
+    includeDiff: !agentTools,
   });
   const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userContent },
   ];
   const client = createZaiClient({ timeout: 30000, maxRetries: 3, baseDelay: 2000 });
-  const result = await client.call({ apiKey, model, messages });
+  const result = agentTools
+    ? await runAgentCommand({
+        apiKey,
+        client,
+        context,
+        logger,
+        messages,
+        model,
+        runId,
+      })
+    : await client.call({ apiKey, model, messages });
 
   if (!result.success) {
     const category = result.error?.category || 'internal';
@@ -217,6 +237,8 @@ export async function runLlmCommand(
     contextReady: Boolean(metadata),
     resultStored,
     usedFallback: Boolean(result.usedFallback),
+    agentIterations: result.agent?.iterations ?? null,
+    agentToolCalls: result.agent?.toolCalls ?? null,
     command,
   });
 }
@@ -227,6 +249,46 @@ export async function runLlmCommand(
 
 function baseReturn(status, rest) {
   return { status, ...rest };
+}
+
+async function runAgentCommand({ apiKey, client, context, logger, messages, model, runId }) {
+  const toolRegistry = createContextToolRegistry(context);
+  const runner = createAgentRunner({
+    llmClient: client,
+    toolRegistry,
+    logger,
+  });
+  try {
+    const agent = await runner.run({
+      apiKey,
+      model,
+      messages,
+      tools: toOpenAiToolDefinitions(toolRegistry.getDefinitions()),
+      runId,
+    });
+    if (agent.status !== 'completed') {
+      return {
+        success: false,
+        error: {
+          category: agent.status === 'failed' ? agent.error?.category || 'provider' : agent.status,
+          attempts: null,
+        },
+        agent,
+      };
+    }
+    return {
+      success: true,
+      data: agent.response.content,
+      usedFallback: false,
+      agent,
+    };
+  } catch (error) {
+    logger.error('Agent run failed', { runId, errorCode: 'agent_internal' });
+    return {
+      success: false,
+      error: { category: 'agent_internal', attempts: null },
+    };
+  }
 }
 
 /** Publishes the LLM result as a marker-idempotent comment. */

@@ -23,6 +23,31 @@ export function getContextToolDefinitions() {
   return CONTEXT_TOOL_SCHEMAS;
 }
 
+/**
+ * Binds the generic Context Tool definitions to one immutable PR context.
+ * AgentRunner depends only on this narrow execute() contract.
+ */
+export function createContextToolRegistry(context) {
+  return {
+    getDefinitions: getContextToolDefinitions,
+    execute(name, args) {
+      return executeContextTool(name, args, context);
+    },
+  };
+}
+
+/** Converts provider-neutral Context Tool schemas to OpenAI-compatible tools. */
+export function toOpenAiToolDefinitions(definitions = CONTEXT_TOOL_SCHEMAS) {
+  return definitions.map((definition) => ({
+    type: 'function',
+    function: {
+      name: definition.name,
+      description: definition.description,
+      parameters: definition.input_schema,
+    },
+  }));
+}
+
 function validateArguments(name, args) {
   const schema = CONTEXT_TOOL_SCHEMAS.find((entry) => entry.name === name);
   if (!schema) throw new TypeError(`Unknown context tool: ${name}`);

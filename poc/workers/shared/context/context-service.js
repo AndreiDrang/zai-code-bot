@@ -358,7 +358,7 @@ export function createContextService({
     };
   };
 
-  const getSnapshotSlices = async ({ maxDiffBytes } = {}) => {
+  const getSnapshotSlices = async ({ maxDiffBytes, includeDiff = true } = {}) => {
     const snapshot = await getManifestRecord();
     if (snapshot.status !== 'available') {
       return { ...toSnapshotState(snapshot), metadata: null, slices: null };
@@ -367,7 +367,9 @@ export function createContextService({
       readContextSlice(bucket, repositoryId, prNumber, 'description'),
       readContextSlice(bucket, repositoryId, prNumber, 'commits'),
       readContextSlice(bucket, repositoryId, prNumber, 'comments'),
-      getCombinedDiff({ maxBytes: maxDiffBytes }),
+      includeDiff
+        ? getCombinedDiff({ maxBytes: maxDiffBytes })
+        : Promise.resolve({ status: 'not_requested', diff: '', bytes: 0, truncated: false }),
     ]);
     const indexed = await getFileIndex();
     return {

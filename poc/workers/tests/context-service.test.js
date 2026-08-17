@@ -160,6 +160,26 @@ describe('Context Service', () => {
     });
   });
 
+  it('can load the initial metadata slices without reading any patch artifact', async () => {
+    const { objects, patchKey } = createSnapshot();
+    const bucket = fakeBucket(objects);
+    const context = createContextService({
+      bucket,
+      repositoryId: 10,
+      prNumber: 7,
+      expectedHeadSha: 'abc',
+    });
+
+    const snapshot = await context.getSnapshotSlices({ includeDiff: false });
+
+    expect(snapshot).toMatchObject({
+      status: 'available',
+      slices: { diff: '' },
+      diff: { status: 'not_requested', bytes: 0 },
+    });
+    expect(bucket.get).not.toHaveBeenCalledWith(patchKey);
+  });
+
   it('does not expose a snapshot for a different head SHA', async () => {
     const { objects } = createSnapshot();
     const context = createContextService({

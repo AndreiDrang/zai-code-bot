@@ -6,13 +6,14 @@ import { REVIEW_MARKER } from '../shared/constants.js';
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   call: vi.fn(),
+  chat: vi.fn(),
   upsertComment: vi.fn(),
   getRepositoryConfig: vi.fn(),
 }));
 
 vi.mock('../shared/logging.js', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../shared/zai-client.js', () => ({
-  createZaiClient: () => ({ call: mocks.call, config: {} }),
+  createZaiClient: () => ({ call: mocks.call, chat: mocks.chat, config: {} }),
 }));
 vi.mock('../shared/comments.js', () => ({ upsertComment: mocks.upsertComment }));
 vi.mock('../shared/storage/config.js', () => ({ getRepositoryConfig: mocks.getRepositoryConfig }));
@@ -131,6 +132,7 @@ function makeGithub() {
 
 beforeEach(() => {
   mocks.call.mockReset();
+  mocks.chat.mockReset();
   mocks.upsertComment.mockReset();
   mocks.getRepositoryConfig.mockReset();
   mocks.getRepositoryConfig.mockResolvedValue({ maxContextBytes: 200000, maxFiles: 100 });
@@ -139,7 +141,10 @@ beforeEach(() => {
 
 describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
   it('reviews, persists the result to /context/review.md, and publishes a comment', async () => {
-    mocks.call.mockResolvedValue({ success: true, data: '## Summary\nGood.' });
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: '## Summary\nGood.' } },
+    });
     const env = makeEnv();
     const res = await handleReviewCommand({
       github: makeGithub(),
@@ -150,7 +155,7 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     });
 
     expect(res).toMatchObject({ status: 'reviewed', resultStored: true, headSha: HEAD });
-    expect(mocks.call).toHaveBeenCalledOnce();
+    expect(mocks.chat).toHaveBeenCalledOnce();
 
     // The result is written to the per-command /context/ key (overwrite store).
     const expectedKey = prCommandResultKey(REPO_ID, PR, 'review');
@@ -173,11 +178,15 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(upsertArg.body).toContain(REVIEW_MARKER);
   });
 
-  it('sends the full context (commits + comments) to the LLM, not just the diff', async () => {
-    mocks.call.mockResolvedValue({ success: true, data: 'ok' });
+  it('sends complete inexpensive PR context and tool schemas, without the aggregate diff', async () => {
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: 'ok' } },
+    });
     await handleReviewCommand({ github: makeGithub(), env: makeEnv(), db: {}, job, runId: 'r' });
-    const userPrompt = mocks.call.mock.calls[0][0].messages[1].content;
-    expect(userPrompt).toContain('## Diff');
+    const request = mocks.chat.mock.calls[0][0];
+    const userPrompt = request.messages[1].content;
+    expect(userPrompt).not.toContain('## Diff');
     expect(userPrompt).toContain('## Commits (1)');
     expect(userPrompt).toContain('`cccc111` Add feature — author');
     expect(userPrompt).toContain('## Description');
@@ -188,6 +197,14 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(userPrompt).not.toContain('contextPrefix');
     expect(userPrompt).not.toContain('diffsPrefix');
     expect(userPrompt).not.toContain('storedDiffBytes');
+    expect(request.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'function',
+          function: expect.objectContaining({ name: 'get_diff' }),
+        }),
+      ]),
+    );
   });
 
   it('posts a "not configured" notice and skips the LLM when ZAI_API_KEY is unset', async () => {
@@ -199,7 +216,7 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       runId: 'run-1',
     });
     expect(res.status).toBe('no_api_key');
-    expect(mocks.call).not.toHaveBeenCalled();
+    expect(mocks.chat).not.toHaveBeenCalled();
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
     expect(mocks.upsertComment.mock.calls[0][0].body).toContain('not configured');
   });
@@ -207,16 +224,19 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
   it('posts a "no diff" notice when no diff can be loaded', async () => {
     const github = makeGithub();
     github.getPrDiff.mockResolvedValue(''); // live fallback empty too
-    const env = makeEnv({ withDiff: false });
+    const env = makeEnv({ withDiff: false, withFiles: false });
     const res = await handleReviewCommand({ github, env, db: {}, job, runId: 'run-1' });
     expect(res.status).toBe('no_diff');
-    expect(mocks.call).not.toHaveBeenCalled();
+    expect(mocks.chat).not.toHaveBeenCalled();
     expect(env.BOT_ARTIFACTS.put).not.toHaveBeenCalled();
     expect(mocks.upsertComment.mock.calls[0][0].body).toContain('nothing to review');
   });
 
-  it('falls back to a live getPrDiff when the gathered diff slice is missing', async () => {
-    mocks.call.mockResolvedValue({ success: true, data: 'ok' });
+  it('does not fetch a full live diff when a patch is unavailable in the snapshot', async () => {
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: 'ok' } },
+    });
     const github = makeGithub();
     github.getPrDiff.mockResolvedValue('live diff content');
     const res = await handleReviewCommand({
@@ -227,12 +247,12 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       runId: 'run-1',
     });
     expect(res.status).toBe('reviewed');
-    expect(github.getPrDiff).toHaveBeenCalledWith('o', 'r', PR);
-    expect(mocks.call.mock.calls[0][0].messages[1].content).toContain('live diff content');
+    expect(github.getPrDiff).not.toHaveBeenCalled();
+    expect(mocks.chat.mock.calls[0][0].messages[1].content).not.toContain('live diff content');
   });
 
   it('posts a sanitized failure notice (no throw, job succeeds) when the LLM fails', async () => {
-    mocks.call.mockResolvedValue({
+    mocks.chat.mockResolvedValue({
       success: false,
       error: { category: 'provider', retryable: true, attempts: 3 },
     });
@@ -251,7 +271,10 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
   });
 
   it('still publishes the review even if result persistence (bucket.put) throws', async () => {
-    mocks.call.mockResolvedValue({ success: true, data: '## Summary\nGood.' });
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: '## Summary\nGood.' } },
+    });
     const env = makeEnv();
     env.BOT_ARTIFACTS.put.mockRejectedValue(new Error('r2 down'));
     const res = await handleReviewCommand({
@@ -264,5 +287,42 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(res.status).toBe('reviewed');
     expect(res.resultStored).toBe(false); // persist failed -> false, but comment still posted
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
+  });
+
+  it('lets the model inspect an individual patch before it writes the review', async () => {
+    mocks.chat
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call-diff',
+                type: 'function',
+                function: { name: 'get_diff', arguments: '{"path":"a/f"}' },
+              },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { message: { role: 'assistant', content: '## Summary\nChecked patch.' } },
+      });
+    const env = makeEnv();
+
+    await expect(
+      handleReviewCommand({ github: makeGithub(), env, db: {}, job, runId: 'run-1' }),
+    ).resolves.toMatchObject({ status: 'reviewed', agentIterations: 1, agentToolCalls: 1 });
+
+    const secondRequest = mocks.chat.mock.calls[1][0].messages;
+    const toolMessage = secondRequest.find((message) => message.role === 'tool');
+    expect(toolMessage.tool_call_id).toBe('call-diff');
+    expect(JSON.parse(toolMessage.content)).toMatchObject({
+      ok: true,
+      data: { diff: '@@ -1 +1 @@\n+line' },
+    });
   });
 });
