@@ -1,0 +1,204 @@
+import { AgentProtocolError, toSafeToolError } from './errors.js';
+import { resolveAgentLimits } from './limits.js';
+
+export function createAgentRunner({
+  llmClient,
+  toolRegistry,
+  logger,
+  limits,
+  now = () => Date.now(),
+}) {
+  if (!llmClient?.chat) throw new TypeError('AgentRunner requires an llmClient with chat()');
+  if (!toolRegistry?.execute)
+    throw new TypeError('AgentRunner requires a toolRegistry with execute()');
+
+  const resolvedLimits = resolveAgentLimits(limits);
+
+  async function run({ apiKey, model, messages, tools, runId }) {
+    const conversation = Array.isArray(messages) ? [...messages] : [];
+    const startedAt = now();
+    let iterations = 0;
+    let toolCalls = 0;
+    let usage = null;
+
+    while (true) {
+      const remainingMs = resolvedLimits.maxRunDurationMs - (now() - startedAt);
+      if (remainingMs <= 0) {
+        return buildResult('timed_out');
+      }
+
+      let response;
+      try {
+        response = await llmClient.chat({
+          apiKey,
+          model,
+          // The client/mock must observe this iteration's immutable message
+          // sequence, not the array that is extended after tool execution.
+          messages: [...conversation],
+          tools,
+          timeoutMs: Math.min(remainingMs, resolvedLimits.maxLlmRequestDurationMs),
+        });
+      } catch {
+        return buildResult('failed', { error: { category: 'provider' } });
+      }
+      if (!response || typeof response !== 'object') {
+        return buildResult('failed', {
+          error: { category: 'protocol', code: 'AGENT_PROTOCOL_ERROR' },
+        });
+      }
+      if (!response.success) {
+        return buildResult('failed', { error: response.error || { category: 'provider' } });
+      }
+
+      const assistant = response.data?.message;
+      usage = response.data?.usage || usage;
+      try {
+        validateAssistantMessage(assistant);
+        validateToolCalls(assistant.tool_calls || []);
+      } catch (error) {
+        return buildResult('failed', {
+          error: {
+            category: 'protocol',
+            code: error?.code || 'AGENT_PROTOCOL_ERROR',
+          },
+        });
+      }
+      const calls = assistant.tool_calls || [];
+
+      if (!calls.length) {
+        conversation.push(assistant);
+        return buildResult('completed', { response: assistant });
+      }
+
+      if (calls.length > resolvedLimits.maxToolCallsPerIteration) {
+        return buildResult('max_tool_calls');
+      }
+      if (toolCalls + calls.length > resolvedLimits.maxToolCalls) {
+        return buildResult('max_tool_calls');
+      }
+      if (iterations >= resolvedLimits.maxIterations) {
+        return buildResult('max_iterations');
+      }
+
+      iterations += 1;
+      toolCalls += calls.length;
+      conversation.push(assistant);
+
+      logger?.info('Agent iteration executing tools', {
+        runId,
+        iteration: iterations,
+        toolCalls: calls.length,
+      });
+      const toolMessages = await Promise.all(
+        calls.map((call) => executeToolCall(call, { iteration: iterations, runId })),
+      );
+      conversation.push(...toolMessages);
+    }
+
+    function buildResult(status, extra = {}) {
+      const result = {
+        status,
+        messages: conversation,
+        usage,
+        iterations,
+        toolCalls,
+        durationMs: now() - startedAt,
+        ...extra,
+      };
+      logger?.info('Agent run finished', {
+        runId,
+        status,
+        iterations,
+        toolCalls,
+        durationMs: result.durationMs,
+      });
+      return result;
+    }
+  }
+
+  async function executeToolCall(call, { iteration, runId }) {
+    const startedAt = now();
+    const name = call?.function?.name;
+    const toolCallId = call?.id;
+
+    try {
+      const rawArguments = call.function.arguments ?? '{}';
+      const args = JSON.parse(rawArguments);
+      const data = await toolRegistry.execute(name, args);
+      logTool('Agent tool completed', {
+        runId,
+        iteration,
+        tool: name,
+        toolCallId,
+        success: true,
+        durationMs: now() - startedAt,
+        resultBytes: jsonSize(data),
+      });
+      return makeToolMessage(toolCallId, { ok: true, data });
+    } catch (error) {
+      const safeError =
+        error instanceof AgentProtocolError
+          ? { code: error.code, message: error.message }
+          : toSafeToolError(error);
+      logTool('Agent tool failed', {
+        runId,
+        iteration,
+        tool: typeof name === 'string' ? name : null,
+        toolCallId: typeof toolCallId === 'string' ? toolCallId : null,
+        success: false,
+        errorCode: safeError.code,
+        durationMs: now() - startedAt,
+      });
+      return makeToolMessage(toolCallId || `invalid-${iteration}`, { ok: false, error: safeError });
+    }
+  }
+
+  function logTool(message, data) {
+    if (data.success) logger?.info(message, data);
+    else logger?.warn(message, data);
+  }
+
+  return { run, limits: resolvedLimits };
+}
+
+function validateAssistantMessage(message) {
+  if (!message || typeof message !== 'object' || message.role !== 'assistant') {
+    throw new AgentProtocolError('LLM response does not contain an assistant message.');
+  }
+  if (message.tool_calls != null && !Array.isArray(message.tool_calls)) {
+    throw new AgentProtocolError('LLM tool calls must be an array.');
+  }
+  if (!message.tool_calls?.length && typeof message.content !== 'string') {
+    throw new AgentProtocolError('LLM response does not contain final text or tool calls.');
+  }
+}
+
+function validateToolCalls(calls) {
+  for (const call of calls) {
+    if (!call?.id || typeof call.id !== 'string') {
+      throw new AgentProtocolError('Tool call is missing an id.');
+    }
+    if (!call.function?.name || typeof call.function.name !== 'string') {
+      throw new AgentProtocolError('Tool call is missing a function name.');
+    }
+    if (call.function.arguments != null && typeof call.function.arguments !== 'string') {
+      throw new AgentProtocolError('Tool call arguments must be a JSON string.');
+    }
+  }
+}
+
+function makeToolMessage(toolCallId, content) {
+  return {
+    role: 'tool',
+    tool_call_id: toolCallId,
+    content: JSON.stringify(content),
+  };
+}
+
+function jsonSize(value) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return 0;
+  }
+}

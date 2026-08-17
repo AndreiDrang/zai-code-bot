@@ -28,6 +28,31 @@ function emptyResponse() {
     text: async () => '',
   };
 }
+function toolCallResponse() {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'get_diff', arguments: '{"path":"src/cache.ts"}' },
+              },
+            ],
+          },
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+    }),
+    text: async () => '',
+  };
+}
 
 describe('zai-client — categorizeError', () => {
   it('classifies a timeout from an AbortError', () => {
@@ -161,5 +186,37 @@ describe('zai-client — createZaiClient.call', () => {
     const lastBody = fetchImpl.mock.calls[2][1].body;
     expect(lastBody).toContain('"content":"short"');
     expect(lastBody).not.toContain('"content":"long"');
+  });
+
+  it('sends OpenAI-compatible tools and preserves a tool-call assistant message', async () => {
+    const fetchImpl = vi.fn(async () => toolCallResponse());
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, maxRetries: 0 });
+    const tools = [
+      {
+        type: 'function',
+        function: {
+          name: 'get_diff',
+          description: 'Get one patch.',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+    ];
+
+    const result = await client.chat({
+      apiKey: 'key',
+      model: 'model',
+      messages: [{ role: 'user', content: 'review' }],
+      tools,
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        message: { role: 'assistant', tool_calls: [expect.objectContaining({ id: 'call-1' })] },
+        usage: { totalTokens: 14 },
+      },
+    });
+    expect(fetchImpl.mock.calls[0][1].body).toContain('"tools"');
+    expect(fetchImpl.mock.calls[0][1].body).toContain('"get_diff"');
   });
 });

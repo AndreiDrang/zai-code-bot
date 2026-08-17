@@ -46,8 +46,8 @@ export function createZaiClient(config = {}) {
   const fetchImpl = config.fetch || fetch;
   const sleeper = config.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 
-  /** Single transport call with a timeout. Throws on !ok / empty / abort. */
-  async function complete({ apiKey, model, messages, timeoutMs }) {
+  /** Single transport call with a timeout. Throws on !ok / malformed / abort. */
+  async function complete({ apiKey, model, messages, tools, timeoutMs }) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -57,7 +57,7 @@ export function createZaiClient(config = {}) {
           'content-type': 'application/json',
           authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ model, messages }),
+        body: JSON.stringify(toChatRequest({ model, messages, tools })),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -71,9 +71,14 @@ export function createZaiClient(config = {}) {
         throw err;
       }
       const data = await res.json();
-      const content = data?.choices?.[0]?.message?.content;
-      if (!content) throw new Error('Z.ai API returned an empty response');
-      return content;
+      const message = data?.choices?.[0]?.message;
+      if (!message || typeof message !== 'object') {
+        throw new Error('Z.ai API returned no assistant message');
+      }
+      const hasContent = typeof message.content === 'string' && message.content.length > 0;
+      const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+      if (!hasContent && !hasToolCalls) throw new Error('Z.ai API returned an empty response');
+      return { message: { ...message, role: 'assistant' }, usage: normalizeUsage(data?.usage) };
     } finally {
       clearTimeout(timer);
     }
@@ -106,8 +111,11 @@ export function createZaiClient(config = {}) {
           ];
         const timeoutMs = Math.max(MIN_TIMEOUT_MS, Math.floor(baseTimeout * mult));
         try {
-          const content = await complete({ apiKey, model, messages: attemptMessages, timeoutMs });
-          return { success: true, data: content, usedFallback };
+          const data = await complete({ apiKey, model, messages: attemptMessages, timeoutMs });
+          if (typeof data.message.content !== 'string' || !data.message.content) {
+            throw new Error('Z.ai API returned an empty response');
+          }
+          return { success: true, data: data.message.content, usedFallback };
         } catch (error) {
           lastError = error;
           const categorized = categorizeError(error);
@@ -151,6 +159,60 @@ export function createZaiClient(config = {}) {
         success: false,
         data: null,
         usedFallback,
+        error: {
+          category: 'internal',
+          message: sanitizeErrorMessage(lastError),
+          retryable: false,
+          attempts: maxRetries + 1,
+          totalDuration: Date.now() - startTime,
+        },
+      };
+    },
+
+    /**
+     * Executes one chat-completions request for AgentRunner. It deliberately
+     * does not interpret tool calls or retain conversation state.
+     * @returns {Promise<{success:boolean,data?:{message:Object,usage:Object|null},error?:Object}>}
+     */
+    async chat({ apiKey, model, messages, tools, timeoutMs = baseTimeout }) {
+      const startTime = Date.now();
+      let lastError;
+      for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        const mult =
+          PROGRESSIVE_TIMEOUT_MULTIPLIERS[
+            Math.min(attempt, PROGRESSIVE_TIMEOUT_MULTIPLIERS.length - 1)
+          ];
+        const requestTimeout = Math.max(1, Math.floor(Math.min(timeoutMs, baseTimeout) * mult));
+        try {
+          const data = await complete({
+            apiKey,
+            model,
+            messages,
+            tools,
+            timeoutMs: requestTimeout,
+          });
+          return { success: true, data };
+        } catch (error) {
+          lastError = error;
+          const categorized = categorizeError(error);
+          if (!categorized.retryable || attempt >= maxRetries) {
+            return {
+              success: false,
+              error: {
+                category: categorized.category,
+                message: sanitizeErrorMessage(error),
+                retryable: categorized.retryable,
+                attempts: attempt + 1,
+                totalDuration: Date.now() - startTime,
+              },
+            };
+          }
+          const delay = baseDelay * 2 ** attempt + Math.floor(Math.random() * 1000);
+          await sleeper(delay);
+        }
+      }
+      return {
+        success: false,
         error: {
           category: 'internal',
           message: sanitizeErrorMessage(lastError),
@@ -214,6 +276,21 @@ export function sanitizeErrorMessage(error) {
 
   if (message.length > 300) message = `${message.slice(0, 300)}...`;
   return message;
+}
+
+function toChatRequest({ model, messages, tools }) {
+  const request = { model, messages };
+  if (Array.isArray(tools) && tools.length) request.tools = tools;
+  return request;
+}
+
+function normalizeUsage(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  return {
+    promptTokens: Number(usage.prompt_tokens) || null,
+    completionTokens: Number(usage.completion_tokens) || null,
+    totalTokens: Number(usage.total_tokens) || null,
+  };
 }
 
 export { ZAI_API_URL, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY_MS };
