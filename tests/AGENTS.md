@@ -1,5 +1,7 @@
 # TEST SUITE GUIDE
 
+**Scope:** `tests/` and descendants. Inherits repository-wide guidance from `AGENTS.md`. This file defines only test-suite detail; end-to-end specifics live in `tests/integration/AGENTS.md`.
+
 ## OVERVIEW
 Repository test coverage mixes module-focused tests in `tests/*.test.js` and scenario-driven flows in `tests/integration/*`.
 
@@ -22,7 +24,7 @@ tests/
 | API and logging resilience | `tests/api.test.js`, `tests/logging.test.js` | Retry/error categorization |
 | Context, PR fetch, and batching | `tests/context.test.js`, `tests/pr-context.test.js`, `tests/changed-files.test.js`, `tests/auto-review.test.js` | Diff scoping, file-at-ref fetch, paginated/batched review |
 | Continuity and events | `tests/continuity.test.js`, `tests/events.test.js` | Hidden-marker state, event-type detection |
-| Code scope and window extraction | `tests/lib/code-scope.test.js` | Token budget, enclosing block, window extraction |
+| Code scope and window extraction | `tests/lib/code-scope.test.js` | Window extraction, enclosing block, target range extraction |
 | Describe handler | `tests/describe.test.js` | PR description generation |
 | Scheduled pipeline | `tests/handlers/scheduled.test.js`, `tests/scheduled-config.test.js`, `tests/repository-context.test.js`, `tests/agents-validation.test.js` | Config load + `validateAgentsConfig` scoping; `parseFileUpdatesFromResponse`; grounded `handleUpdateAgentsTask` flow incl. hallucination rejection; repo-context collection (tree/budgets/globs); validation guards incl. PR #15 regression |
 | Scheduled pipeline (integration) | (pending) | End-to-end schedule event → context → Z.ai mock → validated PR is still a gap; unit coverage of the grounded flow exists via the `handleUpdateAgentsTask` seam (`__callZaiForTest`). |
