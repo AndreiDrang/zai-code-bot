@@ -57,6 +57,8 @@ when the database is unavailable.
 # Relationships
 
 - Drives the [job lifecycle](/state/job-lifecycle.md) state machine.
-- Enforced in the heavy worker's queue consumer
-  ([PR-context pipeline](/workflows/pr-context-pipeline.md)).
+- Enforced in the heavy worker's queue consumer for every job kind — the
+  [PR-context gather pipeline](/workflows/pr-context-pipeline.md), the
+  [PR-summary job](/workflows/pr-summary-job.md), and
+  [LLM command execution](/workflows/llm-command-execution.md).
 - No DLQ by design — see the [storage authority model](/architecture/storage-authority-model.md).

@@ -26,8 +26,8 @@ and wall-time budget, driven by a durable [Queue](/contracts/queue-message.md).
 
 | Worker | Owns | Driven by |
 | --- | --- | --- |
-| `zai-main-worker` | webhook ingress, signature gate, parse, auth, routing, D1 write + queue publish, 5-min self-healing cron | `fetch` (webhook) + `scheduled` (cron) |
-| `zai-heavy-worker` | queue consumer, job claiming, artifact writes, review/describe publication | `queue` (consumer) |
+| `zai-main-worker` | webhook ingress, signature gate, parse, auth, routing, incremental slice refreshes, D1 write + queue publish, 5-min self-healing cron | `fetch` (webhook) + `scheduled` (cron) |
+| `zai-heavy-worker` | queue consumer, job claiming, `pr_context` / `pr_summary` / `review` / `describe` handlers, artifact + context writes, comment publication | `queue` (consumer) |
 
 # Decoupled lifetimes
 
@@ -47,5 +47,7 @@ The durable command path is decoupled so neither worker holds the other alive:
 
 # Open Questions
 
-- Unknown: The final deployment topology (single route vs. split domains) is
-  not yet finalized.
+- None. Deployment topology is fixed: the main worker serves
+  `zai-worker.tokenbel.info` (route + custom domain); the heavy worker has
+  `workers_dev = false` and no public ingress — it is reachable only through
+  the `bot-jobs` Queue consumer.

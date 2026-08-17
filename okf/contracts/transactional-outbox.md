@@ -1,7 +1,7 @@
 ---
 type: Contract
 title: Transactional outbox
-description: The job_outbox table bridges the D1 commit and the Queue publish so a crash between them never loses a job — the cron replays unpublished outbox rows.
+description: The job_outbox table bridges the D1 commit and the Queue publish so a crash never loses a job — the cron replays unpublished outbox rows. Both workers publish; heavy uses it for pr_summary.
 source_paths:
   - poc/workers/shared/storage/deliveries.js
   - poc/workers/shared/storage/jobs.js
@@ -24,10 +24,11 @@ pattern closes this gap.
 
 # Mechanism
 
-`createPrContextJob()` and `createCommandJob()` write three rows in a **single
-D1 batch**:
+`createPrContextJob()`, `createPrSummaryJob()`, and `createCommandJob()`
+write three rows in a **single D1 batch**:
 
-1. `webhook_deliveries` — the idempotent delivery record.
+1. `webhook_deliveries` — the idempotent delivery record (`pr_summary`
+   reuses the gather's delivery row instead of writing a new one).
 2. `jobs` — the durable job in `queued` status.
 3. `job_outbox` — the outbox row with `published_at = NULL` and
    `next_attempt_at = now`.
@@ -40,6 +41,12 @@ outbox entry, or none of them exist — never a job without an outbox entry.
 After the commit, `enqueueJob()` attempts the Queue publish immediately. On
 success, `markOutboxPublished()` sets `published_at`. On failure, the outbox
 row remains pending.
+
+The heavy worker also participates as a producer: after committing a
+[PR-context gather](/workflows/pr-context-pipeline.md), it creates a
+[pr_summary](/workflows/pr-summary-job.md) outbox row and attempts an
+immediate `publishOutboxJob()` through its own `BOT_JOBS` producer binding;
+if that publish fails, the row waits for cron replay.
 
 The [cron self-healing sweep](/workflows/cron-self-healing.md) runs
 `replayDueOutbox()` every 5 minutes, finding rows where

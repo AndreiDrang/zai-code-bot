@@ -1,9 +1,11 @@
 ---
 type: Dataset
 title: D1 storage schema
-description: The nine authoritative D1 tables created by a single consolidated migration (0001) that hold all job, delivery, run, artifact, publication, and configuration state.
+description: The nine authoritative D1 tables — created by migration 0001 and evolved by 0002 (command surface) and 0003 (pr_summary job kind) — holding all job, delivery, run, artifact, publication, and configuration state.
 source_paths:
   - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
+  - poc/workers/zai-main-worker/migrations/0002_command_surface.sql
+  - poc/workers/zai-main-worker/migrations/0003_pr_summary_job.sql
 confidence: observed
 status: current
 tags:
@@ -14,9 +16,24 @@ tags:
 
 # D1 storage schema
 
-D1 (`bot-db`) is the single source of truth. The entire schema is created from
-scratch by one consolidated migration, `0001_storage_foundation.sql`, applied
-via `wrangler d1 migrations apply`. All timestamps are UTC ISO-8601 strings.
+D1 (`bot-db`) is the single source of truth. The schema is applied via
+`wrangler d1 migrations apply`: `0001_storage_foundation.sql` creates the
+foundation; `0002` and `0003` evolve it. All timestamps are UTC ISO-8601
+strings.
+
+# Migration history
+
+| Migration | Change | Mechanism |
+| --- | --- | --- |
+| `0001_storage_foundation.sql` | Creates all nine tables, indexes, constraints | `CREATE TABLE IF NOT EXISTS` |
+| `0002_command_surface.sql` | Narrowed `jobs.kind` to the supported surface (`pr_context`, `review`, `describe`) | Rebuild of `jobs` + child tables |
+| `0003_pr_summary_job.sql` | Added `pr_summary` to `jobs.kind` | Rebuild of `jobs` + child tables |
+
+Because SQLite/D1 cannot alter a `CHECK` constraint in place, migrations
+0002 and 0003 each rebuild `jobs` **together with its child tables**
+(`job_outbox`, `analysis_runs`, `artifacts`) via create-copy-drop-rename,
+preserving all rows. Deployed migrations are never edited in place — 0001
+was consolidated only before first deploy.
 
 # Tables
 
@@ -30,31 +47,15 @@ via `wrangler d1 migrations apply`. All timestamps are UTC ISO-8601 strings.
 | `analysis_runs` | `(job_id, attempt)` unique | Per-attempt execution record |
 | `artifacts` | one per artifact UUID | R2 artifact metadata + `expires_at` |
 | `comment_publications` | `(repository_id, pr_number, comment_kind)` | [One-live-comment](/state/comment-publication.md) publication lease |
-| `repository_configs` | one per repo | Per-repo policy (enabled, maxFiles, retention profile) |
-
-# Schema features
-
-The single migration creates every table, index, and constraint from scratch.
-The features that were once layered in incrementally (formerly migrations
-0002–0004) are all present in the initial create:
-
-- **Bounded leases** — `jobs.lease_expires_at`, `jobs.last_failure_at`, and
-  `idx_jobs_status_lease` (expired-lease reclaim) exist from creation.
-- **One run per attempt** — `idx_runs_job_attempt` (unique) enforces
-  `(job_id, attempt)` uniqueness on `analysis_runs`.
-- **One-live-comment publications** — `comment_publications` is keyed by
-  `(repository_id, pr_number, comment_kind)` (NOT per head), with `status`,
-  `lease_job_id`, `lease_expires_at` columns.
-- **Job kinds** — `jobs.kind ∈ ('pr_context', 'review', 'describe')`.
-- **Composite delivery uniqueness** — `UNIQUE(delivery_id, kind)` lets one
-  webhook delivery spawn a context or command job while keeping each
-  `(delivery_id, kind)` pair race-safe.
+| `repository_configs` | one per repo | Per-repo policy (enabled, maxFiles, `maxContextBytes`, retention profile) |
 
 # Key constraints
 
 - `UNIQUE(delivery_id, kind)` on `jobs` — the same (delivery, kind) pair is
-  unique (race-safe idempotency).
-- `jobs.kind ∈ ('pr_context', 'review', 'describe')`.
+  race-safe idempotent; this is what lets one `pull_request` delivery own
+  both a `pr_context` job and its derived `pr_summary` job.
+- `jobs.kind ∈ ('pr_context', 'pr_summary', 'review', 'describe')` — the two
+  internal pipeline jobs plus the two user commands.
 - `jobs.status ∈ ('queued', 'running', 'retryable', 'succeeded', 'failed', 'cancelled')`.
 - `artifacts.r2_key` is `UNIQUE`.
 - `comment_publications.status ∈ ('publishing', 'published')`.
@@ -67,18 +68,17 @@ The features that were once layered in incrementally (formerly migrations
 | `idx_jobs_status_lease` | Expired-lease reclaim |
 | `idx_outbox_due` | Outbox replay |
 | `idx_artifacts_expiry` | Retention sweep |
-| `idx_runs_job` / `idx_runs_job_attempt` | Run history |
+| `idx_runs_job` / `idx_runs_job_attempt` | Run history (unique per attempt) |
 
-# D1 migration notes
+# D1 migration constraints
 
-D1 imposes two constraints that shaped the single-migration approach (both are
-documented in the migration header):
+Two D1 limitations shape the migration approach (documented in the 0001
+header):
 
 - D1 rejects explicit `BEGIN`/`COMMIT`/`SAVEPOINT` in migration SQL (error
   `[7500]`); wrangler applies each statement in sequence.
-- D1 ignores `PRAGMA foreign_keys = OFF` — FK enforcement is always active, so
-  the command-surface migration rebuilds `jobs` together with its child tables
-  (`job_outbox`, `analysis_runs`, and `artifacts`).
+- D1 ignores `PRAGMA foreign_keys = OFF` — FK enforcement is always active,
+  so child tables must be rebuilt in lockstep with `jobs`.
 
 # Relationships
 

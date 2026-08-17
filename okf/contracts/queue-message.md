@@ -54,6 +54,8 @@ consumers. The current version is `1` (`STORAGE_SCHEMA_VERSION`).
 
 - Produced by the [transactional outbox](/contracts/transactional-outbox.md)
   after the D1 commit.
-- Consumed by the [PR-context pipeline](/workflows/pr-context-pipeline.md) and
-  the [PR-context gather pipeline](/workflows/pr-context-pipeline.md).
+- Consumed by the heavy worker's queue consumer, which dispatches to the
+  [PR-context gather pipeline](/workflows/pr-context-pipeline.md), the
+  [PR-summary job](/workflows/pr-summary-job.md), and
+  [LLM command execution](/workflows/llm-command-execution.md).
 - The job it references follows the [job lifecycle](/state/job-lifecycle.md).

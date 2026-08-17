@@ -1,10 +1,11 @@
 ---
 type: Entity
 title: Job lifecycle and bounded leases
-description: The durable job state machine (queued → running → succeeded/retryable/failed) with bounded leases that prevent duplicate concurrent execution.
+description: The durable job state machine (queued → running → succeeded/retryable/failed) for the four job kinds, with bounded leases that prevent duplicate concurrent execution.
 source_paths:
   - poc/workers/shared/storage/jobs.js
   - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
+  - poc/workers/zai-main-worker/migrations/0003_pr_summary_job.sql
   - poc/workers/zai-heavy-worker/src/queue.js
 confidence: observed
 status: current
@@ -18,6 +19,15 @@ tags:
 
 Every durable unit of work is a `jobs` row in D1. Its lifecycle is a strict
 state machine, and concurrent execution is prevented by bounded leases.
+
+# Job kinds
+
+| Kind | Producer | Purpose |
+| --- | --- | --- |
+| `pr_context` | main worker, PR events | [PR-context gather](/workflows/pr-context-pipeline.md) |
+| `pr_summary` | gather job (internal) | [PR-summary generation](/workflows/pr-summary-job.md) — no comment |
+| `review` | main worker, `/zai review` | [LLM command execution](/workflows/llm-command-execution.md) |
+| `describe` | main worker, `/zai describe` | [LLM command execution](/workflows/llm-command-execution.md) |
 
 # State machine
 
@@ -68,8 +78,8 @@ and `error_code`. There is a unique index on `(job_id, attempt)`.
 # Relationships
 
 - Transition logic is driven by the [retry budget](/rules/retry-budget.md).
-- The [PR-context gather pipeline](/workflows/pr-context-pipeline.md) and
+- The [PR-context gather pipeline](/workflows/pr-context-pipeline.md),
+  [PR-summary job](/workflows/pr-summary-job.md), and
   [command routing](/workflows/command-routing.md) are the job producers.
-  A delivery creates one `pr_context`, `review`, or `describe` job
-  (`UNIQUE(delivery_id, kind)`).
+  A delivery creates one job per `(delivery_id, kind)`.
 - Schema is defined in the [D1 storage schema](/datasets/d1-storage-schema.md).

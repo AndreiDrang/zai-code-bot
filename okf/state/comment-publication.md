@@ -5,6 +5,7 @@ description: Exactly one marker-owned bot comment per repository, PR, and comman
 source_paths:
   - poc/workers/shared/comments.js
   - poc/workers/shared/constants.js
+  - poc/workers/shared/llm-command-runner.js
   - poc/workers/zai-heavy-worker/src/handlers/review.js
   - poc/workers/zai-heavy-worker/src/handlers/describe.js
 confidence: observed
@@ -31,7 +32,7 @@ expired lease can be reclaimed by a later job.
 ## Markers
 
 | Comment kind | Marker | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `review` | `<!-- zai-review -->` | Latest LLM code review |
 | `describe` | `<!-- zai-describe -->` | Latest describe command status |
 
@@ -42,5 +43,6 @@ user-authored content.
 ## Relationships
 
 - Schema: [D1 storage schema](/datasets/d1-storage-schema.md)
-- Routing: [Command routing](/workflows/command-routing.md)
+- Routing: [Command routing](/workflows/command-routing.md); results are
+  published by [LLM command execution](/workflows/llm-command-execution.md)
 - Shared footer: [comment footer](/rules/comment-footer.md)

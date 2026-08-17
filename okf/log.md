@@ -1,5 +1,18 @@
 # Knowledge Bundle Update Log
 
+## 2026-08-17
+
+- **Create**: [PR-summary job](/workflows/pr-summary-job.md) — the internal `pr_summary` job (migration 0003) that converts a committed V2 snapshot into strictly validated `pr-summary.json` auxiliary context with no GitHub comment.
+- **Create**: [LLM command execution](/workflows/llm-command-execution.md) — the shared `runLlmCommand` lifecycle: guards, direct/agent Z.ai call, `/context/{command}.md` result persistence, marker-idempotent publication. Previously this knowledge was spread across command routing and comment publication.
+- **Create**: [Agent context tools](/contracts/agent-context-tools.md) — the seven read-only LLM tools (list_changed_files, get_diff, get_file, get_file_range, get_description, get_commits, get_comments) over the immutable V2 snapshot, served through the Context Service DTO layer.
+- **Create**: [Agent tool-calling loop](/contracts/agent-runner.md) — the bounded provider-neutral runner (10 iterations / 30 tool calls / 120 s) with protocol validation and safe tool errors.
+- **Update**: Rewrote [PR-context gather pipeline](/workflows/pr-context-pipeline.md) for the V2 storage redesign — per-file `diffs/` patches under `v2/prs/`, 1 MiB/file + 20 MiB snapshot budgets with explicit skip reasons, manifest-as-commit-marker, four-point stale-head rejection, and pr_summary scheduling.
+- **Update**: [Storage authority model](/architecture/storage-authority-model.md) now describes the V2 context tier (including command results and pr-summary.json under the context prefix), the independent `PR_CONTEXT_STORAGE_VERSION`, and the Context Service as the sole application reader.
+- **Update**: [D1 storage schema](/datasets/d1-storage-schema.md) — migrations 0002 (command surface) and 0003 (pr_summary) were added after the single-migration consolidation; documented the CHECK-constraint rebuild pattern.
+- **Update**: [30-day R2 retention](/rules/r2-retention.md) now targets the `v2/prs/` prefix and records an open discrepancy: `R2_RETENTION_DAYS = "180"` in vars vs 30 everywhere else (variable is unread by code).
+- **Update**: Refreshed [webhook ingress](/workflows/webhook-ingress.md) (slice-mirror refreshes + PR-context fork), [command routing](/workflows/command-routing.md) (head resolution for command jobs, four job kinds), [job lifecycle](/state/job-lifecycle.md) (job-kind table), [transactional outbox](/contracts/transactional-outbox.md) + [queue message](/contracts/queue-message.md) (heavy worker as a producer), [two-worker split](/architecture/two-worker-split.md) (topology resolved), [comment publication](/state/comment-publication.md) and [retry budget](/rules/retry-budget.md) (links), plus all directory indexes.
+- **Conflict**: Repository `wrangler.toml` sets `R2_RETENTION_DAYS = "180"` while the documented lifecycle rule, comments, and the application constant say 30. The sweep uses the 30-day constant; recorded as an open question in [R2 retention](/rules/r2-retention.md) rather than silently restating either number as fact.
+
 ## 2026-08-07
 
 - **Note**: Documented a known limitation of the incremental slice refresh — it deliberately does not touch `manifest.json` (single-key `put`, no read-modify-write), so the manifest's derived `counts.issueComments`/`counts.reviewComments` lag between a comments refresh and the next gather. Only `renderContextSummary`'s coverage line reads them (the `/zai impact` stub notice and a decorative line in `/zai review`); actual review content reads fresh slices directly. Cosmetic, self-heals on next push.
