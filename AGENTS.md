@@ -8,7 +8,7 @@
 JavaScript GitHub Action (Node 20 runtime, `dist/index.js` entrypoint) with three event flows:
 
 1. **PR auto-review** — `pull_request` `opened`/`synchronize`; large PRs are batched and synthesized.
-2. **`/zai` commands** — collaborator-gated PR comment commands: `ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`.
+2. **`/zai` commands** — authorization-gated PR comment commands: `ask`, `review`, `explain`, `describe`, `impact`, `update-agents`, `help`.
 3. **Scheduled tasks** — cron-triggered `.zai-scheduled.yml` tasks that regenerate AGENTS.md files and open PRs.
 
 GitHub executes the bundled `dist/index.js` (ncc bundle); maintained source lives in `src/`.
@@ -16,16 +16,18 @@ GitHub executes the bundled `dist/index.js` (ncc bundle); maintained source live
 ## Where to work
 
 ```text
-src/index.js                         # Event dispatch + pipelines
-src/lib/                             # Services (auth, api, comments, context, commands)
-src/lib/handlers/                    # Per-command + scheduled handlers
-src/lib/config/scheduled-config.js   # .zai-scheduled.yml loader
-src/lib/repository-context.js        # Repo context collection for AGENTS.md gen
-src/lib/agents-validation.js         # Hallucination guard for generated files
-tests/                               # Vitest v3 unit + integration suites
-action.yml                           # Action inputs + node20 contract
-.zai-scheduled.yml                   # This repo's scheduled-task config
-dist/index.js                        # Generated ncc bundle (CI executes this)
+src/index.js                             # Event dispatch + pipelines
+src/lib/                                 # Services (auth, api, comments, context, commands)
+src/lib/handlers/                        # Per-command + scheduled handlers
+src/lib/config/scheduled-config.js       # .zai-scheduled.yml loader
+src/lib/repository-context.js            # Repo context collection for AGENTS.md gen
+src/lib/agents-validation.js             # Hallucination guard for generated files
+tests/                                   # Vitest v3 unit + integration suites
+action.yml                               # Action inputs + node20 contract
+.zai-scheduled.yml                       # This repo's scheduled-task config
+.github/workflows/ci.yml                 # CI gates (see Validation)
+.github/workflows/zai-agents-update.yml  # Cron workflow for the scheduled update-agents task
+dist/index.js                            # Generated ncc bundle (CI executes this)
 ```
 
 ## Architecture boundaries
@@ -50,6 +52,7 @@ Read only when relevant:
 
 - Architectural changes or cross-module work → `ARCHITECTURE.md`
 - Scheduled-tasks configuration, cron syntax, troubleshooting → `docs/scheduled-tasks.md`
+- Scheduled-tasks rollout plans and quick start → `plans/SCHEDULED_TASKS_QUICK_START.md`, `plans/SCHEDULED_TASKS_INTEGRATION_PLAN.md`
 - Rollback or incident response → `RUNBOOK.md`
 - Authorization model and permission rules → `SECURITY.md`
 - Contribution workflow and review checklists → `CONTRIBUTING.md`
@@ -135,4 +138,5 @@ CI gates (`.github/workflows/ci.yml`): test → build → dist-drift → securit
 - GitHub's changed-files API ceiling is 3000 files (`MAX_PR_FILES_API_LIMIT`); review output includes coverage notes when this limit is reached.
 - `ZAI_MODEL` default is `glm-5.2`; Z.ai endpoint is `https://api.z.ai/api/coding/paas/v4/chat/completions`.
 - The command dispatch `switch` lives in `src/index.js` (`dispatchCommand`), not in `src/lib/handlers/index.js`. The handler registry in `index.js` is consumed by the runtime but `scheduled` is exported separately and not in the `/zai` HANDLERS map.
-- `@zai-bot` prefix is normalized to `/zai` by `normalizeInput` in `src/lib/commands.js`.
+- `@zai-bot` prefixes (also `@zai_bot`, `@zaibot`, and bare `@zai`) are normalized to `/zai` by `normalizeInput` in `src/lib/commands.js`.
+- `CONTRIBUTING.md` still contains clone/compare URLs for the upstream `tarmojussila/zai-code-review` repo; this repository is `AndreiDrang/zai-code-bot` — do not copy those URLs into new docs.
