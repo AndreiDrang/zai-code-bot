@@ -12,6 +12,7 @@ import { createPrContextJob, createPrSummaryJob, getJob } from '../shared/storag
 import { getRepositoryConfig, saveRepositoryConfig } from '../shared/storage/config.js';
 import {
   claimJob,
+  linkRunResultArtifact,
   listDueOutbox,
   listExpiredRunningJobs,
   recoverExpiredJob,
@@ -395,5 +396,141 @@ describe('marker-scoped comment persistence', () => {
       }),
     ).resolves.toMatchObject({ id: 99, created: false });
     expect(github.updateComment).toHaveBeenCalledWith('o', 'r', 99, 'body');
+  });
+});
+
+describe('expired-lease recovery paths', () => {
+  it('permanently fails a lease that exhausted its attempt budget', async () => {
+    const db = fakeDb({ firstValue: { attempt_count: 3 } });
+    db.batch.mockResolvedValue([{ meta: { changes: 1 } }, { meta: { changes: 1 } }]);
+    await expect(recoverExpiredJob(db, 'job-1', '2026-01-01T00:00:00.000Z')).resolves.toBe(
+      'failed',
+    );
+    expect(db.statements.some((statement) => statement.sql.includes("status = 'failed'"))).toBe(
+      true,
+    );
+  });
+
+  it('returns null when the recovery transaction changed nothing (already recovered)', async () => {
+    const db = fakeDb({ firstValue: { attempt_count: 1 } });
+    db.batch.mockResolvedValue([{ meta: { changes: 0 } }, { meta: { changes: 0 } }]);
+    await expect(recoverExpiredJob(db, 'job-1', '2026-01-01T00:00:00.000Z')).resolves.toBeNull();
+  });
+
+  it('returns null when the job is no longer in an expired running state', async () => {
+    const db = fakeDb({ firstValue: null });
+    await expect(recoverExpiredJob(db, 'job-1', '2026-01-01T00:00:00.000Z')).resolves.toBeNull();
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+
+  it('links a result artifact to its analysis run', async () => {
+    const db = fakeDb();
+    await linkRunResultArtifact(db, 'run-1', 'artifact-9');
+    expect(db.statements[0].sql).toContain('result_artifact_id');
+    expect(db.statements[0].bindings).toContain('artifact-9');
+  });
+});
+
+describe('comment publication edge paths', () => {
+  /** db stub keyed on SQL shape: INSERT = claim, UPDATE = finalize, first = publication row. */
+  function publicationDb({ claimChanges = 1, finalizeChanges = 1, publication = {} } = {}) {
+    return {
+      prepare: vi.fn((sql) => ({
+        bind: () => ({
+          run: vi.fn().mockResolvedValue({
+            meta: { changes: /INSERT/.test(sql) ? claimChanges : finalizeChanges },
+          }),
+          first: vi.fn().mockResolvedValue(publication),
+        }),
+      })),
+    };
+  }
+
+  const args = (overrides = {}) => ({
+    github: {
+      getIssueComments: vi.fn().mockResolvedValue([]),
+      postComment: vi.fn().mockResolvedValue({ id: 9 }),
+      // Echo the updated comment id so assertions can verify WHICH comment was updated.
+      updateComment: vi.fn((_owner, _repo, commentId) => Promise.resolve({ id: commentId })),
+    },
+    db: publicationDb(),
+    owner: 'o',
+    repo: 'r',
+    issueNumber: 7,
+    repositoryId: 10,
+    headSha: 'abc',
+    commentKind: 'review',
+    marker: '<!-- marker -->',
+    body: 'body',
+    jobId: 'job-1',
+    ...overrides,
+  });
+
+  it('requires a job id so every publication is lease-tracked', async () => {
+    const { jobId, ...rest } = args();
+    await expect(upsertComment(rest)).rejects.toThrow('job ID is required');
+  });
+
+  it('skips publication when the lease is held by another job', async () => {
+    const input = args({
+      db: publicationDb({ claimChanges: 0, publication: { github_comment_id: 42 } }),
+    });
+    await expect(upsertComment(input)).resolves.toEqual({
+      id: 42,
+      created: false,
+      skipped: true,
+    });
+    expect(input.github.postComment).not.toHaveBeenCalled();
+  });
+
+  it('posts a fresh comment when the marker comment id differs from the publication record', async () => {
+    const input = args({
+      db: publicationDb({ publication: { github_comment_id: 99 } }),
+    });
+    input.github.getIssueComments.mockResolvedValue([
+      { id: 77, body: '<!-- marker -->', user: { login: 'bot[bot]', type: 'Bot' } },
+    ]);
+    await expect(upsertComment(input)).resolves.toMatchObject({ id: 9, created: true });
+    expect(input.github.postComment).toHaveBeenCalledOnce();
+    expect(input.github.updateComment).not.toHaveBeenCalled();
+  });
+
+  it('matches a PAT-owned bot comment through the configured botLogin', async () => {
+    const input = args({ botLogin: 'zai-bot' });
+    input.github.getIssueComments.mockResolvedValue([
+      { id: 5, body: '<!-- marker -->', user: { login: 'zai-bot', type: 'User' } },
+    ]);
+    await expect(upsertComment(input)).resolves.toMatchObject({ id: 5, created: false });
+    expect(input.github.updateComment).toHaveBeenCalledWith('o', 'r', 5, 'body');
+  });
+
+  it('scans subsequent pages when the marker comment is not on page one', async () => {
+    const input = args();
+    const filler = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      body: 'regular review chatter',
+      user: { login: 'someone', type: 'User' },
+    }));
+    input.github.getIssueComments
+      .mockResolvedValueOnce(filler)
+      .mockResolvedValueOnce([
+        { id: 300, body: '<!-- marker -->', user: { login: 'bot[bot]', type: 'Bot' } },
+      ]);
+    await expect(upsertComment(input)).resolves.toMatchObject({ id: 300, created: false });
+    expect(input.github.getIssueComments).toHaveBeenNthCalledWith(1, 'o', 'r', 7, 1, 100);
+    expect(input.github.getIssueComments).toHaveBeenNthCalledWith(2, 'o', 'r', 7, 2, 100);
+  });
+
+  it('treats a non-array comment response as no match and posts a new comment', async () => {
+    const input = args();
+    input.github.getIssueComments.mockResolvedValue(null);
+    await expect(upsertComment(input)).resolves.toMatchObject({ id: 9, created: true });
+    expect(input.github.postComment).toHaveBeenCalledOnce();
+  });
+
+  it('throws when the publication lease is lost before finalize', async () => {
+    const input = args({ db: publicationDb({ finalizeChanges: 0 }) });
+    await expect(upsertComment(input)).rejects.toThrow('lease was lost');
+    expect(input.github.postComment).toHaveBeenCalledOnce();
   });
 });

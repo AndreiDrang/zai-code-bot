@@ -94,4 +94,41 @@ describe('R2 artifact writer', () => {
       writeArtifact({ bucket: null, db, jobId: 'j', runId: 'r', kind: 'x', content: 'x' }),
     ).rejects.toThrow('R2');
   });
+
+  it('falls back to the default retention when the input is not a finite number', () => {
+    expect(artifactExpiresAt(new Date('2026-01-01T00:00:00.000Z'), 'nope')).toBe(
+      '2026-01-31T00:00:00.000Z',
+    );
+    expect(artifactExpiresAt(new Date('2026-01-01T00:00:00.000Z'), Number.NaN)).toBe(
+      '2026-01-31T00:00:00.000Z',
+    );
+  });
+
+  it('clamps non-positive retention to at least one day', () => {
+    expect(artifactExpiresAt(new Date('2026-01-01T00:00:00.000Z'), 0)).toBe(
+      '2026-01-02T00:00:00.000Z',
+    );
+    expect(artifactExpiresAt(new Date('2026-01-01T00:00:00.000Z'), -5)).toBe(
+      '2026-01-02T00:00:00.000Z',
+    );
+  });
+
+  it('requires an R2 binding to read artifacts', async () => {
+    await expect(readArtifact(null, 'key')).rejects.toThrow('R2');
+    await expect(readArtifact({}, 'key')).rejects.toThrow('R2');
+  });
+
+  it('degrades to an empty artifact list when D1 returns nothing', async () => {
+    const emptyDb = {
+      prepare: vi.fn(() => ({ bind: () => ({ all: vi.fn().mockResolvedValue(null) }) })),
+    };
+    await expect(listExpiredArtifacts(emptyDb)).resolves.toEqual([]);
+  });
+
+  it('requires an R2 binding to sweep expired artifacts', async () => {
+    await expect(deleteExpiredArtifacts({ db: fakeDb(), bucket: null })).rejects.toThrow('R2');
+    await expect(
+      deleteExpiredArtifacts({ db: fakeDb(), bucket: { delete: 'not-a-fn' } }),
+    ).rejects.toThrow('R2');
+  });
 });
