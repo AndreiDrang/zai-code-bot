@@ -42,6 +42,7 @@ workers/
 npm ci
 npm test                      # vitest run --coverage (from poc/)
 npm run format:js:check       # prettier check for workers/**/*.js
+npm run build                 # both deploy dry-runs in one command
 ```
 
 Deploy, dev, and dry-run scripts: `deploy:main[:dry-run]`, `deploy:heavy[:dry-run]`,

@@ -35,9 +35,10 @@ wrangler.toml          # Queue consumer config; workers_dev = false
   marker-delimited section of the PR body. Do not publish around the markers.
 - PR context lives in R2 under `v2/prs/{repositoryId}/{prNumber}/context/`
   (manifest, per-file patches, `pr-summary.json`). Objects under `v2/prs/`
-  expire via a bucket-level lifecycle rule (`R2_RETENTION_DAYS`, 30) — the rule
-  lives on the bucket, not in `wrangler.toml`; `v1/runs/` artifacts are swept
-  by the D1 cron instead.
+  expire via a bucket-level lifecycle rule — the rule lives on the bucket, not
+  in `wrangler.toml` (the `wrangler r2 bucket lifecycle add` command and the
+  `R2_RETENTION_DAYS` var are documented there; keep them aligned when
+  changing retention). `v1/runs/` artifacts are swept by the D1 cron instead.
 - `pr_summary` stores structured JSON in R2 and never posts a GitHub comment.
 
 ## Validation

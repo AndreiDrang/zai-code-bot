@@ -17,7 +17,6 @@ docs or tooling:
 poc/                  # Workers implementation (see poc/AGENTS.md)
 okf/                  # OKF knowledge bundle; okf/index.md is the entry point
 .agents/skills/       # Vendored Cloudflare skills (wrangler, workers-best-practices, …)
-docs/                 # Currently empty — do not link into it
 dist/ coverage/       # Untracked leftovers of the removed GitHub Action runtime
 *.md                  # ARCHITECTURE, RUNBOOK, SECURITY, CONTRIBUTING, README
 ```
