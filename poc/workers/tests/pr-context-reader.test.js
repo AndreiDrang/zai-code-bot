@@ -4,6 +4,7 @@ import {
   readContextDiff,
   readContextFiles,
   readContextManifest,
+  readContextSlice,
   readCommandResult,
   readPrSummary,
   renderContextSummary,
@@ -219,5 +220,72 @@ describe('renderers', () => {
 
   it('renderContextSummary is empty without a manifest', () => {
     expect(renderContextSummary(null)).toBe('');
+  });
+});
+
+describe('context readers — defensive null paths', () => {
+  const raw = (value) => ({ text: async () => value });
+  const json = (value) => ({ text: async () => JSON.stringify(value) });
+
+  it('readContextManifest rejects malformed payloads and wrong schema shapes', async () => {
+    const bucket = { get: vi.fn() };
+    bucket.get
+      .mockResolvedValueOnce(raw('not-json')) // JSON.parse throws → catch
+      .mockResolvedValueOnce(json({ schemaVersion: 1, headSha: 'abc' })) // wrong version
+      .mockResolvedValueOnce(json({ schemaVersion: 2, headSha: 42 })); // headSha not a string
+    for (let i = 0; i < 3; i += 1) {
+      await expect(readContextManifest(bucket, 10, 7)).resolves.toBeNull();
+    }
+  });
+
+  it('readContextSlice returns raw text for description, parsed JSON otherwise', async () => {
+    const bucket = { get: vi.fn() };
+    bucket.get
+      .mockResolvedValueOnce(raw('A feature')) // description → text passthrough
+      .mockResolvedValueOnce(json({ issue: [], review: [] })); // comments → parsed JSON
+    await expect(readContextSlice(bucket, 10, 7, 'description')).resolves.toBe('A feature');
+    await expect(readContextSlice(bucket, 10, 7, 'comments')).resolves.toEqual({
+      issue: [],
+      review: [],
+    });
+  });
+
+  it('readContextSlice requires a bucket, identifiers, and an existing object', async () => {
+    await expect(readContextSlice(null, 10, 7, 'comments')).resolves.toBeNull();
+    await expect(readContextSlice({ get: vi.fn() }, null, 7, 'comments')).resolves.toBeNull();
+    await expect(readContextSlice({ get: vi.fn() }, 10, null, 'comments')).resolves.toBeNull();
+    const missing = { get: vi.fn().mockResolvedValue(null) };
+    await expect(readContextSlice(missing, 10, 7, 'commits')).resolves.toBeNull();
+    const broken = { get: vi.fn().mockResolvedValue(raw('not-json')) };
+    await expect(readContextSlice(broken, 10, 7, 'commits')).resolves.toBeNull();
+  });
+
+  it('readContextFiles requires an array payload', async () => {
+    const objectPayload = { get: vi.fn().mockResolvedValue(json({ not: 'an array' })) };
+    await expect(readContextFiles(objectPayload, 10, 7)).resolves.toBeNull();
+    const missing = { get: vi.fn().mockResolvedValue(null) };
+    await expect(readContextFiles(missing, 10, 7)).resolves.toBeNull();
+  });
+
+  it('readContextDiff validates the indexed file entry before touching R2', async () => {
+    const bucket = { get: vi.fn() };
+    await expect(readContextDiff(bucket, 10, 7, null)).resolves.toBeNull();
+    await expect(
+      readContextDiff(bucket, 10, 7, { path: 'a/f', diff: { state: 'unavailable' } }),
+    ).resolves.toBeNull();
+    await expect(
+      readContextDiff(bucket, 10, 7, { path: 42, diff: { state: 'available' } }),
+    ).resolves.toBeNull();
+    expect(bucket.get).not.toHaveBeenCalled();
+
+    bucket.get.mockResolvedValueOnce(null); // indexed but object missing
+    await expect(
+      readContextDiff(bucket, 10, 7, { path: 'a/f', diff: { state: 'available' } }),
+    ).resolves.toBeNull();
+
+    bucket.get.mockRejectedValueOnce(new Error('r2 down'));
+    await expect(
+      readContextDiff(bucket, 10, 7, { path: 'a/f', diff: { state: 'available' } }),
+    ).resolves.toBeNull();
   });
 });

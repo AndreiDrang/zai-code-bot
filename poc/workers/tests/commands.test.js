@@ -29,6 +29,16 @@ describe('shared/commands', () => {
     expect(isCommand('/zai-bot review')).toBe(false);
   });
 
+  it('returns null for missing, non-string, and non-command input', () => {
+    expect(parseCommand(null)).toBeNull();
+    expect(parseCommand(undefined)).toBeNull();
+    expect(parseCommand('')).toBeNull();
+    expect(parseCommand(12345)).toBeNull();
+    expect(parseCommand({ body: '/zai review' })).toBeNull();
+    expect(parseCommand('please review this')).toBeNull();
+    expect(isCommand('plain text')).toBe(false);
+  });
+
   it('renders a safe response for removed commands', () => {
     const message = formatCommandNotAvailable('impact');
     expect(message).toContain('/zai impact');

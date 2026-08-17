@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createContextService } from '../shared/context/context-service.js';
+import { utf8ByteLength } from '../shared/context/context-limits.js';
 import { prContextDiffKey, prContextKey } from '../shared/storage/keys.js';
 
 function fakeBucket(objects) {
@@ -204,5 +205,65 @@ describe('Context Service', () => {
     await expect(
       context.getFileRange('src/cache.ts', { startLine: 0, endLine: 2 }),
     ).rejects.toMatchObject({ code: 'INVALID_LINE_RANGE' });
+  });
+});
+
+describe('snapshot diff assembly edge paths', () => {
+  it('omits an indexed patch whose artifact is missing and flags the truncation', async () => {
+    const { objects, patchKey } = createSnapshot();
+    const trimmed = new Map(objects);
+    trimmed.delete(patchKey); // files.json still promises the patch — R2 lost it
+    const context = createContextService({
+      bucket: fakeBucket(trimmed),
+      repositoryId: 10,
+      prNumber: 7,
+    });
+
+    const snapshot = await context.getSnapshotSlices({ maxDiffBytes: 1000 });
+
+    expect(snapshot.status).toBe('available');
+    // Only the missing patch lands in omittedPaths — the binary file is
+    // skipped by design (its index entry says unavailable), not by accident.
+    expect(snapshot.diff).toMatchObject({
+      truncated: true,
+      omittedPaths: ['src/cache.ts'],
+    });
+  });
+
+  it('drops patches that would exceed the remaining diff budget', async () => {
+    const { objects } = createSnapshot();
+    const context = createContextService({
+      bucket: fakeBucket(objects),
+      repositoryId: 10,
+      prNumber: 7,
+    });
+
+    const snapshot = await context.getSnapshotSlices({ maxDiffBytes: 1 });
+
+    expect(snapshot.diff).toMatchObject({
+      truncated: true,
+      omittedPaths: expect.arrayContaining(['src/cache.ts']),
+    });
+  });
+
+  it('propagates a stale snapshot state through getSnapshotSlices', async () => {
+    const { objects } = createSnapshot();
+    const context = createContextService({
+      bucket: fakeBucket(objects),
+      repositoryId: 10,
+      prNumber: 7,
+      expectedHeadSha: 'newer',
+    });
+
+    const snapshot = await context.getSnapshotSlices({ maxDiffBytes: 1000 });
+
+    expect(snapshot).toMatchObject({ status: 'stale', metadata: null, slices: null });
+  });
+
+  it('measures UTF-8 bytes, treating nullish input as empty', () => {
+    expect(utf8ByteLength(null)).toBe(0);
+    expect(utf8ByteLength(undefined)).toBe(0);
+    expect(utf8ByteLength(12345)).toBe(5); // coerced through String()
+    expect(utf8ByteLength('héllo')).toBeGreaterThan(5); // é is two UTF-8 bytes
   });
 });

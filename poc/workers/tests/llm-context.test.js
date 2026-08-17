@@ -154,3 +154,55 @@ describe('buildContextBlock (review layout)', () => {
     expect(block).toContain('`0123456`');
   });
 });
+
+describe('PR summary rendering (defensive shapes)', () => {
+  it('renders key changes without a prSummary and filters malformed entries', () => {
+    const block = buildContextBlock({
+      command: 'review',
+      slices: { diff: 'd' },
+      summary: {
+        keyChanges: [
+          { file: 'a/f', change: 'Adds a cache write.' },
+          { file: null, change: 'no path' }, // filtered: no file
+          { change: 'no file at all' }, // filtered: no file
+          { file: 'b/g', change: null }, // filtered: no change
+        ],
+      },
+    });
+    expect(block).toContain('## Generated PR summary');
+    expect(block).toContain('`a/f`: Adds a cache write.');
+    expect(block).not.toContain('no path');
+    expect(block).not.toContain('no file at all');
+    expect(block).not.toContain('`b/g`');
+    expect(block).not.toContain('**Summary:**');
+  });
+
+  it('unwraps a nested { summary } wrapper object', () => {
+    const block = buildContextBlock({
+      command: 'review',
+      slices: { diff: 'd' },
+      summary: { headSha: 'abc', summary: { prSummary: 'Wrapped summary.' } },
+    });
+    expect(block).toContain('**Summary:** Wrapped summary.');
+  });
+
+  it('ignores a non-object summary value', () => {
+    const block = buildContextBlock({
+      command: 'review',
+      slices: { diff: 'd' },
+      summary: 'plain text summary',
+    });
+    expect(block).not.toContain('## Generated PR summary');
+  });
+
+  it('renders only the parts of a summary that are present', () => {
+    const block = buildContextBlock({
+      command: 'review',
+      slices: { diff: 'd' },
+      summary: { conversationSummary: { mainTopic: 'API shape' } },
+    });
+    expect(block).toContain('**Conversation:** API shape');
+    expect(block).not.toContain('**Summary:**');
+    expect(block).not.toContain('Key changes');
+  });
+});

@@ -240,4 +240,28 @@ describe('shared/github (GitHubClient)', () => {
       expect(result.review).toEqual([{ id: 2 }]);
     });
   });
+
+  describe('pull request endpoints', () => {
+    it('updatePullRequest PATCHes the editable PR fields', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
+      await client.updatePullRequest('o', 'r', 7, { title: 'New title' });
+      const [url, options] = fetchSpy.mock.calls[0];
+      expect(url).toBe('https://api.github.com/repos/o/r/pulls/7');
+      expect(options.method).toBe('PATCH');
+      expect(JSON.parse(options.body)).toEqual({ title: 'New title' });
+    });
+
+    it('getPrFiles passes explicit pagination parameters', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      await client.getPrFiles('o', 'r', 7, 3, 50);
+      expect(fetchSpy.mock.calls[0][0]).toBe(
+        'https://api.github.com/repos/o/r/pulls/7/files?page=3&per_page=50',
+      );
+    });
+  });
 });

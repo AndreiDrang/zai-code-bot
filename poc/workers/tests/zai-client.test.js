@@ -76,6 +76,43 @@ describe('zai-client — categorizeError', () => {
       retryable: true,
     });
   });
+
+  it('classifies timeouts from TimeoutError names and timeout messages', () => {
+    const named = new Error('aborted');
+    named.name = 'TimeoutError';
+    expect(categorizeError(named)).toMatchObject({ category: 'timeout', retryable: true });
+    expect(categorizeError(new Error('Request timed out'))).toMatchObject({
+      category: 'timeout',
+      retryable: true,
+    });
+    expect(categorizeError(new Error('the operation timed out mid-flight'))).toMatchObject({
+      category: 'timeout',
+      retryable: true,
+    });
+  });
+
+  it('classifies transport failures as retryable provider errors', () => {
+    for (const message of ['fetch failed', 'ECONNREFUSED 1.2.3.4:443', 'network unreachable']) {
+      expect(categorizeError(new Error(message))).toMatchObject({
+        category: 'provider',
+        retryable: true,
+      });
+    }
+  });
+
+  it('falls back to a non-retryable internal error for unrecognized errors', () => {
+    expect(categorizeError(new Error('something else entirely'))).toMatchObject({
+      category: 'internal',
+      retryable: false,
+    });
+    // A non-numeric status does not coerce and must not match any status bucket.
+    expect(
+      categorizeError(Object.assign(new Error('odd'), { status: 'unavailable' })),
+    ).toMatchObject({
+      category: 'internal',
+      retryable: false,
+    });
+  });
 });
 
 describe('zai-client — sanitizeErrorMessage', () => {

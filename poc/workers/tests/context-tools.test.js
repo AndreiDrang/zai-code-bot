@@ -112,3 +112,48 @@ describe('Context Tools', () => {
     );
   });
 });
+
+describe('Context Tool argument validation', () => {
+  const context = { getDiff: vi.fn() };
+
+  it('rejects an undeclared tool name before touching the context', async () => {
+    await expect(executeContextTool('get_magic', {}, context)).rejects.toThrow(
+      'Unknown context tool: get_magic',
+    );
+    expect(context.getDiff).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-object argument bags', async () => {
+    await expect(executeContextTool('get_diff', null, context)).rejects.toThrow(
+      'Arguments for get_diff must be an object',
+    );
+    await expect(executeContextTool('get_diff', undefined, context)).rejects.toThrow(
+      'Arguments for get_diff must be an object',
+    );
+    await expect(executeContextTool('get_diff', ['src/cache.ts'], context)).rejects.toThrow(
+      'Arguments for get_diff must be an object',
+    );
+    await expect(executeContextTool('get_diff', 'src/cache.ts', context)).rejects.toThrow(
+      'Arguments for get_diff must be an object',
+    );
+  });
+
+  it('type-checks declared string and integer arguments', async () => {
+    await expect(executeContextTool('get_diff', { path: 42 }, context)).rejects.toThrow(
+      'path for get_diff must be a string',
+    );
+    await expect(executeContextTool('get_commits', { limit: 'many' }, context)).rejects.toThrow(
+      'limit for get_commits must be a positive integer',
+    );
+    await expect(executeContextTool('get_commits', { limit: 0 }, context)).rejects.toThrow(
+      'limit for get_commits must be a positive integer',
+    );
+  });
+
+  it('accepts a valid optional integer and skips absent properties', async () => {
+    const ok = { getCommits: vi.fn().mockResolvedValue({ commits: [] }) };
+    await expect(executeContextTool('get_commits', { limit: 5 }, ok)).resolves.toEqual({
+      commits: [],
+    });
+  });
+});

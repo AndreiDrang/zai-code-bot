@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { prCommandResultKey, prContextDiffKey, prContextKey } from '../shared/storage/keys.js';
+import {
+  prCommandResultKey,
+  prContextDiffKey,
+  prContextKey,
+  prSummaryKey,
+} from '../shared/storage/keys.js';
 import { REVIEW_MARKER } from '../shared/constants.js';
 
 // Hoisted mocks — vi.mock factories run before imports, so the fns live here.
@@ -45,6 +50,7 @@ function makeEnv({
   withDescription = true,
   withCommits = true,
   withComments = true,
+  withSummary = false,
   apiKey = 'zai-key',
 } = {}) {
   const patchKey = prContextDiffKey(REPO_ID, PR, 'a/f');
@@ -101,6 +107,19 @@ function makeEnv({
     [
       prContextKey(REPO_ID, PR, 'comments'),
       withComments ? JSON.stringify({ issue: [], review: [] }) : null,
+    ],
+    [
+      prSummaryKey(REPO_ID, PR),
+      withSummary
+        ? JSON.stringify({
+            schemaVersion: 1,
+            headSha: HEAD,
+            summary: {
+              prSummary: 'Adds caching.',
+              keyChanges: [{ file: 'a/f', change: 'Adds a cache write.' }],
+            },
+          })
+        : null,
     ],
     [patchKey, withDiff ? '@@ -1 +1 @@\n+line' : null],
   ]);
@@ -332,5 +351,85 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       ok: true,
       data: { diff: '@@ -1 +1 @@\n+line' },
     });
+  });
+
+  it('includes a stored PR summary when it matches the snapshot head', async () => {
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: 'ok' } },
+    });
+    const res = await handleReviewCommand({
+      github: makeGithub(),
+      env: makeEnv({ withSummary: true }),
+      db: {},
+      job,
+      runId: 'run-1',
+    });
+
+    expect(res.status).toBe('reviewed');
+    const userPrompt = mocks.chat.mock.calls[0][0].messages[1].content;
+    expect(userPrompt).toContain('## Generated PR summary');
+    expect(userPrompt).toContain('Adds caching.');
+    expect(userPrompt).toContain('`a/f`: Adds a cache write.');
+  });
+
+  it('ignores a stored PR summary from a different snapshot head', async () => {
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: 'ok' } },
+    });
+    const env = makeEnv({ withSummary: true });
+    // Overwrite ONLY the pr-summary read with one captured for another head SHA;
+    // the manifest and other artifacts still read through the normal bucket.
+    const stale = JSON.stringify({
+      schemaVersion: 1,
+      headSha: '0000000000000000',
+      summary: { prSummary: 'Stale summary.' },
+    });
+    const originalGet = env.BOT_ARTIFACTS.get;
+    env.BOT_ARTIFACTS.get = vi.fn(async (key) =>
+      key === prSummaryKey(REPO_ID, PR) ? { text: async () => stale } : originalGet(key),
+    );
+    await handleReviewCommand({ github: makeGithub(), env, db: {}, job, runId: 'run-1' });
+
+    const userPrompt = mocks.chat.mock.calls[0][0].messages[1].content;
+    expect(userPrompt).not.toContain('## Generated PR summary');
+    expect(userPrompt).not.toContain('Stale summary.');
+  });
+
+  it('reports a provider failure when the LLM transport rejects', async () => {
+    mocks.chat.mockRejectedValue(new Error('agent exploded'));
+    const res = await handleReviewCommand({
+      github: makeGithub(),
+      env: makeEnv(),
+      db: {},
+      job,
+      runId: 'run-1',
+    });
+
+    // The agent runner contains the rejection as a failed run (provider bucket).
+    expect(res).toMatchObject({ status: 'llm_failed', errorCode: 'provider' });
+    expect(mocks.upsertComment).toHaveBeenCalledOnce();
+    expect(mocks.upsertComment.mock.calls[0][0].body).toContain('could not complete');
+  });
+
+  it('maps an LLM protocol violation to a failed run (errorCode protocol)', async () => {
+    // A "successful" response whose assistant message has neither text nor
+    // tool calls trips AgentProtocolError inside the runner; the runner absorbs
+    // it as a failed run (runLlmCommand's agent_internal catch is defensive).
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: null } },
+    });
+    const res = await handleReviewCommand({
+      github: makeGithub(),
+      env: makeEnv(),
+      db: {},
+      job,
+      runId: 'run-1',
+    });
+
+    expect(res).toMatchObject({ status: 'llm_failed', errorCode: 'protocol' });
+    expect(mocks.upsertComment).toHaveBeenCalledOnce();
   });
 });
