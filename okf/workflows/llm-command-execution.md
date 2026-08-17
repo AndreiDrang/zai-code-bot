@@ -4,6 +4,8 @@ title: LLM command execution
 description: The shared runner that executes /zai review and /zai describe — config, context guards, Z.ai call (direct or agent-mode with tools), R2 result persistence, and marker-idempotent comment publication.
 source_paths:
   - poc/workers/shared/llm-command-runner.js
+  - poc/workers/shared/prompts/context-policy.js
+  - poc/workers/shared/prompts/review.js
   - poc/workers/zai-heavy-worker/src/handlers/review.js
   - poc/workers/zai-heavy-worker/src/handlers/describe.js
   - poc/workers/shared/zai-client.js
@@ -39,6 +41,20 @@ lazily through the seven [Context Tools](/contracts/agent-context-tools.md)
 driven by the [Agent tool-calling loop](/contracts/agent-runner.md):
 `list_changed_files`, `get_diff`, `get_file`, `get_file_range`,
 `get_description`, `get_commits`, `get_comments`.
+
+The review workflow composes three independent inputs before it reaches
+`AgentRunner`:
+
+1. A static system prompt: reviewer methodology, shared context-retrieval
+   policy, untrusted-repository-content policy, and the Markdown output
+   contract.
+2. An untrusted user message containing semantic PR metadata and the gathered
+   inexpensive slices. It contains no storage keys, checksums, raw diff, or
+   full source.
+3. Tool definitions with local semantic descriptions for each capability.
+
+`AgentRunner` does not build or interpret these prompts. It only drives the
+LLM ↔ tool protocol and enforces its runtime budgets.
 
 - The no-context guard for agent mode requires a non-empty changed-file list
   (not a diff string).
