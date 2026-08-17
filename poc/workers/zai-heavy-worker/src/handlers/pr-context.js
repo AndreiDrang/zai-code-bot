@@ -1,7 +1,10 @@
 import { prContextDiffKey, prContextKey, prCardKey } from '../../../shared/storage/keys.js';
 import { createLogger } from '../../../shared/logging.js';
 import { projectComments } from '../../../shared/pr-comments.js';
-import { createPrSummaryJob } from '../../../shared/storage/deliveries.js';
+import {
+  createPrSummaryJob,
+  getCurrentPullRequestHead,
+} from '../../../shared/storage/deliveries.js';
 import { publishOutboxJob } from '../../../shared/storage/jobs.js';
 import {
   MAX_SNAPSHOT_FILE_DIFF_BYTES,
@@ -31,6 +34,18 @@ export async function handlePrContextJob({ github, env, db, job }) {
   const cache = env.BOT_CACHE;
   const { repository_id: repoId, pr_number: prNumber, head_sha: headSha } = job;
   const manifestKey = prContextKey(repoId, prNumber, 'manifest');
+
+  // Avoid even a redelivery-side summary enqueue when D1 already knows a newer
+  // synchronize event for this pull request.
+  const recordedHeadSha = await getCurrentPullRequestHead(db, repoId, prNumber);
+  if (recordedHeadSha && recordedHeadSha !== headSha) {
+    return {
+      status: 'stale',
+      action: 'pr_context',
+      headSha,
+      currentHeadSha: recordedHeadSha,
+    };
+  }
 
   // Redeliveries skip only when the committed V2 manifest describes this head.
   const existingHead = await readManifestHead(bucket, manifestKey);
@@ -91,8 +106,22 @@ export async function handlePrContextJob({ github, env, db, job }) {
   const aggregates = aggregateFiles(diffArtifacts.files);
   const gatheredAt = new Date().toISOString();
 
+  // Queue deliveries are at-least-once and synchronize events for one PR can
+  // overlap. Webhook ingestion updates this D1 row before queue publication,
+  // so an older job must not replace context for a newer PR head.
+  const currentHeadSha = await getCurrentPullRequestHead(db, repoId, prNumber);
+  if (currentHeadSha && currentHeadSha !== headSha) {
+    return {
+      status: 'stale',
+      action: 'pr_context',
+      headSha,
+      currentHeadSha,
+    };
+  }
+
   // Store each patch independently. The manifest is written last and commits
-  // a complete V2 snapshot to readers.
+  // a complete V2 snapshot to readers. R2 is strongly consistent, therefore
+  // a summary job published after this marker can read it immediately.
   if (bucket?.put) {
     await Promise.all([
       ...diffArtifacts.artifacts.map((artifact) =>
@@ -144,6 +173,25 @@ export async function handlePrContextJob({ github, env, db, job }) {
       },
     };
     await putJson(bucket, manifestKey, manifest);
+
+    // Only enqueue dependent work after the commit marker is readable and
+    // still belongs to this gather. If another head won the write race, this
+    // delivery must not summarize or advertise its now-stale snapshot.
+    const committedHeadSha = await readManifestHead(bucket, manifestKey);
+    if (!committedHeadSha) {
+      const error = new Error('PR context manifest was not readable after commit');
+      error.code = 'pr_context_manifest_commit_failed';
+      error.retryable = true;
+      throw error;
+    }
+    if (committedHeadSha !== headSha) {
+      return {
+        status: 'stale',
+        action: 'pr_context',
+        headSha,
+        currentHeadSha: committedHeadSha,
+      };
+    }
   }
 
   // KV pr-card: small hot shape snapshot. Keyed by (repo, pr) — NOT headSha —

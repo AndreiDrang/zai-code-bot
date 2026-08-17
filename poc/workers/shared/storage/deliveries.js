@@ -205,6 +205,26 @@ export async function getJob(db, jobId) {
   return first(prepare(db, `${JOB_BASE} WHERE j.job_id = ?`, jobId));
 }
 
+/**
+ * Returns the newest pull-request head recorded by webhook ingestion. Context
+ * gatherers use this immediately before committing their R2 snapshot so an
+ * older queue delivery cannot replace context for a newer synchronize event.
+ */
+export async function getCurrentPullRequestHead(db, repositoryId, prNumber) {
+  if (!db?.prepare || repositoryId == null || prNumber == null) return null;
+  const row = await first(
+    prepare(
+      db,
+      `SELECT head_sha
+         FROM pull_requests
+        WHERE repository_id = ? AND pr_number = ?`,
+      repositoryId,
+      prNumber,
+    ),
+  );
+  return typeof row?.head_sha === 'string' ? row.head_sha : null;
+}
+
 export async function getJobByDelivery(db, deliveryId, kind) {
   return kind
     ? jobByDeliveryKind(db, deliveryId, kind)

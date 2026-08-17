@@ -120,6 +120,80 @@ describe('handlePrContextJob — gather', () => {
     });
   });
 
+  it('does not commit the manifest until every snapshot artifact write resolves', async () => {
+    const store = new Map();
+    const pendingWrites = [];
+    const manifestKey = prContextKey(10, 7, 'manifest');
+    let notifyWritesStarted;
+    const writesStarted = new Promise((resolve) => {
+      notifyWritesStarted = resolve;
+    });
+    const bucket = {
+      store,
+      head: vi.fn(async (key) => (store.has(key) ? { key } : null)),
+      get: vi.fn(async (key) =>
+        store.has(key) ? { text: async () => store.get(key) } : null,
+      ),
+      put: vi.fn((key, value) => {
+        if (key === manifestKey) {
+          store.set(key, value);
+          return Promise.resolve({ key });
+        }
+        return new Promise((resolve) => {
+          pendingWrites.push(() => {
+            store.set(key, value);
+            resolve({ key });
+          });
+          notifyWritesStarted();
+        });
+      }),
+    };
+
+    const gathering = handlePrContextJob({
+      github: makeGithub({
+        getAllPrFiles: vi.fn().mockResolvedValue([
+          { filename: 'a.js', status: 'modified', patch: '@@ -1 +1 @@\n+new' },
+        ]),
+      }),
+      env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
+      db: {},
+      job: baseJob,
+    });
+
+    await writesStarted;
+    expect(bucket.put).not.toHaveBeenCalledWith(manifestKey, expect.anything(), expect.anything());
+
+    for (const resolve of pendingWrites) resolve();
+    await expect(gathering).resolves.toMatchObject({ status: 'success', action: 'pr_context' });
+    expect(bucket.put.mock.calls.at(-1)[0]).toBe(manifestKey);
+  });
+
+  it('does not let an older context job overwrite the newest D1 PR head', async () => {
+    const bucket = fakeR2();
+    const db = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({ head_sha: 'newer-head' }),
+        })),
+      })),
+    };
+
+    const result = await handlePrContextJob({
+      github: makeGithub(),
+      env: { BOT_ARTIFACTS: bucket, BOT_CACHE: fakeCache() },
+      db,
+      job: baseJob,
+    });
+
+    expect(result).toMatchObject({
+      status: 'stale',
+      action: 'pr_context',
+      headSha: 'abc',
+      currentHeadSha: 'newer-head',
+    });
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
   it('skips a redelivery when the per-PR manifest already describes this same head', async () => {
     const bucket = fakeR2({
       [prContextKey(10, 7, 'manifest')]: JSON.stringify({ schemaVersion: 2, headSha: 'abc' }),
