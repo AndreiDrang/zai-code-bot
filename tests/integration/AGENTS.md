@@ -1,5 +1,7 @@
 # INTEGRATION TEST GUIDE
 
+**Scope:** `tests/integration/` and descendants. Inherits repository-wide guidance from `AGENTS.md` and suite-wide conventions from `tests/AGENTS.md`. This file defines only integration-level detail; no local overrides.
+
 ## OVERVIEW
 Integration tests verify end-to-end GitHub event pipelines and visible bot behavior, not just isolated helper logic.
 
