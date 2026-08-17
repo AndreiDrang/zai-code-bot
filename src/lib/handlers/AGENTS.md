@@ -1,5 +1,7 @@
 # HANDLER MODULE GUIDE
 
+**Scope:** `src/lib/handlers/` and descendants. Inherits repository-wide guidance from `AGENTS.md` and services-layer guidance from `src/lib/AGENTS.md`. This file defines only handler-layer detail; no local overrides.
+
 ## OVERVIEW
 Command handlers implement `/zai` behavior only after parsing + authorization; each module owns prompt construction, API call wiring, and response formatting. The `scheduled` handler is distinct: it executes scheduled tasks defined in `.zai-scheduled.yml` (and the manual `/zai update-agents` command) rather than responding to a standard review command.
 
