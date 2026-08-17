@@ -60,11 +60,26 @@ export function buildContextBlock({
 
   // Secondary slices are rendered first under fixed sub-caps; the diff (primary)
   // absorbs the budget left over so it always gets the lion's share.
-  const summaryCap = Math.min(layout.summaryCap || 0, Math.floor(budgetBytes * 0.08));
-  const descriptionCap = Math.min(layout.descriptionCap, Math.floor(budgetBytes * 0.05));
-  const commitsCap = Math.min(layout.commitsCap, Math.floor(budgetBytes * 0.06));
-  const commentsCap = Math.min(layout.commentsCap, Math.floor(budgetBytes * 0.08));
-  const filesCap = Math.min(layout.filesCap, Math.floor(budgetBytes * 0.03));
+  const summaryCap = Math.min(
+    layout.summaryCap || 0,
+    Math.floor(budgetBytes * (layout.summaryBudgetShare ?? 0.08)),
+  );
+  const descriptionCap = Math.min(
+    layout.descriptionCap,
+    Math.floor(budgetBytes * (layout.descriptionBudgetShare ?? 0.05)),
+  );
+  const commitsCap = Math.min(
+    layout.commitsCap,
+    Math.floor(budgetBytes * (layout.commitsBudgetShare ?? 0.06)),
+  );
+  const commentsCap = Math.min(
+    layout.commentsCap,
+    Math.floor(budgetBytes * (layout.commentsBudgetShare ?? 0.08)),
+  );
+  const filesCap = Math.min(
+    layout.filesCap,
+    Math.floor(budgetBytes * (layout.filesBudgetShare ?? 0.03)),
+  );
 
   const generatedSummary = renderPrSummary(summary, summaryCap);
   const description = renderDescription(s.description, descriptionCap);
@@ -72,7 +87,7 @@ export function buildContextBlock({
     ? renderCommits(s.commits, commitsCap, layout.includeCommitMessages)
     : '';
   const comments = layout.includeComments ? renderComments(s.comments, commentsCap) : '';
-  const files = renderFiles(s.files, filesCap, layout.includeFileStats);
+  const files = renderFiles(s.files, filesCap, layout.includeFileStats, layout.includeBinary);
 
   parts.push(generatedSummary, description, commits, comments, files);
 
@@ -95,12 +110,23 @@ export function buildContextBlock({
 const LAYOUTS = {
   review: {
     summaryCap: 6000,
+    summaryBudgetShare: 0.05,
     includeCommits: true,
     includeComments: true,
-    descriptionCap: 4000,
-    commitsCap: 6000,
-    commentsCap: 8000,
-    filesCap: 3000,
+    includeFileStats: true,
+    includeBinary: true,
+    // Review starts with the complete inexpensive PR map. The aggregate diff
+    // and repository source remain lazy Context Tool reads, leaving most of
+    // the bounded prompt budget available for description/conversation and
+    // the changed-file index on large PRs.
+    descriptionCap: 12000,
+    descriptionBudgetShare: 0.1,
+    commitsCap: 30000,
+    commitsBudgetShare: 0.2,
+    commentsCap: 60000,
+    commentsBudgetShare: 0.35,
+    filesCap: 60000,
+    filesBudgetShare: 0.3,
   },
   'pr-summary': {
     includeCommits: true,
@@ -177,7 +203,7 @@ function formatReviewComment(c) {
   return `${user}${loc}: ${body}`;
 }
 
-function renderFiles(files, cap, includeStats = false) {
+function renderFiles(files, cap, includeStats = false, includeBinary = false) {
   const list = Array.isArray(files) ? files : [];
   if (!list.length) return '';
   const entries = list
@@ -185,9 +211,10 @@ function renderFiles(files, cap, includeStats = false) {
     .map((f) => {
       const path = f.filename || f.path;
       if (!includeStats) return `- ${path}`;
+      const binary = includeBinary ? `, binary: ${Boolean(f.binary)}` : '';
       return (
         `- ${path} (${f.status || 'changed'}, ` +
-        `+${Number(f.additions) || 0}/-${Number(f.deletions) || 0})`
+        `+${Number(f.additions) || 0}/-${Number(f.deletions) || 0}${binary})`
       );
     });
   if (!entries.length) return '';

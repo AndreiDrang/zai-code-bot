@@ -45,4 +45,40 @@ describe('review prompts', () => {
     expect(context).not.toContain('## Diff');
     expect(context).not.toContain('@@ -1 +1');
   });
+
+  it('keeps a large changed-file map and statistics while excluding full diffs', () => {
+    const files = Array.from({ length: 549 }, (_, index) => ({
+      path: `src/generated/file-${index + 1}.ts`,
+      status: 'added',
+      additions: index + 1,
+      deletions: 0,
+      binary: false,
+    }));
+    const context = buildReviewInitialContext({
+      metadata: {
+        repository: 'owner/repository',
+        pullRequest: 7,
+        title: 'Large migration',
+        author: 'author',
+        baseSha: 'base',
+        headSha: 'head',
+        changedFiles: files.length,
+        additions: 150_975,
+        deletions: 0,
+      },
+      slices: {
+        description: 'Migrates generated files.',
+        commits: [{ sha: 'abc1234', title: 'Migrate', author: 'author' }],
+        comments: { issue: [], review: [] },
+        files,
+        diff: '@@ SENSITIVE-LARGE-DIFF-CONTENT @@\n'.repeat(100_000),
+      },
+      maxBytes: 200000,
+    });
+
+    expect(context).toContain('## Changed files (549)');
+    expect(context).toContain('src/generated/file-549.ts (added, +549/-0, binary: false)');
+    expect(context).not.toContain('SENSITIVE-LARGE-DIFF-CONTENT');
+    expect(context.length).toBeLessThan(200000);
+  });
 });

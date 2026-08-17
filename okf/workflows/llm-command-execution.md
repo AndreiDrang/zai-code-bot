@@ -41,7 +41,8 @@ fallback is not the effective model in production.
 
 `/zai review` is an **agentic** review. The prompt carries the inexpensive
 snapshot context: PR metadata, description, commits, conversation, and the
-changed-file map — **not** the diff. Diffs and source files are fetched
+changed-file map with status, line-change counts, and binary flags — **not** the
+diff. Diffs and source files are fetched
 lazily through the seven [Context Tools](/contracts/agent-context-tools.md)
 driven by the [Agent tool-calling loop](/contracts/agent-runner.md):
 `list_changed_files`, `get_diff`, `get_file`, `get_file_range`,

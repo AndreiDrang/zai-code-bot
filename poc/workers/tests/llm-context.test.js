@@ -129,15 +129,15 @@ describe('buildContextBlock (review layout)', () => {
   });
 
   it('truncates oversized slices with an ellipsis marker', () => {
-    const longDesc = 'D'.repeat(10000);
+    const longDesc = 'D'.repeat(20000);
     const block = buildContextBlock({
       slices: { diff: 'd', description: longDesc },
       command: 'review',
       budgetBytes: 200000,
     });
-    // descriptionCap = min(4000, 5% of 200000=10000) = 4000
+    // descriptionCap = min(12000, 10% of 200000=20000) = 12000
     expect(block).toContain('(truncated)');
-    expect(block).not.toContain('D'.repeat(10000));
+    expect(block).not.toContain('D'.repeat(20000));
   });
 
   it('throws for an unknown command (layout must be declared)', () => {
