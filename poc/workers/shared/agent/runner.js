@@ -20,6 +20,9 @@ export function createAgentRunner({
     let iterations = 0;
     let toolCalls = 0;
     let usage = null;
+    const toolNames = new Set();
+    let successfulToolCalls = 0;
+    let failedToolCalls = 0;
 
     while (true) {
       const remainingMs = resolvedLimits.maxRunDurationMs - (now() - startedAt);
@@ -88,9 +91,20 @@ export function createAgentRunner({
         runId,
         iteration: iterations,
         toolCalls: calls.length,
+        tools: calls.map((call) => call.function.name),
       });
       const toolMessages = await Promise.all(
-        calls.map((call) => executeToolCall(call, { iteration: iterations, runId })),
+        calls.map((call) =>
+          executeToolCall(call, {
+            iteration: iterations,
+            runId,
+            onComplete: ({ tool, success }) => {
+              if (tool) toolNames.add(tool);
+              if (success) successfulToolCalls += 1;
+              else failedToolCalls += 1;
+            },
+          }),
+        ),
       );
       conversation.push(...toolMessages);
     }
@@ -102,6 +116,10 @@ export function createAgentRunner({
         usage,
         iterations,
         toolCalls,
+        usedTools: toolCalls > 0,
+        tools: [...toolNames],
+        successfulToolCalls,
+        failedToolCalls,
         durationMs: now() - startedAt,
         ...extra,
       };
@@ -110,13 +128,17 @@ export function createAgentRunner({
         status,
         iterations,
         toolCalls,
+        usedTools: result.usedTools,
+        tools: result.tools,
+        successfulToolCalls,
+        failedToolCalls,
         durationMs: result.durationMs,
       });
       return result;
     }
   }
 
-  async function executeToolCall(call, { iteration, runId }) {
+  async function executeToolCall(call, { iteration, runId, onComplete }) {
     const startedAt = now();
     const name = call?.function?.name;
     const toolCallId = call?.id;
@@ -125,6 +147,7 @@ export function createAgentRunner({
       const rawArguments = call.function.arguments ?? '{}';
       const args = JSON.parse(rawArguments);
       const data = await toolRegistry.execute(name, args);
+      onComplete?.({ tool: name, success: true });
       logTool('Agent tool completed', {
         runId,
         iteration,
@@ -140,6 +163,7 @@ export function createAgentRunner({
         error instanceof AgentProtocolError
           ? { code: error.code, message: error.message }
           : toSafeToolError(error);
+      onComplete?.({ tool: typeof name === 'string' ? name : null, success: false });
       logTool('Agent tool failed', {
         runId,
         iteration,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getRepositoryConfig: vi.fn().mockResolvedValue({ maxContextBytes: 200000 }),
-  zaiCall: vi.fn(),
+  zaiChat: vi.fn(),
 }));
 
 vi.mock('../shared/storage/config.js', () => ({
@@ -10,7 +10,7 @@ vi.mock('../shared/storage/config.js', () => ({
 }));
 
 vi.mock('../shared/zai-client.js', () => ({
-  createZaiClient: vi.fn(() => ({ call: mocks.zaiCall })),
+  createZaiClient: vi.fn(() => ({ chat: mocks.zaiChat })),
 }));
 
 import { prContextDiffKey, prContextKey, prSummaryKey } from '../shared/storage/keys.js';
@@ -91,13 +91,27 @@ const validSummary = {
   },
 };
 
+function assistant(content, toolCalls) {
+  return {
+    success: true,
+    data: {
+      message: {
+        role: 'assistant',
+        content,
+        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      },
+      usage: null,
+    },
+  };
+}
+
 describe('handlePrSummaryJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.zaiCall.mockResolvedValue({ success: true, data: JSON.stringify(validSummary) });
+    mocks.zaiChat.mockResolvedValue(assistant(JSON.stringify(validSummary)));
   });
 
-  it('sends all five gathered slices and stores a versioned JSON artifact', async () => {
+  it('sends inexpensive PR metadata and tool definitions, then stores a versioned JSON artifact', async () => {
     const bucket = fakeBucket();
     const result = await handlePrSummaryJob({
       env: { BOT_ARTIFACTS: bucket, BOT_CACHE: {}, ZAI_API_KEY: 'key', ZAI_MODEL: 'glm-test' },
@@ -106,24 +120,24 @@ describe('handlePrSummaryJob', () => {
     });
 
     expect(result).toMatchObject({ status: 'success', action: 'pr_summary', headSha: 'abc' });
-    expect(mocks.zaiCall).toHaveBeenCalledOnce();
-    const request = mocks.zaiCall.mock.calls[0][0];
+    expect(mocks.zaiChat).toHaveBeenCalledOnce();
+    const request = mocks.zaiChat.mock.calls[0][0];
     expect(request.model).toBe('glm-test');
     expect(request.messages[0].role).toBe('system');
     expect(request.messages[1].content).toContain('## Description');
     expect(request.messages[1].content).toContain('## Commits');
     expect(request.messages[1].content).toContain('## Changed files');
     expect(request.messages[1].content).toContain('## Conversation');
-    expect(request.messages[1].content).toContain('## Diff');
+    expect(request.messages[1].content).not.toContain('## Diff');
     expect(request.messages[1].content).toContain('"repository":"owner/repo"');
     expect(request.messages[1].content).toContain('"pullRequest":7');
     expect(request.messages[1].content).not.toContain('contextPrefix');
     expect(request.messages[1].content).not.toContain('diffsPrefix');
     expect(request.messages[1].content).not.toContain('storedDiffBytes');
-    expect(request.fallbackMessages).toBeDefined();
-    expect(request.fallbackMessages[1].content.length).toBeLessThanOrEqual(
-      request.messages[1].content.length,
+    expect(request.tools.map((tool) => tool.function.name)).toEqual(
+      expect.arrayContaining(['get_diff', 'get_file', 'get_file_range']),
     );
+    expect(bucket.get).not.toHaveBeenCalledWith(prContextDiffKey(10, 7, 'src/x.js'));
 
     const artifact = JSON.parse(bucket.store.get(prSummaryKey(10, 7)));
     expect(artifact).toMatchObject({
@@ -142,11 +156,22 @@ describe('handlePrSummaryJob', () => {
       job,
     });
     expect(result.status).toBe('no_api_key');
-    expect(mocks.zaiCall).not.toHaveBeenCalled();
+    expect(mocks.zaiChat).not.toHaveBeenCalled();
   });
 
-  it('loads the V2 per-file snapshot', async () => {
+  it('retrieves a V2 per-file patch when the summary agent requests it', async () => {
     const bucket = fakeBucket();
+    mocks.zaiChat
+      .mockResolvedValueOnce(
+        assistant(null, [
+          {
+            id: 'diff-1',
+            type: 'function',
+            function: { name: 'get_diff', arguments: '{"path":"src/x.js"}' },
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(assistant(JSON.stringify(validSummary)));
     await expect(
       handlePrSummaryJob({
         env: { BOT_ARTIFACTS: bucket, BOT_CACHE: {}, ZAI_API_KEY: 'key' },
@@ -155,15 +180,20 @@ describe('handlePrSummaryJob', () => {
       }),
     ).resolves.toMatchObject({ status: 'success' });
 
-    const request = mocks.zaiCall.mock.calls[0][0];
-    expect(request.messages[1].content).toContain('src/x.js (added, +2/-1)');
-    expect(request.messages[1].content).toContain('@@ -1 +1 @@');
+    expect(mocks.zaiChat).toHaveBeenCalledTimes(2);
+    const followUp = mocks.zaiChat.mock.calls[1][0];
+    const toolResult = followUp.messages.at(-1);
+    expect(toolResult).toMatchObject({ role: 'tool', tool_call_id: 'diff-1' });
+    expect(JSON.parse(toolResult.content)).toMatchObject({
+      ok: true,
+      data: { path: 'src/x.js', diff: '@@ -1 +1 @@\n+new' },
+    });
     expect(bucket.get).not.toHaveBeenCalledWith('v2/prs/10/7/context/diff.diff');
   });
 
   it('rejects malformed model output before writing the artifact', async () => {
     const bucket = fakeBucket();
-    mocks.zaiCall.mockResolvedValue({ success: true, data: '{"prSummary":"only"}' });
+    mocks.zaiChat.mockResolvedValue(assistant('{"prSummary":"only"}'));
     await expect(
       handlePrSummaryJob({
         env: { BOT_ARTIFACTS: bucket, BOT_CACHE: {}, ZAI_API_KEY: 'key' },

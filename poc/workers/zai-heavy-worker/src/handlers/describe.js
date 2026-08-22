@@ -7,8 +7,18 @@
  */
 
 import { DESCRIBE_MARKER, BOT_FOOTER } from '../../../shared/constants.js';
+import { createAgentRunner } from '../../../shared/agent/runner.js';
+import {
+  createContextToolRegistry,
+  toOpenAiToolDefinitions,
+} from '../../../shared/context-tools/registry.js';
+import { createContextService } from '../../../shared/context/context-service.js';
 import { createLogger } from '../../../shared/logging.js';
-import { readContextManifest, readContextSlice } from '../../../shared/pr-context-reader.js';
+import {
+  buildDescribeInitialContext,
+  buildDescribeSystemPrompt,
+} from '../../../shared/prompts/describe.js';
+import { readContextManifest } from '../../../shared/pr-context-reader.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
 import { prCommandResultKey } from '../../../shared/storage/keys.js';
 import { upsertComment } from '../../../shared/comments.js';
@@ -18,13 +28,16 @@ import { createZaiClient } from '../../../shared/zai-client.js';
 const DESCRIPTION_START = '<!-- zai-description-start -->';
 const DESCRIPTION_END = '<!-- zai-description-end -->';
 const MAX_COMMIT_CHARS = 8000;
+const DEFAULT_MAX_CONTEXT_BYTES = 200000;
 const PROMPT_VERSION = 'describe-v1';
 
 const DESCRIBE_PROMPT = `You are an expert Staff Engineer and technical writer.
 Synthesize a clear, comprehensive pull request description from the supplied
-commit messages. Group related changes instead of repeating commits, ignore
-trivial or redundant messages, and infer intent only when the commits support
-it.
+pull request context. Use commit messages to establish the change history,
+then retrieve targeted diff or source context only when it is needed to
+describe an important change accurately. Group related changes instead of
+repeating commits, ignore trivial or redundant messages, and infer intent only
+when the available context supports it.
 
 Use a professional, objective tone and imperative bullet points. Return only
 Markdown with these optional sections, omitting empty sections:
@@ -60,9 +73,25 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
   } = job;
 
   const manifest = await readContextManifest(env?.BOT_ARTIFACTS, repoId, prNumber);
-  let commits = await readContextSlice(env?.BOT_ARTIFACTS, repoId, prNumber, 'commits');
+  const config = await getRepositoryConfig(db, env?.BOT_CACHE, repoId);
+  const maxBytes = Number(config?.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
+  const context = createContextService({
+    bucket: env?.BOT_ARTIFACTS,
+    github,
+    owner,
+    repository: name,
+    repositoryFullName: repoFullName,
+    repositoryId: repoId,
+    prNumber,
+    expectedHeadSha: headSha,
+  });
+  const snapshot = await context.getSnapshotSlices({ includeDiff: false });
+  const metadata = snapshot.status === 'available' ? snapshot.metadata : null;
+  const slices = snapshot.status === 'available' ? snapshot.slices : {};
+  let commits = slices.commits;
   if (!Array.isArray(commits) || commits.length === 0) {
     commits = await github.getPrCommits(owner, name, prNumber, 1, 30).catch(() => []);
+    slices.commits = commits;
   }
 
   const commitMessages = truncate(
@@ -100,37 +129,57 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
     return result('no_api_key', repoFullName, prNumber);
   }
 
-  const config = await getRepositoryConfig(db, env?.BOT_CACHE, repoId);
   const client = createZaiClient({
     timeout: Number(config?.timeout) || 30000,
     maxRetries: 3,
     baseDelay: 2000,
   });
-  const response = await client.call({
+  const toolRegistry = createContextToolRegistry(context);
+  const runner = createAgentRunner({
+    llmClient: client,
+    toolRegistry,
+    logger,
+  });
+  const agent = await runner.run({
     apiKey,
     model: env?.ZAI_MODEL || 'glm-5.2',
     messages: [
-      { role: 'system', content: DESCRIBE_PROMPT },
-      { role: 'user', content: `Commit messages:\n\n<commits>\n${commitMessages}\n</commits>` },
+      { role: 'system', content: buildDescribeSystemPrompt(DESCRIBE_PROMPT) },
+      {
+        role: 'user',
+        content: buildDescribeInitialContext({
+          slices,
+          metadata: metadata || {
+            repository: repoFullName,
+            pullRequest: prNumber,
+            headSha,
+          },
+          maxBytes,
+        }),
+      },
     ],
+    tools: toOpenAiToolDefinitions(toolRegistry.getDefinitions()),
+    runId,
   });
 
-  if (!response.success) {
+  if (agent.status !== 'completed') {
+    const category =
+      agent.status === 'failed' ? agent.error?.category || 'internal' : agent.status;
     logger.error('Z.ai describe call failed', {
       repo: repoFullName,
       issue: prNumber,
-      category: response.error?.category,
+      category,
       runId,
     });
     await publishStatus(
       identity,
-      `The description could not be generated (${response.error?.category || 'internal'}). Please retry.`,
+      `The description could not be generated (${category}). Please retry.`,
       'llm_failed',
     );
     return result('llm_failed', repoFullName, prNumber);
   }
 
-  const generated = String(response.data || '').trim();
+  const generated = String(agent.response.content || '').trim();
   const pullRequest = await github.getPullRequest(owner, name, prNumber);
   const body = replaceGeneratedDescription(pullRequest?.body || '', generated);
   await github.updatePullRequest(owner, name, prNumber, { body });
@@ -150,11 +199,30 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
     'The PR description was updated from its commit history.',
     'updated',
   );
+  logger.info('Describe updated pull request', {
+    repo: repoFullName,
+    issue: prNumber,
+    headSha,
+    model: env?.ZAI_MODEL || 'glm-5.2',
+    promptVersion: PROMPT_VERSION,
+    agentUsedTools: agent.usedTools,
+    agentIterations: agent.iterations,
+    agentToolCalls: agent.toolCalls,
+    agentTools: agent.tools,
+    agentSuccessfulToolCalls: agent.successfulToolCalls,
+    agentFailedToolCalls: agent.failedToolCalls,
+  });
   return {
     ...result('updated', repoFullName, prNumber),
     model: env?.ZAI_MODEL || 'glm-5.2',
     promptVersion: PROMPT_VERSION,
     resultStored,
+    agentUsedTools: agent.usedTools,
+    agentIterations: agent.iterations,
+    agentToolCalls: agent.toolCalls,
+    agentTools: agent.tools,
+    agentSuccessfulToolCalls: agent.successfulToolCalls,
+    agentFailedToolCalls: agent.failedToolCalls,
   };
 }
 

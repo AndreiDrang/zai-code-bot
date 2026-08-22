@@ -35,7 +35,7 @@ function createTestRunner({ replies, execute, limits, now } = {}) {
 
 describe('AgentRunner', () => {
   it('returns a completed final response without tool calls', async () => {
-    const { runner, llmClient } = createTestRunner({
+    const { runner, llmClient, logger } = createTestRunner({
       replies: [assistant('## Summary\nLooks good.')],
     });
 
@@ -56,11 +56,20 @@ describe('AgentRunner', () => {
     expect(llmClient.chat).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'key', model: 'model', tools: [] }),
     );
+    expect(logger.info).toHaveBeenLastCalledWith(
+      'Agent run finished',
+      expect.objectContaining({
+        usedTools: false,
+        tools: [],
+        successfulToolCalls: 0,
+        failedToolCalls: 0,
+      }),
+    );
   });
 
   it('keeps assistant and tool messages before requesting the final response', async () => {
     const call = toolCall('call-1', 'get_diff', '{"path":"src/cache.ts"}');
-    const { runner, llmClient, toolRegistry } = createTestRunner({
+    const { runner, llmClient, toolRegistry, logger } = createTestRunner({
       replies: [assistant(null, [call]), assistant('## Findings\nNone.')],
     });
 
@@ -83,6 +92,15 @@ describe('AgentRunner', () => {
       ok: true,
       data: { value: 'ok' },
     });
+    expect(logger.info).toHaveBeenLastCalledWith(
+      'Agent run finished',
+      expect.objectContaining({
+        usedTools: true,
+        tools: ['get_diff'],
+        successfulToolCalls: 1,
+        failedToolCalls: 0,
+      }),
+    );
   });
 
   it('executes tool calls from one assistant response concurrently and preserves order', async () => {
@@ -117,7 +135,7 @@ describe('AgentRunner', () => {
   });
 
   it('returns malformed arguments as a recoverable tool error', async () => {
-    const { runner, llmClient, toolRegistry } = createTestRunner({
+    const { runner, llmClient, toolRegistry, logger } = createTestRunner({
       replies: [assistant(null, [toolCall('call-1', 'get_diff', '{bad')]), assistant('done')],
     });
 
@@ -136,6 +154,23 @@ describe('AgentRunner', () => {
       ok: false,
       error: { code: 'INVALID_TOOL_ARGUMENTS' },
     });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Agent tool failed',
+      expect.objectContaining({
+        tool: 'get_diff',
+        success: false,
+        errorCode: 'INVALID_TOOL_ARGUMENTS',
+      }),
+    );
+    expect(logger.info).toHaveBeenLastCalledWith(
+      'Agent run finished',
+      expect.objectContaining({
+        usedTools: true,
+        tools: ['get_diff'],
+        successfulToolCalls: 0,
+        failedToolCalls: 1,
+      }),
+    );
   });
 
   it('returns unknown tools as a recoverable tool error', async () => {

@@ -226,6 +226,12 @@ export async function runLlmCommand(
     model,
     promptVersion,
     resultStored,
+    agentUsedTools: result.agent?.usedTools ?? false,
+    agentIterations: result.agent?.iterations ?? null,
+    agentToolCalls: result.agent?.toolCalls ?? null,
+    agentTools: result.agent?.tools ?? [],
+    agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
+    agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
   });
 
   return baseReturn(doneStatus, {
@@ -237,8 +243,12 @@ export async function runLlmCommand(
     contextReady: Boolean(metadata),
     resultStored,
     usedFallback: Boolean(result.usedFallback),
+    agentUsedTools: result.agent?.usedTools ?? false,
     agentIterations: result.agent?.iterations ?? null,
     agentToolCalls: result.agent?.toolCalls ?? null,
+    agentTools: result.agent?.tools ?? [],
+    agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
+    agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
     command,
   });
 }

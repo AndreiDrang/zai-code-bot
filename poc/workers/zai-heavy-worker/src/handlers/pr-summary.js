@@ -1,6 +1,14 @@
-import { buildContextBlock } from '../../../shared/llm-context.js';
 import { createContextService } from '../../../shared/context/context-service.js';
+import {
+  createContextToolRegistry,
+  toOpenAiToolDefinitions,
+} from '../../../shared/context-tools/registry.js';
+import { createAgentRunner } from '../../../shared/agent/runner.js';
 import { createLogger } from '../../../shared/logging.js';
+import {
+  buildPrSummaryInitialContext,
+  buildPrSummarySystemPrompt,
+} from '../../../shared/prompts/pr-summary.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
 import { prSummaryKey } from '../../../shared/storage/keys.js';
 import { resolveSecretValue } from '../../../shared/secrets.js';
@@ -9,17 +17,18 @@ import { PR_SUMMARY_PROMPT } from '../../generated/prompts.js';
 
 const PROMPT_VERSION = 'pr-summary-v1';
 const DEFAULT_MAX_CONTEXT_BYTES = 200000;
-const FALLBACK_MAX_CONTEXT_BYTES = 60000;
 const MODEL_TIMEOUT_MS = 45000;
 const MODEL_MAX_RETRIES = 3;
 const MODEL_BASE_DELAY_MS = 2000;
 
 /**
- * Generates the structured initial PR context after `pr_context` has written
- * all source slices. This job deliberately does not publish a GitHub comment:
- * the JSON artifact is auxiliary context for later `/zai review` runs.
+ * Generates the structured initial PR context after `pr_context` has committed
+ * a snapshot. Inexpensive PR metadata is sent eagerly; diffs and repository
+ * source are retrieved lazily through Context Tools. This job deliberately
+ * does not publish a GitHub comment: its JSON artifact is auxiliary context for
+ * later `/zai review` runs.
  */
-export async function handlePrSummaryJob({ env, db, job }) {
+export async function handlePrSummaryJob({ github, env, db, job, runId }) {
   const logger = createLogger(env, 'zai-heavy-worker:pr-summary');
   const {
     repository_id: repoId,
@@ -28,6 +37,8 @@ export async function handlePrSummaryJob({ env, db, job }) {
     title,
     author_login: author,
     repository_full_name: repoFullName,
+    repository_owner: owner,
+    repository_name: repository,
   } = job;
 
   const bucket = env?.BOT_ARTIFACTS;
@@ -35,12 +46,15 @@ export async function handlePrSummaryJob({ env, db, job }) {
   const maxBytes = Number(config?.maxContextBytes) || DEFAULT_MAX_CONTEXT_BYTES;
   const context = createContextService({
     bucket,
+    github,
+    owner,
+    repository,
     repositoryFullName: repoFullName,
     repositoryId: repoId,
     prNumber,
     expectedHeadSha: headSha,
   });
-  const snapshot = await context.getSnapshotSlices({ maxDiffBytes: maxBytes });
+  const snapshot = await context.getSnapshotSlices({ includeDiff: false });
 
   if (snapshot.status === 'stale') {
     return {
@@ -89,7 +103,7 @@ export async function handlePrSummaryJob({ env, db, job }) {
     };
   }
 
-  const userContent = buildPrSummaryUserPrompt({
+  const userContent = buildPrSummaryInitialContext({
     slices,
     metadata: {
       ...metadata,
@@ -98,51 +112,45 @@ export async function handlePrSummaryJob({ env, db, job }) {
     },
     maxBytes,
   });
-  const fallbackMaxBytes = Math.min(maxBytes, FALLBACK_MAX_CONTEXT_BYTES);
-  const fallbackUserContent =
-    fallbackMaxBytes < maxBytes
-      ? buildPrSummaryUserPrompt({
-          slices,
-          metadata: {
-            ...metadata,
-            title: title || metadata.title,
-            author: author || metadata.author,
-          },
-          maxBytes: fallbackMaxBytes,
-        })
-      : null;
   const model = env?.ZAI_MODEL || 'glm-5.2';
   const client = createZaiClient({
     timeout: MODEL_TIMEOUT_MS,
     maxRetries: MODEL_MAX_RETRIES,
     baseDelay: MODEL_BASE_DELAY_MS,
   });
-  const result = await client.call({
+  const toolRegistry = createContextToolRegistry(context);
+  const runner = createAgentRunner({
+    llmClient: client,
+    toolRegistry,
+    logger,
+  });
+  const agent = await runner.run({
     apiKey,
     model,
     messages: [
-      { role: 'system', content: PR_SUMMARY_PROMPT },
+      {
+        role: 'system',
+        content: buildPrSummarySystemPrompt(PR_SUMMARY_PROMPT),
+      },
       { role: 'user', content: userContent },
     ],
-    fallbackMessages: fallbackUserContent
-      ? [
-          { role: 'system', content: PR_SUMMARY_PROMPT },
-          { role: 'user', content: fallbackUserContent },
-        ]
-      : undefined,
+    tools: toOpenAiToolDefinitions(toolRegistry.getDefinitions()),
+    runId,
   });
 
-  if (!result.success) {
-    const category = String(result.error?.category || 'internal').replace(/[^a-z0-9_]/gi, '_');
+  if (agent.status !== 'completed') {
+    const category = String(
+      agent.status === 'failed' ? agent.error?.category || 'internal' : agent.status,
+    ).replace(/[^a-z0-9_]/gi, '_');
     const error = new Error(`PR summary LLM call failed: ${category}`);
     error.code = `pr_summary_${category}`;
-    error.retryable = result.error?.retryable !== false;
+    error.retryable = agent.error?.retryable !== false;
     throw error;
   }
 
   let summary;
   try {
-    summary = validatePrSummary(JSON.parse(String(result.data)));
+    summary = validatePrSummary(JSON.parse(String(agent.response.content)));
   } catch (error) {
     const invalid = new Error('Z.ai returned an invalid PR summary');
     invalid.code = 'pr_summary_invalid_json';
@@ -203,6 +211,12 @@ export async function handlePrSummaryJob({ env, db, job }) {
     headSha,
     model,
     promptVersion: PROMPT_VERSION,
+    agentUsedTools: agent.usedTools,
+    agentIterations: agent.iterations,
+    agentToolCalls: agent.toolCalls,
+    agentTools: agent.tools,
+    agentSuccessfulToolCalls: agent.successfulToolCalls,
+    agentFailedToolCalls: agent.failedToolCalls,
   });
   return {
     status: 'success',
@@ -212,45 +226,13 @@ export async function handlePrSummaryJob({ env, db, job }) {
     headSha,
     model,
     promptVersion: PROMPT_VERSION,
+    agentUsedTools: agent.usedTools,
+    agentIterations: agent.iterations,
+    agentToolCalls: agent.toolCalls,
+    agentTools: agent.tools,
+    agentSuccessfulToolCalls: agent.successfulToolCalls,
+    agentFailedToolCalls: agent.failedToolCalls,
   };
-}
-
-function buildPrSummaryUserPrompt({ slices, metadata, maxBytes }) {
-  const context = buildContextBlock({
-    slices,
-    command: 'pr-summary',
-    budgetBytes: maxBytes,
-    meta: { title: metadata?.title, author: metadata?.author },
-  });
-  return [
-    'Create a compact, factual context summary for this pull request.',
-    'This summary will be used as background for future automated code reviews.',
-    '',
-    'Pull request metadata:',
-    '```json',
-    JSON.stringify(metadata),
-    '```',
-    '',
-    context || '(No source context was available.)',
-    '',
-    'Return exactly this JSON structure:',
-    '{',
-    '  "prSummary": "A concise description of what changed and why.",',
-    '  "keyChanges": [',
-    '    {',
-    '      "file": "path/to/file",',
-    '      "change": "Concise description of the change in this file."',
-    '    }',
-    '  ],',
-    '  "conversationSummary": {',
-    '    "mainTopic": "The primary discussion topic, or null when there was no meaningful discussion.",',
-    '    "unresolvedQuestions": [',
-    '      "A question that remains unresolved in the provided discussion."',
-    '    ],',
-    '    "resolvedQuestions": 0',
-    '  }',
-    '}',
-  ].join('\n');
 }
 
 export function validatePrSummary(value) {

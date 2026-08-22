@@ -150,6 +150,9 @@ function makeGithub() {
 }
 
 beforeEach(() => {
+  mocks.logger.info.mockReset();
+  mocks.logger.warn.mockReset();
+  mocks.logger.error.mockReset();
   mocks.call.mockReset();
   mocks.chat.mockReset();
   mocks.upsertComment.mockReset();
@@ -173,7 +176,14 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       runId: 'run-1',
     });
 
-    expect(res).toMatchObject({ status: 'reviewed', resultStored: true, headSha: HEAD });
+    expect(res).toMatchObject({
+      status: 'reviewed',
+      resultStored: true,
+      headSha: HEAD,
+      agentUsedTools: false,
+      agentToolCalls: 0,
+      agentTools: [],
+    });
     expect(mocks.chat).toHaveBeenCalledOnce();
 
     // The result is written to the per-command /context/ key (overwrite store).
@@ -195,6 +205,16 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(upsertArg.body).toContain('## 🔍 /zai review');
     expect(upsertArg.body).toContain('## Summary\nGood.');
     expect(upsertArg.body).toContain(REVIEW_MARKER);
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      'review published',
+      expect.objectContaining({
+        agentUsedTools: false,
+        agentToolCalls: 0,
+        agentTools: [],
+        agentSuccessfulToolCalls: 0,
+        agentFailedToolCalls: 0,
+      }),
+    );
   });
 
   it('sends complete inexpensive PR context and tool schemas, without the aggregate diff', async () => {
