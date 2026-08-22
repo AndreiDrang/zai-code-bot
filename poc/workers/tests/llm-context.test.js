@@ -91,6 +91,22 @@ describe('buildContextBlock (review layout)', () => {
     expect(block).toContain('src/cache.ts (modified, +4/-1)');
   });
 
+  it('labels changed files as binary only when they are binary', () => {
+    const block = buildContextBlock({
+      command: 'pr-summary',
+      slices: {
+        files: [
+          { path: 'src/cache.ts', status: 'modified', additions: 4, deletions: 1, binary: false },
+          { path: 'logo.png', status: 'added', additions: 0, deletions: 0, binary: true },
+        ],
+      },
+    });
+
+    expect(block).toContain('src/cache.ts (modified, +4/-1)');
+    expect(block).not.toContain('src/cache.ts (modified, +4/-1, binary: false)');
+    expect(block).toContain('logo.png (added, +0/-0, binary: true)');
+  });
+
   it('never throws on missing/empty slices — yields a diff-only block', () => {
     const block = buildContextBlock({
       slices: { diff: 'only diff' },

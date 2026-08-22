@@ -223,7 +223,7 @@ function renderFiles(files, cap, includeStats = false, includeBinary = false) {
     .map((f) => {
       const path = f.filename || f.path;
       if (!includeStats) return `- ${path}`;
-      const binary = includeBinary ? `, binary: ${Boolean(f.binary)}` : '';
+      const binary = includeBinary && f.binary ? ', binary: true' : '';
       return (
         `- ${path} (${f.status || 'changed'}, ` +
         `+${Number(f.additions) || 0}/-${Number(f.deletions) || 0}${binary})`
