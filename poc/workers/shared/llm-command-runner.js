@@ -196,7 +196,13 @@ export async function runLlmCommand(
       !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
     if (finalAttempt) {
       await publishNotice(identity, metadata, {
-        message: buildFailureNotice({ command, category, agent: result.agent, agentLimits }),
+        message: buildFailureNotice({
+          command,
+          category,
+          error: result.error,
+          agent: result.agent,
+          agentLimits,
+        }),
       });
     }
     throw llmCommandError(category, retryable && !finalAttempt);
@@ -304,7 +310,7 @@ async function runAgentCommand({
         success: false,
         error: {
           category: agent.status === 'failed' ? agent.error?.category || 'provider' : agent.status,
-          attempts: null,
+          attempts: agent.error?.attempts ?? null,
           retryable:
             agent.status === 'failed'
               ? agent.error?.retryable
@@ -335,7 +341,7 @@ function llmCommandError(category, retryable) {
   return error;
 }
 
-function buildFailureNotice({ command, category, agent, agentLimits }) {
+function buildFailureNotice({ command, category, error, agent, agentLimits }) {
   if (category === 'max_tool_calls') {
     const limit = Number(agentLimits?.maxToolCalls);
     const toolCalls = Number(agent?.toolCalls);
@@ -349,7 +355,65 @@ function buildFailureNotice({ command, category, agent, agentLimits }) {
       `so it could not produce a complete result. Please retry with \`/zai ${command}\`.`
     );
   }
-  return `The LLM ${command} could not complete (${category}). Please retry with \`/zai ${command}\`.`;
+
+  if (category === 'max_retrieved_bytes') {
+    const limit = formatByteLimit(agentLimits?.maxRetrievedBytes);
+    const retrieved = formatByteLimit(agent?.retrievedBytes);
+    const progress = retrieved ? ` after retrieving ${retrieved}` : '';
+    const limitText = limit ? ` of ${limit}` : '';
+    return (
+      `The ${command} could not retrieve more PR context${progress}${limitText} because its ` +
+      `context-data limit was reached. Please retry with \`/zai ${command}\`.`
+    );
+  }
+
+  if (category === 'max_iterations') {
+    const limit = Number(agentLimits?.maxIterations);
+    const toolCalls = Number(agent?.toolCalls);
+    const limitText = Number.isFinite(limit) && limit > 0 ? `${limit}-turn` : 'investigation';
+    const progress =
+      Number.isFinite(toolCalls) && toolCalls > 0
+        ? ` after ${toolCalls} context request${toolCalls === 1 ? '' : 's'}`
+        : '';
+    return (
+      `The ${command} reached its ${limitText} investigation limit${progress} before producing ` +
+      `a complete result. Please retry with \`/zai ${command}\`.`
+    );
+  }
+
+  const attempts = formatAttemptCount(error?.attempts);
+  const notices = {
+    timed_out:
+      `The ${command} reached its execution-time limit before Z.ai produced a complete result.`,
+    timeout: `Z.ai did not respond within the allowed time${attempts}.`,
+    'rate-limit': `Z.ai temporarily rate-limited ${command} requests${attempts}.`,
+    provider: `Z.ai was temporarily unavailable while running ${command}${attempts}.`,
+    auth:
+      `Z.ai rejected this deployment's credentials, so ${command} cannot run until a maintainer fixes the configuration.`,
+    validation:
+      `Z.ai rejected the ${command} request as invalid. A maintainer needs to inspect the deployment configuration.`,
+    protocol:
+      `Z.ai returned a response that could not be safely processed for ${command}.`,
+    agent_internal: `The ${command} runner encountered an internal error before producing a result.`,
+    internal: `The ${command} service encountered an internal error before producing a result.`,
+  };
+  return `${notices[category] || `The ${command} could not complete due to an unexpected service error.`} ${
+    ['auth', 'validation'].includes(category) ? '' : `Please retry with \`/zai ${command}\`.`
+  }`.trim();
+}
+
+function formatAttemptCount(value) {
+  const attempts = Number(value);
+  return Number.isInteger(attempts) && attempts > 0
+    ? ` after ${attempts} attempt${attempts === 1 ? '' : 's'}`
+    : '';
+}
+
+function formatByteLimit(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${Math.round(bytes)} bytes`;
+  return `${Math.round((bytes / 1024) * 10) / 10} KiB`;
 }
 
 /** Publishes the LLM result as a marker-idempotent comment. */

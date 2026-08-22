@@ -97,14 +97,19 @@ result is also stored at `context/describe.md`.
 | No reviewable context (agent: empty file list; direct: no diff) | Notice comment "nothing to {command}" | `no_diff` (succeeds) |
 | `ZAI_API_KEY` unset | Context-aware notice comment | `no_api_key` (succeeds) |
 | Retryable Z.ai/agent failure (`timeout`, provider, rate-limit) before the final job attempt | No GitHub notice; throw typed error for Queue backoff | `retryable` |
-| Terminal or non-retryable Z.ai/agent failure | Notice comment with the safe error category | `failed` |
+| Terminal or non-retryable Z.ai/agent failure | Notice comment with a safe, actionable cause | `failed` |
 
 Provider failures never expose raw provider errors in comments — only a
-sanitized category name. The Z.ai client adds per-attempt retry with
-progressive timeouts (100% → 67% → 50% → 33%; direct calls have a 10s floor)
-and error categorization (auth / validation / provider / rate-limit / timeout /
-internal). Agent-mode calls cap each attempt and backoff at AgentRunner's
-absolute deadline, so neither can exceed the run budget.
+sanitized explanation. Terminal comments distinguish execution, tool-call,
+retrieved-context, and investigation limits; timeouts; rate limits; temporary
+provider unavailability; rejected credentials or invalid requests; malformed
+responses; and internal failures. Where it is safe to do so, the message also
+states completed context requests, retrieved bytes, or retry attempts. The Z.ai
+client adds per-attempt retry with progressive timeouts (100% → 67% → 50% →
+33%; direct calls have a 10s floor) and error categorization (auth / validation
+/ provider / rate-limit / timeout / internal). Agent-mode calls cap each
+attempt and backoff at AgentRunner's absolute deadline, so neither can exceed
+the run budget.
 
 ## Command-result persistence
 

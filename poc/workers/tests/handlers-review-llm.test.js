@@ -300,7 +300,7 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(mocks.chat.mock.calls[0][0].messages[1].content).not.toContain('live diff content');
   });
 
-  it('publishes a sanitized notice only after the final LLM failure', async () => {
+  it('publishes a detailed, sanitized provider failure notice only after the final attempt', async () => {
     mocks.chat.mockResolvedValue({
       success: false,
       error: { category: 'provider', retryable: true, attempts: 3 },
@@ -317,7 +317,10 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     ).rejects.toMatchObject({ code: 'llm_provider', retryable: false });
     expect(env.BOT_ARTIFACTS.put).not.toHaveBeenCalled(); // nothing persisted on failure
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
-    expect(mocks.upsertComment.mock.calls[0][0].body).toContain('could not complete');
+    expect(mocks.upsertComment.mock.calls[0][0].body).toContain(
+      'Z.ai was temporarily unavailable while running review after 3 attempts.',
+    );
+    expect(mocks.upsertComment.mock.calls[0][0].body).not.toContain('(provider)');
   });
 
   it('throws retryable transient failures without publishing an intermediate notice', async () => {
@@ -381,6 +384,33 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       commentKind: 'review',
       marker: REVIEW_MARKER,
     });
+  });
+
+  it('explains authentication failures without exposing provider response details', async () => {
+    mocks.chat.mockResolvedValue({
+      success: false,
+      error: {
+        category: 'auth',
+        retryable: false,
+        attempts: 1,
+        message: 'invalid API key: zai-secret-value',
+      },
+    });
+
+    await expect(
+      handleReviewCommand({
+        github: makeGithub(),
+        env: makeEnv(),
+        db: {},
+        job,
+        runId: 'run-1',
+      }),
+    ).rejects.toMatchObject({ code: 'llm_auth', retryable: false });
+
+    const body = mocks.upsertComment.mock.calls[0][0].body;
+    expect(body).toContain("Z.ai rejected this deployment's credentials");
+    expect(body).toContain('until a maintainer fixes the configuration');
+    expect(body).not.toContain('zai-secret-value');
   });
 
   it('still publishes the review even if result persistence (bucket.put) throws', async () => {

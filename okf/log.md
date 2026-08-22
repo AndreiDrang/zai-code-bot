@@ -11,6 +11,10 @@
   A terminal tool-limit failure now creates or updates the marker-owned PR
   review comment with the configured limit and the number of context requests
   completed.
+- **Update**: Replaced terminal LLM failure category labels in PR comments with
+  safe, actionable explanations. Comments now identify the applicable retry,
+  context-retrieval, or investigation progress without exposing raw provider
+  responses.
 - **Update**: Corrected [LLM command execution](/workflows/llm-command-execution.md)
   and [Agent context tools](/contracts/agent-context-tools.md): `describe` and
   internal `pr_summary`, like review, run through AgentRunner with Context
