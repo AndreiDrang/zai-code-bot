@@ -196,7 +196,7 @@ export async function runLlmCommand(
       !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
     if (finalAttempt) {
       await publishNotice(identity, metadata, {
-        message: `The LLM ${command} could not complete (${category}). Please retry with \`/zai ${command}\`.`,
+        message: buildFailureNotice({ command, category, agent: result.agent, agentLimits }),
       });
     }
     throw llmCommandError(category, retryable && !finalAttempt);
@@ -333,6 +333,23 @@ function llmCommandError(category, retryable) {
   error.code = `llm_${String(category).replace(/[^a-z0-9_]/gi, '_')}`;
   error.retryable = retryable;
   return error;
+}
+
+function buildFailureNotice({ command, category, agent, agentLimits }) {
+  if (category === 'max_tool_calls') {
+    const limit = Number(agentLimits?.maxToolCalls);
+    const toolCalls = Number(agent?.toolCalls);
+    const limitText = Number.isFinite(limit) && limit > 0 ? `${limit}-call` : 'tool-call';
+    const progress =
+      Number.isFinite(toolCalls) && toolCalls > 0
+        ? ` after ${toolCalls} context request${toolCalls === 1 ? '' : 's'}`
+        : '';
+    return (
+      `The ${command} reached its ${limitText} context-retrieval limit${progress}, ` +
+      `so it could not produce a complete result. Please retry with \`/zai ${command}\`.`
+    );
+  }
+  return `The LLM ${command} could not complete (${category}). Please retry with \`/zai ${command}\`.`;
 }
 
 /** Publishes the LLM result as a marker-idempotent comment. */

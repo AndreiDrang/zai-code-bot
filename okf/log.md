@@ -7,6 +7,10 @@
   budget. `/zai review` now applies tighter workflow-specific retrieval limits
   and directs the model to inspect a changed-file diff before requesting full
   source.
+- **Update**: Increased `/zai review`'s context-tool limit from 12 to 20 calls.
+  A terminal tool-limit failure now creates or updates the marker-owned PR
+  review comment with the configured limit and the number of context requests
+  completed.
 - **Update**: Corrected [LLM command execution](/workflows/llm-command-execution.md)
   and [Agent context tools](/contracts/agent-context-tools.md): `describe` and
   internal `pr_summary`, like review, run through AgentRunner with Context

@@ -338,6 +338,51 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(mocks.upsertComment).not.toHaveBeenCalled();
   });
 
+  it('updates the review comment with tool-limit progress when the agent reaches its limit', async () => {
+    const calls = Array.from({ length: 20 }, (_, index) => ({
+      id: `call-${index}`,
+      type: 'function',
+      function: { name: 'get_diff', arguments: '{"path":"a/f"}' },
+    }));
+    for (let offset = 0; offset < calls.length; offset += 4) {
+      mocks.chat.mockResolvedValueOnce({
+        success: true,
+        data: {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: calls.slice(offset, offset + 4),
+          },
+        },
+      });
+    }
+    mocks.chat.mockResolvedValueOnce({
+      success: true,
+      data: {
+        message: { role: 'assistant', content: null, tool_calls: [calls[0]] },
+      },
+    });
+
+    await expect(
+      handleReviewCommand({
+        github: makeGithub(),
+        env: makeEnv(),
+        db: {},
+        job,
+        runId: 'run-1',
+      }),
+    ).rejects.toMatchObject({ code: 'llm_max_tool_calls', retryable: false });
+
+    expect(mocks.upsertComment).toHaveBeenCalledOnce();
+    expect(mocks.upsertComment.mock.calls[0][0].body).toContain(
+      'reached its 20-call context-retrieval limit after 20 context requests',
+    );
+    expect(mocks.upsertComment.mock.calls[0][0]).toMatchObject({
+      commentKind: 'review',
+      marker: REVIEW_MARKER,
+    });
+  });
+
   it('still publishes the review even if result persistence (bucket.put) throws', async () => {
     mocks.chat.mockResolvedValue({
       success: true,

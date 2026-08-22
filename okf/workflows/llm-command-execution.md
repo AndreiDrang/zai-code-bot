@@ -75,6 +75,11 @@ LLM ↔ tool protocol and enforces its runtime budgets.
   marker-owned review comment.
 - A matching-head [PR summary](/workflows/pr-summary-job.md) is injected as
   bounded background (`summary` ≤ ~8% of the context budget).
+- Review permits up to 20 context-tool calls (at most four per agent turn).
+  If that limit is reached before final Markdown is produced, the
+  marker-owned review comment is created or updated with the limit and the
+  number of context requests completed; the job then fails without exposing
+  provider detail.
 
 ## describe — agent mode
 
