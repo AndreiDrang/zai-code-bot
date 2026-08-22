@@ -573,7 +573,9 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       }),
     ).rejects.toMatchObject({ code: 'llm_provider', retryable: false });
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
-    expect(mocks.upsertComment.mock.calls[0][0].body).toContain('could not complete');
+    const body = mocks.upsertComment.mock.calls[0][0].body;
+    expect(body).toContain('Z.ai was temporarily unavailable while running review.');
+    expect(body).not.toContain('agent exploded');
   });
 
   it('maps an LLM protocol violation to a failed run (errorCode protocol)', async () => {
