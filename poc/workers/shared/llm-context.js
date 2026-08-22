@@ -114,7 +114,7 @@ const LAYOUTS = {
     includeCommits: true,
     includeComments: true,
     includeFileStats: true,
-    includeBinary: true,
+    includeBinary: 'all',
     // Review starts with the complete inexpensive PR map. The aggregate diff
     // and repository source remain lazy Context Tool reads, leaving most of
     // the bounded prompt budget available for description/conversation and
@@ -223,7 +223,12 @@ function renderFiles(files, cap, includeStats = false, includeBinary = false) {
     .map((f) => {
       const path = f.filename || f.path;
       if (!includeStats) return `- ${path}`;
-      const binary = includeBinary && f.binary ? ', binary: true' : '';
+      const binary =
+        includeBinary === 'all'
+          ? `, binary: ${Boolean(f.binary)}`
+          : includeBinary && f.binary
+            ? ', binary: true'
+            : '';
       return (
         `- ${path} (${f.status || 'changed'}, ` +
         `+${Number(f.additions) || 0}/-${Number(f.deletions) || 0}${binary})`
