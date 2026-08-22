@@ -30,6 +30,12 @@ The budget is evaluated as `error?.retryable !== false && attempt_count < 3`.
 A handler can force a non-retryable failure immediately by setting
 `error.retryable = false` (e.g. an unsupported job kind).
 
+For user-facing LLM commands, retryable provider categories (`timeout`,
+`provider`, and `rate-limit`) throw typed errors until the final attempt; no
+intermediate failure comment is published. On the terminal attempt, or for a
+non-retryable category, the handler publishes one safe marker-owned notice and
+throws a non-retryable error so D1 records `failed`.
+
 # Backoff
 
 Retryable attempts use exponential backoff:

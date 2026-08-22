@@ -12,6 +12,17 @@ Concrete issues, ordered by severity. Prefix each with **[High]**, **[Medium]**,
 ## Notes
 Positive observations or non-blocking suggestions (optional).`;
 
+const REVIEW_INVESTIGATION_POLICY = `Prioritize changed files by risk and relevance before retrieving source.
+
+For a file changed by this pull request:
+1. Use get_diff first to inspect the actual change.
+2. Use get_file only when that diff raises a specific implementation question.
+3. Prefer get_file_range when the relevant lines are known.
+
+Do not retrieve full files merely to build broad repository context. Do not inspect every changed file; focus on the subset needed to establish concrete findings.
+
+For unchanged files, use get_file only when a changed diff directly depends on that file. Report findings only when the available diff and retrieved context establish that this pull request introduced the issue.`;
+
 /**
  * Combines the human-authored review role prompt with reusable context policy.
  * The resulting text is static: PR-specific facts belong in the user message.
@@ -21,6 +32,8 @@ export function buildReviewSystemPrompt(basePrompt) {
     String(basePrompt).trim(),
     '## Context retrieval',
     CONTEXT_RETRIEVAL_POLICY,
+    '## Review investigation strategy',
+    REVIEW_INVESTIGATION_POLICY,
     '## Untrusted repository content',
     UNTRUSTED_REPOSITORY_CONTENT_POLICY,
     '## Review output',

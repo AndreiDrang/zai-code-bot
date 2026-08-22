@@ -21,9 +21,9 @@ tags:
 
 # Agent context tools
 
-The review agent does **not** receive the diff in its prompt. Instead the
-model pulls exactly what it needs through seven read-only tools bound to one
-immutable PR snapshot. Definitions live provider-neutrally in
+Agent-mode workflows do **not** receive the aggregate diff in their prompt.
+Instead the model pulls exactly what it needs through seven read-only tools
+bound to one immutable PR snapshot. Definitions live provider-neutrally in
 `shared/context-tools/schemas.js` and are converted to OpenAI
 `function`-style tools via `toOpenAiToolDefinitions()`.
 
@@ -72,7 +72,8 @@ tool messages the model can react to.
 # Relationships
 
 - Executed by the [Agent tool-calling loop](/contracts/agent-runner.md)
-  during [LLM command execution](/workflows/llm-command-execution.md) (review).
+  during [LLM command execution](/workflows/llm-command-execution.md)
+  (review, describe, and internal PR summary).
 - Reads the snapshot written by the
   [PR-context gather pipeline](/workflows/pr-context-pipeline.md);
   `get_file`/`get_file_range` are the only live-GitHub readers.

@@ -1,5 +1,21 @@
 # Knowledge Bundle Update Log
 
+## 2026-08-22
+
+- **Update**: Bounded the [Agent tool-calling loop](/contracts/agent-runner.md)
+  with an absolute Z.ai retry deadline and a cumulative UTF-8 tool-result
+  budget. `/zai review` now applies tighter workflow-specific retrieval limits
+  and directs the model to inspect a changed-file diff before requesting full
+  source.
+- **Update**: Corrected [LLM command execution](/workflows/llm-command-execution.md)
+  and [Agent context tools](/contracts/agent-context-tools.md): `describe` and
+  internal `pr_summary`, like review, run through AgentRunner with Context
+  Tools; describe is not a direct-only Z.ai call.
+- **Update**: Retryable LLM provider failures now participate in the durable
+  [three-attempt retry budget](/rules/retry-budget.md) without publishing an
+  intermediate GitHub failure comment. Terminal/non-retryable failures publish
+  one safe marker-owned notice and record a failed job.
+
 ## 2026-08-17
 
 - **Update**: Corrected the deployed-model fact in [PR-summary job](/workflows/pr-summary-job.md) and [LLM command execution](/workflows/llm-command-execution.md): `ZAI_MODEL` in both wrangler configs deploys `glm-5.3` (commit `816a09e` predating the previous refresh); `glm-5.2` remains only the in-code fallback, not the effective production model.

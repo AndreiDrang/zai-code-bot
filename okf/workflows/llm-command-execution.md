@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: LLM command execution
-description: The shared runner that executes /zai review and /zai describe — config, context guards, Z.ai call (direct or agent-mode with tools), R2 result persistence, and marker-idempotent comment publication.
+description: The shared runner that executes /zai review and /zai describe — config, context guards, bounded Z.ai agent calls with tools, R2 result persistence, and marker-idempotent comment publication.
 source_paths:
   - poc/workers/shared/llm-command-runner.js
   - poc/workers/shared/prompts/context-policy.js
@@ -28,7 +28,7 @@ version) — the runner owns everything else:
 
 ```text
 config → load V2 context slices → no-context guard → API-key guard
-  → system+user prompt → Z.ai (direct call OR AgentRunner with tools)
+  → system+user prompt → AgentRunner + Z.ai tools
   → persist result to /context/{command}.md (overwrite, best-effort)
   → marker-idempotent comment
 ```
@@ -76,13 +76,14 @@ LLM ↔ tool protocol and enforces its runtime budgets.
 - A matching-head [PR summary](/workflows/pr-summary-job.md) is injected as
   bounded background (`summary` ≤ ~8% of the context budget).
 
-## describe — direct mode
+## describe — agent mode
 
-`/zai describe` synthesizes a PR description from commit messages (gathered
-`commits.json`, ≤8000 chars, live GitHub commits as fallback) with a direct
-Z.ai call, then replaces only the marker-delimited bot section of the PR body
-(`zai-description-start`/`zai-description-end`) and posts a status comment.
-The result is also stored at `context/describe.md`.
+`/zai describe` synthesizes a PR description from the inexpensive snapshot
+context (including gathered commits, with live GitHub commits as fallback) and
+can retrieve targeted diffs or source through the same AgentRunner and Context
+Tools. It replaces only the marker-delimited bot section of the PR body
+(`zai-description-start`/`zai-description-end`) and posts a status comment. The
+result is also stored at `context/describe.md`.
 
 ## Degradations (guards)
 
@@ -90,13 +91,15 @@ The result is also stored at `context/describe.md`.
 | --- | --- | --- |
 | No reviewable context (agent: empty file list; direct: no diff) | Notice comment "nothing to {command}" | `no_diff` (succeeds) |
 | `ZAI_API_KEY` unset | Context-aware notice comment | `no_api_key` (succeeds) |
-| Z.ai/agent failure | Notice comment with the error category, retryable via `/zai {command}` | `llm_failed` |
+| Retryable Z.ai/agent failure (`timeout`, provider, rate-limit) before the final job attempt | No GitHub notice; throw typed error for Queue backoff | `retryable` |
+| Terminal or non-retryable Z.ai/agent failure | Notice comment with the safe error category | `failed` |
 
 Provider failures never expose raw provider errors in comments — only a
 sanitized category name. The Z.ai client adds per-attempt retry with
-progressive timeouts (100% → 67% → 50% → 33%, 10s floor) and error
-categorization (auth / validation / provider / rate-limit / timeout /
-internal).
+progressive timeouts (100% → 67% → 50% → 33%; direct calls have a 10s floor)
+and error categorization (auth / validation / provider / rate-limit / timeout /
+internal). Agent-mode calls cap each attempt and backoff at AgentRunner's
+absolute deadline, so neither can exceed the run budget.
 
 ## Command-result persistence
 

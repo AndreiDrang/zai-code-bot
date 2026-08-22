@@ -20,6 +20,7 @@ import {
 } from '../../../shared/prompts/describe.js';
 import { readContextManifest } from '../../../shared/pr-context-reader.js';
 import { getRepositoryConfig } from '../../../shared/storage/config.js';
+import { MAX_JOB_ATTEMPTS } from '../../../shared/storage/jobs.js';
 import { prCommandResultKey } from '../../../shared/storage/keys.js';
 import { upsertComment } from '../../../shared/comments.js';
 import { resolveSecretValue } from '../../../shared/secrets.js';
@@ -165,18 +166,25 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
   if (agent.status !== 'completed') {
     const category =
       agent.status === 'failed' ? agent.error?.category || 'internal' : agent.status;
+    const retryable =
+      agent.status === 'failed' ? agent.error?.retryable !== false : agent.status === 'timed_out';
+    const attempt = Number(job.attempt_count);
+    const finalAttempt =
+      !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
     logger.error('Z.ai describe call failed', {
       repo: repoFullName,
       issue: prNumber,
       category,
       runId,
     });
-    await publishStatus(
-      identity,
-      `The description could not be generated (${category}). Please retry.`,
-      'llm_failed',
-    );
-    return result('llm_failed', repoFullName, prNumber);
+    if (finalAttempt) {
+      await publishStatus(
+        identity,
+        `The description could not be generated (${category}). Please retry.`,
+        'llm_failed',
+      );
+    }
+    throw describeCommandError(category, retryable && !finalAttempt);
   }
 
   const generated = String(agent.response.content || '').trim();
@@ -211,6 +219,11 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
     agentTools: agent.tools,
     agentSuccessfulToolCalls: agent.successfulToolCalls,
     agentFailedToolCalls: agent.failedToolCalls,
+    agentLlmRequests: agent.llmRequests,
+    agentLlmAttempts: agent.llmAttempts,
+    agentLlmTimeouts: agent.llmTimeouts,
+    agentRetrievedBytes: agent.retrievedBytes,
+    agentRetrievalBudgetExceeded: agent.retrievalBudgetExceeded,
   });
   return {
     ...result('updated', repoFullName, prNumber),
@@ -223,6 +236,11 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
     agentTools: agent.tools,
     agentSuccessfulToolCalls: agent.successfulToolCalls,
     agentFailedToolCalls: agent.failedToolCalls,
+    agentLlmRequests: agent.llmRequests,
+    agentLlmAttempts: agent.llmAttempts,
+    agentLlmTimeouts: agent.llmTimeouts,
+    agentRetrievedBytes: agent.retrievedBytes,
+    agentRetrievalBudgetExceeded: agent.retrievalBudgetExceeded,
   };
 }
 
@@ -259,6 +277,13 @@ async function publishStatus(identity, message, status) {
 
 function result(status, repository, issue) {
   return { status, action: 'describe', repository, issue };
+}
+
+function describeCommandError(category, retryable) {
+  const error = new Error(`Describe command failed: ${category}`);
+  error.code = `llm_${String(category).replace(/[^a-z0-9_]/gi, '_')}`;
+  error.retryable = retryable;
+  return error;
 }
 
 export function canHandle(commandType) {

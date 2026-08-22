@@ -1,7 +1,7 @@
 ---
 type: Contract
 title: Agent tool-calling loop
-description: The provider-neutral agent runner that drives Z.ai chat completions in a bounded tool-calling loop — iteration, call, and duration budgets with protocol validation and safe tool errors.
+description: The provider-neutral agent runner that drives Z.ai chat completions in a bounded tool-calling loop — iteration, call, cumulative retrieval, and absolute-duration budgets with protocol validation and safe tool errors.
 source_paths:
   - poc/workers/shared/agent/runner.js
   - poc/workers/shared/agent/limits.js
@@ -27,9 +27,12 @@ exhausted.
 Each iteration:
 
 1. Check the wall-clock budget → `timed_out` if exceeded.
-2. Call `llmClient.chat({ apiKey, model, messages, tools, timeoutMs })` with
+2. Call `llmClient.chat({ apiKey, model, messages, tools, timeoutMs,
+   deadlineAt })` with
    an immutable copy of the conversation (the client must observe this
    iteration's sequence, not the array extended after tool execution).
+   `deadlineAt` is absolute: Z.ai's retry/backoff loop may not start an attempt
+   or sleep beyond it.
 3. Validate the assistant message (role, `tool_calls` array shape, ids,
    JSON-string arguments) — protocol violations fail with
    `AGENT_PROTOCOL_ERROR` rather than crash.
@@ -48,16 +51,23 @@ Default limits (`shared/agent/limits.js`, overridable per run):
 | `maxIterations` | 10 |
 | `maxToolCalls` (total) | 30 |
 | `maxToolCallsPerIteration` | 10 |
+| `maxRetrievedBytes` (accepted UTF-8 tool-result data) | 524288 (512 KiB) |
 | `maxRunDurationMs` | 120000 (2 min) |
 | `maxLlmRequestDurationMs` | 30000 |
 
 Exceeding a budget returns a typed terminal status (`max_iterations`,
-`max_tool_calls`, `timed_out`) — distinct from `failed`, which is reserved
+`max_tool_calls`, `max_retrieved_bytes`, `timed_out`) — distinct from `failed`, which is reserved
 for provider/protocol errors.
+
+When a tool result would exceed `maxRetrievedBytes`, the current turn receives
+one safe `TOOL_BUDGET_EXCEEDED` tool response so the model can finish with its
+existing evidence. A subsequent tool-requesting turn terminates as
+`max_retrieved_bytes`; this prevents an unbounded error loop.
 
 # Run result
 
-`{ status, messages, usage, iterations, toolCalls, durationMs, response? }`
+`{ status, messages, usage, iterations, toolCalls, llmRequests, llmAttempts,
+llmTimeouts, retrievedBytes, retrievalBudgetExceeded, durationMs, response? }`
 — the run transcript is returned so callers can log and inspect agent
 behavior (`agentIterations` / `agentToolCalls` surface in review job
 results).

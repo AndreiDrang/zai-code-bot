@@ -26,6 +26,12 @@ import {
 import { REVIEW_PROMPT } from '../../generated/prompts.js';
 
 const PROMPT_VERSION = 'review-v2';
+const REVIEW_AGENT_LIMITS = Object.freeze({
+  maxIterations: 6,
+  maxToolCalls: 12,
+  maxToolCallsPerIteration: 4,
+  maxRetrievedBytes: 96 * 1024,
+});
 
 /**
  * @param {Object} ctx
@@ -46,6 +52,7 @@ export async function handleReviewCommand(ctx) {
     promptVersion: PROMPT_VERSION,
     doneStatus: 'reviewed',
     agentTools: true,
+    agentLimits: REVIEW_AGENT_LIMITS,
   });
 }
 

@@ -26,6 +26,7 @@ import { createContextService } from './context/context-service.js';
 import { createContextToolRegistry, toOpenAiToolDefinitions } from './context-tools/registry.js';
 import { createAgentRunner } from './agent/runner.js';
 import { getRepositoryConfig } from './storage/config.js';
+import { MAX_JOB_ATTEMPTS } from './storage/jobs.js';
 import { prCommandResultKey } from './storage/keys.js';
 import { upsertComment } from './comments.js';
 import { createZaiClient } from './zai-client.js';
@@ -54,6 +55,7 @@ export async function runLlmCommand(
     promptVersion,
     doneStatus,
     agentTools = false,
+    agentLimits,
   },
 ) {
   const logger = createLogger(env, `zai-heavy-worker:${command}`);
@@ -175,6 +177,7 @@ export async function runLlmCommand(
         messages,
         model,
         runId,
+        limits: agentLimits,
       })
     : await client.call({ apiKey, model, messages });
 
@@ -187,16 +190,16 @@ export async function runLlmCommand(
       category,
       attempts: result.error?.attempts,
     });
-    await publishNotice(identity, metadata, {
-      message: `The LLM ${command} could not complete (${category}). Please retry with \`/zai ${command}\`.`,
-    });
-    return baseReturn('llm_failed', {
-      repository: repoFullName,
-      issue: prNumber,
-      headSha,
-      errorCode: category,
-      command,
-    });
+    const retryable = result.error?.retryable !== false;
+    const attempt = Number(job.attempt_count);
+    const finalAttempt =
+      !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
+    if (finalAttempt) {
+      await publishNotice(identity, metadata, {
+        message: `The LLM ${command} could not complete (${category}). Please retry with \`/zai ${command}\`.`,
+      });
+    }
+    throw llmCommandError(category, retryable && !finalAttempt);
   }
 
   // --- Persist result to /context/{command}.md (overwrite, per-command).
@@ -232,6 +235,11 @@ export async function runLlmCommand(
     agentTools: result.agent?.tools ?? [],
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
+    agentLlmRequests: result.agent?.llmRequests ?? null,
+    agentLlmAttempts: result.agent?.llmAttempts ?? null,
+    agentLlmTimeouts: result.agent?.llmTimeouts ?? null,
+    agentRetrievedBytes: result.agent?.retrievedBytes ?? 0,
+    agentRetrievalBudgetExceeded: result.agent?.retrievalBudgetExceeded ?? false,
   });
 
   return baseReturn(doneStatus, {
@@ -249,6 +257,11 @@ export async function runLlmCommand(
     agentTools: result.agent?.tools ?? [],
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
+    agentLlmRequests: result.agent?.llmRequests ?? null,
+    agentLlmAttempts: result.agent?.llmAttempts ?? null,
+    agentLlmTimeouts: result.agent?.llmTimeouts ?? null,
+    agentRetrievedBytes: result.agent?.retrievedBytes ?? 0,
+    agentRetrievalBudgetExceeded: result.agent?.retrievalBudgetExceeded ?? false,
     command,
   });
 }
@@ -261,12 +274,22 @@ function baseReturn(status, rest) {
   return { status, ...rest };
 }
 
-async function runAgentCommand({ apiKey, client, context, logger, messages, model, runId }) {
+async function runAgentCommand({
+  apiKey,
+  client,
+  context,
+  logger,
+  messages,
+  model,
+  runId,
+  limits,
+}) {
   const toolRegistry = createContextToolRegistry(context);
   const runner = createAgentRunner({
     llmClient: client,
     toolRegistry,
     logger,
+    limits,
   });
   try {
     const agent = await runner.run({
@@ -282,6 +305,10 @@ async function runAgentCommand({ apiKey, client, context, logger, messages, mode
         error: {
           category: agent.status === 'failed' ? agent.error?.category || 'provider' : agent.status,
           attempts: null,
+          retryable:
+            agent.status === 'failed'
+              ? agent.error?.retryable
+              : agent.status === 'timed_out',
         },
         agent,
       };
@@ -299,6 +326,13 @@ async function runAgentCommand({ apiKey, client, context, logger, messages, mode
       error: { category: 'agent_internal', attempts: null },
     };
   }
+}
+
+function llmCommandError(category, retryable) {
+  const error = new Error(`LLM command failed: ${category}`);
+  error.code = `llm_${String(category).replace(/[^a-z0-9_]/gi, '_')}`;
+  error.retryable = retryable;
+  return error;
 }
 
 /** Publishes the LLM result as a marker-idempotent comment. */

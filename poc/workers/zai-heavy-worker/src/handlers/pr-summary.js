@@ -217,6 +217,11 @@ export async function handlePrSummaryJob({ github, env, db, job, runId }) {
     agentTools: agent.tools,
     agentSuccessfulToolCalls: agent.successfulToolCalls,
     agentFailedToolCalls: agent.failedToolCalls,
+    agentLlmRequests: agent.llmRequests,
+    agentLlmAttempts: agent.llmAttempts,
+    agentLlmTimeouts: agent.llmTimeouts,
+    agentRetrievedBytes: agent.retrievedBytes,
+    agentRetrievalBudgetExceeded: agent.retrievalBudgetExceeded,
   });
   return {
     status: 'success',
@@ -232,6 +237,11 @@ export async function handlePrSummaryJob({ github, env, db, job, runId }) {
     agentTools: agent.tools,
     agentSuccessfulToolCalls: agent.successfulToolCalls,
     agentFailedToolCalls: agent.failedToolCalls,
+    agentLlmRequests: agent.llmRequests,
+    agentLlmAttempts: agent.llmAttempts,
+    agentLlmTimeouts: agent.llmTimeouts,
+    agentRetrievedBytes: agent.retrievedBytes,
+    agentRetrievalBudgetExceeded: agent.retrievalBudgetExceeded,
   };
 }
 

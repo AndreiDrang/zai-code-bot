@@ -256,4 +256,28 @@ describe('zai-client — createZaiClient.call', () => {
     expect(fetchImpl.mock.calls[0][1].body).toContain('"tools"');
     expect(fetchImpl.mock.calls[0][1].body).toContain('"get_diff"');
   });
+
+  it('does not start a retry that cannot fit within the agent deadline', async () => {
+    const fetchImpl = vi.fn(async () => errResponse(500));
+    const client = createZaiClient({
+      fetch: fetchImpl,
+      sleep: noSleep,
+      maxRetries: 3,
+      baseDelay: 10,
+      now: () => 0,
+    });
+
+    const result = await client.chat({
+      apiKey: 'key',
+      model: 'model',
+      messages: [{ role: 'user', content: 'review' }],
+      deadlineAt: 5,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      success: false,
+      error: { category: 'timeout', retryable: true, attempts: 1 },
+    });
+  });
 });

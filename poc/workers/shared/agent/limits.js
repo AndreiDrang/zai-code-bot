@@ -2,6 +2,7 @@ export const DEFAULT_AGENT_LIMITS = Object.freeze({
   maxIterations: 10,
   maxToolCalls: 30,
   maxToolCallsPerIteration: 10,
+  maxRetrievedBytes: 512 * 1024,
   maxRunDurationMs: 120000,
   maxLlmRequestDurationMs: 30000,
 });

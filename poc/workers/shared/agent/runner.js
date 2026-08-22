@@ -17,20 +17,28 @@ export function createAgentRunner({
   async function run({ apiKey, model, messages, tools, runId }) {
     const conversation = Array.isArray(messages) ? [...messages] : [];
     const startedAt = now();
+    const deadlineAt = startedAt + resolvedLimits.maxRunDurationMs;
     let iterations = 0;
     let toolCalls = 0;
     let usage = null;
+    let llmRequests = 0;
+    let llmAttempts = 0;
+    let llmTimeouts = 0;
+    let retrievedBytes = 0;
+    let retrievalBudgetExceeded = false;
     const toolNames = new Set();
     let successfulToolCalls = 0;
     let failedToolCalls = 0;
 
     while (true) {
-      const remainingMs = resolvedLimits.maxRunDurationMs - (now() - startedAt);
+      const remainingMs = deadlineAt - now();
       if (remainingMs <= 0) {
         return buildResult('timed_out');
       }
 
       let response;
+      const requestNumber = ++llmRequests;
+      const conversationBytes = jsonByteLength(conversation);
       try {
         response = await llmClient.chat({
           apiKey,
@@ -40,6 +48,19 @@ export function createAgentRunner({
           messages: [...conversation],
           tools,
           timeoutMs: Math.min(remainingMs, resolvedLimits.maxLlmRequestDurationMs),
+          deadlineAt,
+          onAttempt: (attempt) => {
+            llmAttempts += 1;
+            if (attempt.category === 'timeout') llmTimeouts += 1;
+            logger?.info('Agent LLM attempt completed', {
+              runId,
+              requestNumber,
+              ...attempt,
+              conversationMessages: conversation.length,
+              conversationBytes,
+              retrievedBytes,
+            });
+          },
         });
       } catch {
         return buildResult('failed', { error: { category: 'provider' } });
@@ -79,6 +100,9 @@ export function createAgentRunner({
       if (toolCalls + calls.length > resolvedLimits.maxToolCalls) {
         return buildResult('max_tool_calls');
       }
+      if (retrievalBudgetExceeded) {
+        return buildResult('max_retrieved_bytes');
+      }
       if (iterations >= resolvedLimits.maxIterations) {
         return buildResult('max_iterations');
       }
@@ -93,7 +117,7 @@ export function createAgentRunner({
         toolCalls: calls.length,
         tools: calls.map((call) => call.function.name),
       });
-      const toolMessages = await Promise.all(
+      const toolResults = await Promise.all(
         calls.map((call) =>
           executeToolCall(call, {
             iteration: iterations,
@@ -106,6 +130,28 @@ export function createAgentRunner({
           }),
         ),
       );
+      const toolMessages = [];
+      for (const toolResult of toolResults) {
+        if (
+          toolResult.success &&
+          retrievedBytes + toolResult.resultBytes > resolvedLimits.maxRetrievedBytes
+        ) {
+          retrievalBudgetExceeded = true;
+          toolMessages.push(
+            makeToolMessage(toolResult.toolCallId, {
+              ok: false,
+              error: {
+                code: 'TOOL_BUDGET_EXCEEDED',
+                message:
+                  'The context retrieval budget for this run has been reached. Continue using the evidence already retrieved.',
+              },
+            }),
+          );
+          continue;
+        }
+        if (toolResult.success) retrievedBytes += toolResult.resultBytes;
+        toolMessages.push(toolResult.message);
+      }
       conversation.push(...toolMessages);
     }
 
@@ -120,6 +166,11 @@ export function createAgentRunner({
         tools: [...toolNames],
         successfulToolCalls,
         failedToolCalls,
+        llmRequests,
+        llmAttempts,
+        llmTimeouts,
+        retrievedBytes,
+        retrievalBudgetExceeded,
         durationMs: now() - startedAt,
         ...extra,
       };
@@ -132,6 +183,11 @@ export function createAgentRunner({
         tools: result.tools,
         successfulToolCalls,
         failedToolCalls,
+        llmRequests,
+        llmAttempts,
+        llmTimeouts,
+        retrievedBytes,
+        retrievalBudgetExceeded,
         durationMs: result.durationMs,
       });
       return result;
@@ -147,6 +203,8 @@ export function createAgentRunner({
       const rawArguments = call.function.arguments ?? '{}';
       const args = JSON.parse(rawArguments);
       const data = await toolRegistry.execute(name, args);
+      const content = { ok: true, data };
+      const resultBytes = jsonByteLength(content);
       onComplete?.({ tool: name, success: true });
       logTool('Agent tool completed', {
         runId,
@@ -155,9 +213,14 @@ export function createAgentRunner({
         toolCallId,
         success: true,
         durationMs: now() - startedAt,
-        resultBytes: jsonSize(data),
+        resultBytes,
       });
-      return makeToolMessage(toolCallId, { ok: true, data });
+      return {
+        success: true,
+        toolCallId,
+        resultBytes,
+        message: makeToolMessage(toolCallId, content),
+      };
     } catch (error) {
       const safeError =
         error instanceof AgentProtocolError
@@ -173,7 +236,15 @@ export function createAgentRunner({
         errorCode: safeError.code,
         durationMs: now() - startedAt,
       });
-      return makeToolMessage(toolCallId || `invalid-${iteration}`, { ok: false, error: safeError });
+      return {
+        success: false,
+        toolCallId: toolCallId || `invalid-${iteration}`,
+        resultBytes: 0,
+        message: makeToolMessage(toolCallId || `invalid-${iteration}`, {
+          ok: false,
+          error: safeError,
+        }),
+      };
     }
   }
 
@@ -219,9 +290,9 @@ function makeToolMessage(toolCallId, content) {
   };
 }
 
-function jsonSize(value) {
+function jsonByteLength(value) {
   try {
-    return JSON.stringify(value).length;
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
   } catch {
     return 0;
   }

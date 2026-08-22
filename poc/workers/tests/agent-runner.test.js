@@ -54,7 +54,12 @@ describe('AgentRunner', () => {
       toolCalls: 0,
     });
     expect(llmClient.chat).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: 'key', model: 'model', tools: [] }),
+      expect.objectContaining({
+        apiKey: 'key',
+        model: 'model',
+        tools: [],
+        deadlineAt: expect.any(Number),
+      }),
     );
     expect(logger.info).toHaveBeenLastCalledWith(
       'Agent run finished',
@@ -213,6 +218,48 @@ describe('AgentRunner', () => {
     ).resolves.toMatchObject({ status: 'max_iterations', iterations: 1, toolCalls: 1 });
   });
 
+  it('returns one bounded tool result to the model before requiring a final answer', async () => {
+    const { runner, llmClient } = createTestRunner({
+      replies: [assistant(null, [toolCall('call-1', 'get_file')]), assistant('done')],
+      execute: vi.fn().mockResolvedValue({ content: 'too much context' }),
+      limits: { maxRetrievedBytes: 1 },
+    });
+
+    await expect(
+      runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      retrievedBytes: 0,
+      retrievalBudgetExceeded: true,
+    });
+
+    const toolResult = JSON.parse(llmClient.chat.mock.calls[1][0].messages[1].content);
+    expect(toolResult).toMatchObject({
+      ok: false,
+      error: { code: 'TOOL_BUDGET_EXCEEDED' },
+    });
+  });
+
+  it('stops instead of executing another retrieval after the result budget is exhausted', async () => {
+    const { runner, toolRegistry } = createTestRunner({
+      replies: [
+        assistant(null, [toolCall('call-1', 'get_file')]),
+        assistant(null, [toolCall('call-2', 'get_file')]),
+      ],
+      execute: vi.fn().mockResolvedValue({ content: 'too much context' }),
+      limits: { maxRetrievedBytes: 1 },
+    });
+
+    await expect(
+      runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
+    ).resolves.toMatchObject({
+      status: 'max_retrieved_bytes',
+      toolCalls: 1,
+      retrievalBudgetExceeded: true,
+    });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(1);
+  });
+
   it('returns a protocol failure when a tool call has no id', async () => {
     const { runner } = createTestRunner({
       replies: [
@@ -271,6 +318,7 @@ describe('Agent limits', () => {
     expect(resolveAgentLimits({ maxIterations: 2, maxToolCalls: 0 })).toMatchObject({
       maxIterations: 2,
       maxToolCalls: 30,
+      maxRetrievedBytes: 512 * 1024,
     });
   });
 });

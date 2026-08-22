@@ -17,7 +17,7 @@ export const CONTEXT_TOOL_SCHEMAS = Object.freeze([
   {
     name: 'get_diff',
     description:
-      'Get the unified diff for one file changed by this pull request. Use this to inspect what changed in a specific changed file. Do not use it for unchanged files or when current implementation is needed; use get_file instead.',
+      'Get the unified diff for one file changed by this pull request. During review, use this first to inspect what changed in a changed file. Do not use it for unchanged files or when current implementation is needed; use get_file instead.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -33,7 +33,7 @@ export const CONTEXT_TOOL_SCHEMAS = Object.freeze([
   {
     name: 'get_file',
     description:
-      'Get the current contents of a repository file at the pull request HEAD. Use this when a diff lacks implementation context or when inspecting a related unchanged file. Prefer get_file_range for a specific part of a large file.',
+      'Get the current contents of a repository file at the pull request HEAD. For a changed file, use this only after its diff raises a specific implementation question. Use it for a related unchanged file only when a changed diff directly depends on it. Prefer get_file_range for a specific part of a large file.',
     input_schema: {
       type: 'object',
       additionalProperties: false,

@@ -87,6 +87,25 @@ describe('heavy worker queue protocol', () => {
     );
   });
 
+  it('retries a typed transient LLM failure without converting its error code', async () => {
+    getJob.mockResolvedValue(claimed());
+    claimJob.mockResolvedValue(claimed(1));
+    getHeavyHandler.mockReturnValue(
+      vi.fn().mockRejectedValue(
+        Object.assign(new Error('LLM command failed: timeout'), {
+          code: 'llm_timeout',
+          retryable: true,
+        }),
+      ),
+    );
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {}, GITHUB_TOKEN: 'token' }, logger);
+
+    expect(markJobRetryable).toHaveBeenCalledWith({}, 'job-1', 'run-1', 'llm_timeout', 20);
+    expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 20 });
+  });
+
   it('marks the third failure failed, logs an error, and acknowledges it', async () => {
     getJob.mockResolvedValue(claimed(2));
     claimJob.mockResolvedValue(claimed(3));

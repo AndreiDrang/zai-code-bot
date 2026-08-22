@@ -38,6 +38,7 @@ const MIN_TIMEOUT_MS = 10000;
  * @param {number} [config.baseDelay=2000] - base exponential-backoff delay (ms)
  * @param {Function} [config.fetch]       - injectable fetch (tests)
  * @param {Function} [config.sleep]       - injectable backoff sleeper (tests)
+ * @param {Function} [config.now]         - injectable clock (tests)
  */
 export function createZaiClient(config = {}) {
   const baseTimeout = Number(config.timeout) || DEFAULT_TIMEOUT_MS;
@@ -45,6 +46,7 @@ export function createZaiClient(config = {}) {
   const baseDelay = Number(config.baseDelay) || DEFAULT_BASE_DELAY_MS;
   const fetchImpl = config.fetch || fetch;
   const sleeper = config.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const now = config.now || (() => Date.now());
 
   /** Single transport call with a timeout. Throws on !ok / malformed / abort. */
   async function complete({ apiKey, model, messages, tools, timeoutMs }) {
@@ -174,15 +176,24 @@ export function createZaiClient(config = {}) {
      * does not interpret tool calls or retain conversation state.
      * @returns {Promise<{success:boolean,data?:{message:Object,usage:Object|null},error?:Object}>}
      */
-    async chat({ apiKey, model, messages, tools, timeoutMs = baseTimeout }) {
-      const startTime = Date.now();
+    async chat({ apiKey, model, messages, tools, timeoutMs = baseTimeout, deadlineAt, onAttempt }) {
+      const startTime = now();
       let lastError;
       for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        const remainingMs =
+          Number.isFinite(deadlineAt) ? Math.max(0, deadlineAt - now()) : Number.POSITIVE_INFINITY;
+        if (remainingMs <= 0) {
+          return timedOutChatResult(lastError, attempt, startTime, now);
+        }
         const mult =
           PROGRESSIVE_TIMEOUT_MULTIPLIERS[
             Math.min(attempt, PROGRESSIVE_TIMEOUT_MULTIPLIERS.length - 1)
           ];
-        const requestTimeout = Math.max(1, Math.floor(Math.min(timeoutMs, baseTimeout) * mult));
+        const requestTimeout = Math.max(
+          1,
+          Math.floor(Math.min(timeoutMs, baseTimeout, remainingMs) * mult),
+        );
+        const attemptStartedAt = now();
         try {
           const data = await complete({
             apiKey,
@@ -191,10 +202,26 @@ export function createZaiClient(config = {}) {
             tools,
             timeoutMs: requestTimeout,
           });
+          onAttempt?.({
+            attempt: attempt + 1,
+            category: null,
+            durationMs: now() - attemptStartedAt,
+            remainingMs,
+            requestTimeoutMs: requestTimeout,
+            success: true,
+          });
           return { success: true, data };
         } catch (error) {
           lastError = error;
           const categorized = categorizeError(error);
+          onAttempt?.({
+            attempt: attempt + 1,
+            category: categorized.category,
+            durationMs: now() - attemptStartedAt,
+            remainingMs,
+            requestTimeoutMs: requestTimeout,
+            success: false,
+          });
           if (!categorized.retryable || attempt >= maxRetries) {
             return {
               success: false,
@@ -203,11 +230,18 @@ export function createZaiClient(config = {}) {
                 message: sanitizeErrorMessage(error),
                 retryable: categorized.retryable,
                 attempts: attempt + 1,
-                totalDuration: Date.now() - startTime,
+                totalDuration: now() - startTime,
               },
             };
           }
           const delay = baseDelay * 2 ** attempt + Math.floor(Math.random() * 1000);
+          const remainingAfterAttempt =
+            Number.isFinite(deadlineAt)
+              ? Math.max(0, deadlineAt - now())
+              : Number.POSITIVE_INFINITY;
+          if (remainingAfterAttempt <= delay) {
+            return timedOutChatResult(lastError, attempt + 1, startTime, now);
+          }
           await sleeper(delay);
         }
       }
@@ -218,9 +252,22 @@ export function createZaiClient(config = {}) {
           message: sanitizeErrorMessage(lastError),
           retryable: false,
           attempts: maxRetries + 1,
-          totalDuration: Date.now() - startTime,
+          totalDuration: now() - startTime,
         },
       };
+    },
+  };
+}
+
+function timedOutChatResult(lastError, attempts, startTime, now) {
+  return {
+    success: false,
+    error: {
+      category: 'timeout',
+      message: sanitizeErrorMessage(lastError || new Error('Agent deadline exceeded')),
+      retryable: true,
+      attempts,
+      totalDuration: now() - startTime,
     },
   };
 }

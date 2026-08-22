@@ -166,4 +166,28 @@ describe('handleDescribeCommand with Context Tools', () => {
       }),
     );
   });
+
+  it('throws a retryable failure without publishing an intermediate status comment', async () => {
+    const bucket = fakeBucket();
+    mocks.zaiChat.mockResolvedValue({
+      success: false,
+      error: { category: 'timeout', retryable: true },
+    });
+
+    await expect(
+      handleDescribeCommand({
+        github: { getPrCommits: vi.fn(), getFileContent: vi.fn() },
+        env: {
+          BOT_ARTIFACTS: bucket,
+          BOT_CACHE: {},
+          ZAI_API_KEY: 'key',
+        },
+        db: {},
+        job: { ...job, attempt_count: 1 },
+        runId: 'run-1',
+      }),
+    ).rejects.toMatchObject({ code: 'llm_timeout', retryable: true });
+
+    expect(mocks.upsertComment).not.toHaveBeenCalled();
+  });
 });
