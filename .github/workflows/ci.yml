@@ -47,17 +47,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22: current wrangler 4.x releases require Node >= 22
+          node-version: 22
           cache: 'npm'
           cache-dependency-path: package-lock.json
+      # wrangler is a root devDependency, so `npm ci` puts it on PATH for the
+      # root deploy scripts (which `cd` into each worker before invoking it).
       - name: Install dependencies
         run: npm ci
-      - name: Install main Worker tooling
-        run: npm install --no-package-lock --ignore-scripts
-        working-directory: src/zai-main-worker
-      - name: Install heavy Worker tooling
-        run: npm install --no-package-lock --ignore-scripts
-        working-directory: src/zai-heavy-worker
       - name: Build
         run: npm run deploy:main:dry-run && npm run deploy:heavy:dry-run
 
