@@ -48,6 +48,6 @@ The durable command path is decoupled so neither worker holds the other alive:
 # Open Questions
 
 - None. Deployment topology is fixed: the main worker serves
-  `zai-worker.tokenbel.info` (route + custom domain); the heavy worker has
+  `zai-worker.tokenbel.info` (custom domain); the heavy worker has
   `workers_dev = false` and no public ingress — it is reachable only through
   the `bot-jobs` Queue consumer.

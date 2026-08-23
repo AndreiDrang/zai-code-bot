@@ -28,14 +28,15 @@ wrangler.toml          # Public routes, bindings, Secrets Store, cron trigger
   and never add an unauthenticated endpoint.
 - Route gotchas (see comments in `wrangler.toml`): adding a `[[routes]]` entry
   infers `workers_dev = false` on the next deploy. `zai-worker.tokenbel.info`
-  is served by two route entries — a `zone_name` route (requires a PROXIED
-  DNS record in the `tokenbel.info` zone) and a `custom_domain` route. The
-  GitHub webhook targets that hostname — don't break it.
+  is served by a single `custom_domain` route (Cloudflare auto-creates the DNS
+  record + TLS cert). The GitHub webhook targets that hostname — don't break
+  it.
 - D1 migrations are sequential (`0001_storage_foundation.sql`, …). Never edit
   an applied migration; add the next numbered file. Both workers share the same
   D1 database, so a migration changes the heavy worker's schema too.
 - `async scheduled` runs every 5 minutes as the recovery sweep; keep it
-  idempotent (it re-drives the D1 outbox and expires stuck leases).
+  idempotent (it re-drives the D1 outbox, expires stuck leases, re-enqueues
+  stranded due jobs, and sweeps expired R2 artifacts).
 - Secrets come from the shared Cloudflare Secrets Store bindings declared in
   `wrangler.toml`; no secret values belong in this directory.
 
