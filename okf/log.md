@@ -1,5 +1,16 @@
 # Knowledge Bundle Update Log
 
+## 2026-08-24
+
+- **Update**: The workspace migrated from `poc/` to the standard layout — the
+  Workers implementation now lives under `src/` (`src/zai-main-worker/`,
+  `src/zai-heavy-worker/`, `src/shared/`, `src/tests/`) and the npm project
+  moved to the repository root (`package.json`, `vitest.config.js`, `Makefile`,
+  CI). No Concept IDs changed; every concept's `source_paths` and body path
+  references were rewritten (`poc/workers/…` → `src/…`, `poc/README.md` →
+  `README.md`), and POC wording was dropped from titles and prose. Repository
+  evidence and executable behavior are otherwise unchanged.
+
 ## 2026-08-23
 
 - **Update**: Commands now execute only on `created` comment actions — added an action gate to [Command routing](/workflows/command-routing.md). `issue_comment.edited`/`.deleted` deliveries carry the full body but no longer re-run the LLM; the comments-slice mirror intentionally keeps refreshing on all three actions.

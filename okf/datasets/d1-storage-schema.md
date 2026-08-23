@@ -3,9 +3,9 @@ type: Dataset
 title: D1 storage schema
 description: The nine authoritative D1 tables — created by migration 0001 and evolved by 0002 (command surface) and 0003 (pr_summary job kind) — holding all job, delivery, run, artifact, publication, and configuration state.
 source_paths:
-  - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
-  - poc/workers/zai-main-worker/migrations/0002_command_surface.sql
-  - poc/workers/zai-main-worker/migrations/0003_pr_summary_job.sql
+  - src/zai-main-worker/migrations/0001_storage_foundation.sql
+  - src/zai-main-worker/migrations/0002_command_surface.sql
+  - src/zai-main-worker/migrations/0003_pr_summary_job.sql
 confidence: observed
 status: current
 tags:

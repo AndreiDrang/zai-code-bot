@@ -3,10 +3,10 @@ type: Contract
 title: Transactional outbox
 description: The job_outbox table bridges the D1 commit and the Queue publish so a crash never loses a job — the cron replays unpublished outbox rows. Both workers publish; heavy uses it for pr_summary.
 source_paths:
-  - poc/workers/shared/storage/deliveries.js
-  - poc/workers/shared/storage/jobs.js
-  - poc/workers/zai-main-worker/src/job-enqueuer.js
-  - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
+  - src/shared/storage/deliveries.js
+  - src/shared/storage/jobs.js
+  - src/zai-main-worker/src/job-enqueuer.js
+  - src/zai-main-worker/migrations/0001_storage_foundation.sql
 confidence: observed
 status: current
 tags:

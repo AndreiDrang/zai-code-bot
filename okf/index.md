@@ -4,8 +4,9 @@ okf_version: "0.1"
 
 # Knowledge Bundle
 
-OKF knowledge bundle for the **Z.ai Code Bot Cloudflare Workers POC** (`poc/`).
-Documents the durable review/describe architecture: a two-worker split with
+OKF knowledge bundle for the **Z.ai Code Bot Cloudflare Workers implementation
+(`src/`)**. Documents the durable review/describe architecture: a two-worker
+split with
 D1 as the source of truth, a V2 per-PR context snapshot tier in R2 (with
 per-file patches and a derived structured PR summary), an agent-mode review
 that reads context through LLM tools, a Queue for async processing, and KV

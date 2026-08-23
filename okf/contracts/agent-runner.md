@@ -3,11 +3,11 @@ type: Contract
 title: Agent tool-calling loop
 description: The provider-neutral agent runner that drives Z.ai chat completions in a bounded tool-calling loop — call, cumulative retrieval, and absolute-duration budgets with protocol validation, safe tool errors, and graceful no-tools finalization.
 source_paths:
-  - poc/workers/shared/agent/runner.js
-  - poc/workers/shared/agent/limits.js
-  - poc/workers/shared/agent/errors.js
-  - poc/workers/shared/zai-client.js
-  - poc/workers/zai-heavy-worker/src/handlers/review.js
+  - src/shared/agent/runner.js
+  - src/shared/agent/limits.js
+  - src/shared/agent/errors.js
+  - src/shared/zai-client.js
+  - src/zai-heavy-worker/src/handlers/review.js
 confidence: observed
 status: current
 tags:

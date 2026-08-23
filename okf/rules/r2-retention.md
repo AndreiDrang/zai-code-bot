@@ -3,11 +3,11 @@ type: Business Rule
 title: 30-day R2 retention
 description: R2 objects expire after 30 days. The two R2 grains are retained differently — context (v2/prs/) by an R2 lifecycle rule, run-outputs (v1/runs/) by the D1-indexed app sweep with the lifecycle rule as backstop.
 source_paths:
-  - poc/workers/shared/storage/artifacts.js
-  - poc/workers/shared/storage/keys.js
-  - poc/workers/zai-main-worker/wrangler.toml
-  - poc/workers/zai-heavy-worker/wrangler.toml
-  - poc/README.md
+  - src/shared/storage/artifacts.js
+  - src/shared/storage/keys.js
+  - src/zai-main-worker/wrangler.toml
+  - src/zai-heavy-worker/wrangler.toml
+  - README.md
 confidence: observed
 status: current
 tags:

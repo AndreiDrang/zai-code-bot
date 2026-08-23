@@ -3,9 +3,9 @@ type: Contract
 title: Queue message format
 description: Queue messages carry only a schema version and job ID — all large data stays in D1 and R2, never in the message body.
 source_paths:
-  - poc/workers/shared/storage/jobs.js
-  - poc/workers/shared/storage/keys.js
-  - poc/workers/zai-heavy-worker/src/queue.js
+  - src/shared/storage/jobs.js
+  - src/shared/storage/keys.js
+  - src/zai-heavy-worker/src/queue.js
 confidence: observed
 status: current
 tags:

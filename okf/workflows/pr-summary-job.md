@@ -3,11 +3,11 @@ type: Workflow
 title: PR-summary job
 description: The internal pr_summary job converts a committed V2 snapshot into validated structured JSON (pr-summary.json) used as auxiliary review context — it never posts a GitHub comment.
 source_paths:
-  - poc/workers/zai-heavy-worker/src/handlers/pr-summary.js
-  - poc/workers/zai-heavy-worker/generated/prompts.js
-  - poc/workers/shared/llm-context.js
-  - poc/workers/shared/pr-context-reader.js
-  - poc/workers/shared/storage/deliveries.js
+  - src/zai-heavy-worker/src/handlers/pr-summary.js
+  - src/zai-heavy-worker/generated/prompts.js
+  - src/shared/llm-context.js
+  - src/shared/pr-context-reader.js
+  - src/shared/storage/deliveries.js
 confidence: observed
 status: current
 tags:

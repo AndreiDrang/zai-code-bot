@@ -3,13 +3,13 @@ type: Workflow
 title: PR-context gather pipeline
 description: Gathers a V2 per-PR snapshot (per-file patches, files index, commits, description, comments) into R2, rejects stale heads, and schedules the pr_summary job.
 source_paths:
-  - poc/workers/zai-heavy-worker/src/handlers/pr-context.js
-  - poc/workers/shared/pr-context-reader.js
-  - poc/workers/shared/pr-comments.js
-  - poc/workers/shared/pr-description.js
-  - poc/workers/shared/github.js
-  - poc/workers/shared/context/context-limits.js
-  - poc/workers/zai-main-worker/src/pr-events.js
+  - src/zai-heavy-worker/src/handlers/pr-context.js
+  - src/shared/pr-context-reader.js
+  - src/shared/pr-comments.js
+  - src/shared/pr-description.js
+  - src/shared/github.js
+  - src/shared/context/context-limits.js
+  - src/zai-main-worker/src/pr-events.js
 confidence: observed
 status: current
 tags:

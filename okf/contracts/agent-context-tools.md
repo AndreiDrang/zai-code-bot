@@ -3,14 +3,14 @@ type: Contract
 title: Agent context tools
 description: Seven read-only LLM tools with strict JSON schemas exposed over one immutable PR snapshot through the Context Service DTO layer — the model's only channel for large context.
 source_paths:
-  - poc/workers/shared/context-tools/registry.js
-  - poc/workers/shared/context-tools/schemas.js
-  - poc/workers/shared/context-tools/handlers.js
-  - poc/workers/shared/context/context-service.js
-  - poc/workers/shared/context/context-limits.js
-  - poc/workers/shared/context/context-errors.js
-  - poc/workers/shared/prompts/context-policy.js
-  - poc/workers/shared/github.js
+  - src/shared/context-tools/registry.js
+  - src/shared/context-tools/schemas.js
+  - src/shared/context-tools/handlers.js
+  - src/shared/context/context-service.js
+  - src/shared/context/context-limits.js
+  - src/shared/context/context-errors.js
+  - src/shared/prompts/context-policy.js
+  - src/shared/github.js
 confidence: observed
 status: current
 tags:

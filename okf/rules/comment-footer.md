@@ -3,9 +3,9 @@ type: Business Rule
 title: Unified bot comment footer
 description: Every bot comment ends with the identical shared BOT_FOOTER attribution — "Powered by AndreiDrang, Z.ai and Cloudflare Workers" — placed before the hidden marker.
 source_paths:
-  - poc/workers/shared/constants.js
-  - poc/workers/shared/commands.js
-  - poc/workers/shared/comments.js
+  - src/shared/constants.js
+  - src/shared/commands.js
+  - src/shared/comments.js
 confidence: observed
 status: current
 tags:

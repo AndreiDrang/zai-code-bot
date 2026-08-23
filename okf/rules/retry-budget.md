@@ -3,8 +3,8 @@ type: Business Rule
 title: Three-attempt retry budget
 description: Jobs get at most 3 execution attempts — two warnings then a terminal failure with an error log — with exponential backoff between retries.
 source_paths:
-  - poc/workers/zai-heavy-worker/src/queue.js
-  - poc/workers/shared/storage/jobs.js
+  - src/zai-heavy-worker/src/queue.js
+  - src/shared/storage/jobs.js
 confidence: observed
 status: current
 tags:

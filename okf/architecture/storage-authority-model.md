@@ -3,17 +3,17 @@ type: Architecture
 title: Storage authority model
 description: D1 is the source of truth for all job, delivery, and publication state; R2 holds the V2 PR-context snapshot tier (plus D1-indexed run-outputs); KV is a read-through cache; the Queue is a transport.
 source_paths:
-  - poc/workers/shared/storage/config.js
-  - poc/workers/shared/storage/database.js
-  - poc/workers/shared/storage/keys.js
-  - poc/workers/shared/pr-context-reader.js
-  - poc/workers/shared/pr-comments.js
-  - poc/workers/shared/pr-description.js
-  - poc/workers/shared/context/context-service.js
-  - poc/workers/zai-heavy-worker/src/handlers/pr-context.js
-  - poc/workers/zai-main-worker/wrangler.toml
-  - poc/workers/zai-heavy-worker/wrangler.toml
-  - poc/README.md
+  - src/shared/storage/config.js
+  - src/shared/storage/database.js
+  - src/shared/storage/keys.js
+  - src/shared/pr-context-reader.js
+  - src/shared/pr-comments.js
+  - src/shared/pr-description.js
+  - src/shared/context/context-service.js
+  - src/zai-heavy-worker/src/handlers/pr-context.js
+  - src/zai-main-worker/wrangler.toml
+  - src/zai-heavy-worker/wrangler.toml
+  - README.md
 confidence: observed
 status: current
 tags:

@@ -3,13 +3,13 @@ type: Workflow
 title: LLM command execution
 description: The shared runner that executes /zai review and /zai describe — config, context guards, bounded Z.ai agent calls with tools, R2 result persistence, and marker-idempotent comment publication.
 source_paths:
-  - poc/workers/shared/llm-command-runner.js
-  - poc/workers/shared/prompts/context-policy.js
-  - poc/workers/shared/prompts/review.js
-  - poc/workers/zai-heavy-worker/generated/prompts.js
-  - poc/workers/zai-heavy-worker/src/handlers/review.js
-  - poc/workers/zai-heavy-worker/src/handlers/describe.js
-  - poc/workers/shared/zai-client.js
+  - src/shared/llm-command-runner.js
+  - src/shared/prompts/context-policy.js
+  - src/shared/prompts/review.js
+  - src/zai-heavy-worker/generated/prompts.js
+  - src/zai-heavy-worker/src/handlers/review.js
+  - src/zai-heavy-worker/src/handlers/describe.js
+  - src/shared/zai-client.js
 confidence: observed
 status: current
 tags:

@@ -3,10 +3,10 @@ type: Workflow
 title: Command routing
 description: Routes help inline and the two LLM commands to durable Queue jobs; only `created` comment actions may execute a command.
 source_paths:
-  - poc/workers/shared/constants.js
-  - poc/workers/zai-main-worker/src/router.js
-  - poc/workers/zai-main-worker/src/index.js
-  - poc/workers/shared/commands.js
+  - src/shared/constants.js
+  - src/zai-main-worker/src/router.js
+  - src/zai-main-worker/src/index.js
+  - src/shared/commands.js
 confidence: observed
 status: current
 tags:

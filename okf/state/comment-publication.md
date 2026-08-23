@@ -3,11 +3,11 @@ type: Entity
 title: One-live-comment publication
 description: Exactly one marker-owned bot comment per repository, PR, and command kind is kept live through a D1 publication lease.
 source_paths:
-  - poc/workers/shared/comments.js
-  - poc/workers/shared/constants.js
-  - poc/workers/shared/llm-command-runner.js
-  - poc/workers/zai-heavy-worker/src/handlers/review.js
-  - poc/workers/zai-heavy-worker/src/handlers/describe.js
+  - src/shared/comments.js
+  - src/shared/constants.js
+  - src/shared/llm-command-runner.js
+  - src/zai-heavy-worker/src/handlers/review.js
+  - src/zai-heavy-worker/src/handlers/describe.js
 confidence: observed
 status: current
 tags:

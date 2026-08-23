@@ -3,11 +3,11 @@ type: Workflow
 title: Webhook ingress
 description: The main worker fetch() gate chain — method, content-type, signature verification, parse — then a three-way fork: PR-context jobs, incremental slice refreshes, and command comments.
 source_paths:
-  - poc/workers/zai-main-worker/src/index.js
-  - poc/workers/shared/crypto.js
-  - poc/workers/shared/secrets.js
-  - poc/workers/zai-main-worker/src/comment-events.js
-  - poc/workers/zai-main-worker/src/pr-events.js
+  - src/zai-main-worker/src/index.js
+  - src/shared/crypto.js
+  - src/shared/secrets.js
+  - src/zai-main-worker/src/comment-events.js
+  - src/zai-main-worker/src/pr-events.js
 confidence: observed
 status: current
 tags:

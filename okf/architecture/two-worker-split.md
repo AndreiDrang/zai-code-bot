@@ -3,10 +3,10 @@ type: Architecture
 title: Two-worker split
 description: The main worker acknowledges webhooks instantly; the heavy worker runs async work on its own lifetime budget.
 source_paths:
-  - poc/workers/zai-main-worker/src/index.js
-  - poc/workers/zai-heavy-worker/src/index.js
-  - poc/workers/shared/constants.js
-  - poc/README.md
+  - src/zai-main-worker/src/index.js
+  - src/zai-heavy-worker/src/index.js
+  - src/shared/constants.js
+  - README.md
 confidence: observed
 status: current
 tags:
@@ -18,7 +18,7 @@ tags:
 
 GitHub webhooks time out if a `200` is not returned within ~10 seconds. PR
 analysis and any LLM-backed command **cannot** complete inline within that
-window. The POC splits execution across two Workers so the main worker can
+window. The design splits execution across two Workers so the main worker can
 acknowledge instantly while the heavy worker runs to completion on its own CPU
 and wall-time budget, driven by a durable [Queue](/contracts/queue-message.md).
 

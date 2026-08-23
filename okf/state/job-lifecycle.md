@@ -3,10 +3,10 @@ type: Entity
 title: Job lifecycle and bounded leases
 description: The durable job state machine (queued → running → succeeded/retryable/failed) for the four job kinds, with bounded leases that prevent duplicate concurrent execution.
 source_paths:
-  - poc/workers/shared/storage/jobs.js
-  - poc/workers/zai-main-worker/migrations/0001_storage_foundation.sql
-  - poc/workers/zai-main-worker/migrations/0003_pr_summary_job.sql
-  - poc/workers/zai-heavy-worker/src/queue.js
+  - src/shared/storage/jobs.js
+  - src/zai-main-worker/migrations/0001_storage_foundation.sql
+  - src/zai-main-worker/migrations/0003_pr_summary_job.sql
+  - src/zai-heavy-worker/src/queue.js
 confidence: observed
 status: current
 tags:

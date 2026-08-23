@@ -3,10 +3,10 @@ type: Workflow
 title: Cron self-healing sweep
 description: The scheduled() handler runs four bounded recovery jobs every 5 minutes — expired-lease reclaim, outbox replay, stranded-job requeue, and R2 retention sweep.
 source_paths:
-  - poc/workers/zai-main-worker/src/index.js
-  - poc/workers/zai-main-worker/src/job-enqueuer.js
-  - poc/workers/shared/storage/jobs.js
-  - poc/workers/shared/storage/artifacts.js
+  - src/zai-main-worker/src/index.js
+  - src/zai-main-worker/src/job-enqueuer.js
+  - src/shared/storage/jobs.js
+  - src/shared/storage/artifacts.js
 confidence: observed
 status: current
 tags:

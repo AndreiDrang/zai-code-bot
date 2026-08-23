@@ -3,9 +3,9 @@ type: Business Rule
 title: Collaborator authorization
 description: Only repository collaborators may run /zai commands.
 source_paths:
-  - poc/workers/shared/auth.js
-  - poc/workers/shared/github.js
-  - poc/workers/zai-main-worker/src/index.js
+  - src/shared/auth.js
+  - src/shared/github.js
+  - src/zai-main-worker/src/index.js
 confidence: observed
 status: current
 tags:
