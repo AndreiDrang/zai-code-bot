@@ -21,8 +21,9 @@ const ZAI_API_URL = 'https://api.z.ai/api/coding/paas/v4/chat/completions';
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 2000;
-// Progressive timeout multipliers — each retry gets a shorter timeout.
-// 1st attempt: 100%, 2nd: 67%, 3rd: 50%, 4th: 33%.
+// Non-agent calls keep their historical progressive retry timeouts.
+// Agent calls use a fixed timeout per attempt so a reasoning response is not
+// guaranteed to be aborted sooner after its first timeout.
 const PROGRESSIVE_TIMEOUT_MULTIPLIERS = [1.0, 0.67, 0.5, 0.33];
 const MIN_TIMEOUT_MS = 10000;
 
@@ -51,7 +52,14 @@ export function createZaiClient(config = {}) {
   /** Single transport call with a timeout. Throws on !ok / malformed / abort. */
   async function complete({ apiKey, model, messages, tools, timeoutMs }) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const request = toChatRequest({ model, messages, tools });
+    const body = JSON.stringify(request);
+    const requestBytes = new TextEncoder().encode(body).byteLength;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     try {
       const res = await fetchImpl(ZAI_API_URL, {
         method: 'POST',
@@ -59,12 +67,14 @@ export function createZaiClient(config = {}) {
           'content-type': 'application/json',
           authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(toChatRequest({ model, messages, tools })),
+        body,
         signal: controller.signal,
       });
       if (!res.ok) {
         const err = new Error(`Z.ai API error ${res.status}`);
         err.status = res.status; // categorizeError reads this directly
+        err.retryAfterMs = readRetryAfterMs(res.headers, now);
+        err.providerRequestId = readProviderRequestId(res.headers);
         try {
           err.body = await res.text();
         } catch {
@@ -80,7 +90,26 @@ export function createZaiClient(config = {}) {
       const hasContent = typeof message.content === 'string' && message.content.length > 0;
       const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
       if (!hasContent && !hasToolCalls) throw new Error('Z.ai API returned an empty response');
-      return { message: { ...message, role: 'assistant' }, usage: normalizeUsage(data?.usage) };
+      return {
+        message: { ...message, role: 'assistant' },
+        usage: normalizeUsage(data?.usage),
+        transport: {
+          httpStatus: res.status,
+          providerRequestId: readProviderRequestId(res.headers),
+          requestBytes,
+        },
+      };
+    } catch (error) {
+      if (timedOut && error?.name === 'AbortError') {
+        const timeoutError = new Error('Z.ai client request timed out');
+        timeoutError.name = 'TimeoutError';
+        timeoutError.requestBytes = requestBytes;
+        throw timeoutError;
+      }
+      if (error && typeof error === 'object' && error.requestBytes == null) {
+        error.requestBytes = requestBytes;
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }
@@ -173,27 +202,33 @@ export function createZaiClient(config = {}) {
 
     /**
      * Executes one chat-completions request for AgentRunner. It deliberately
-     * does not interpret tool calls or retain conversation state.
+     * does not interpret tool calls or retain conversation state. Agent
+     * attempts use a fixed timeout so a reasoning request is not progressively
+     * shortened on retry.
      * @returns {Promise<{success:boolean,data?:{message:Object,usage:Object|null},error?:Object}>}
      */
-    async chat({ apiKey, model, messages, tools, timeoutMs = baseTimeout, deadlineAt, onAttempt }) {
+    async chat({
+      apiKey,
+      model,
+      messages,
+      tools,
+      timeoutMs = baseTimeout,
+      deadlineAt,
+      maxAttempts = maxRetries + 1,
+      retryTimeouts = true,
+      onAttempt,
+    }) {
       const startTime = now();
       let lastError;
-      for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const attemptLimit = Math.max(1, Math.floor(Number(maxAttempts) || 1));
+      for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
         const remainingMs = Number.isFinite(deadlineAt)
           ? Math.max(0, deadlineAt - now())
           : Number.POSITIVE_INFINITY;
         if (remainingMs <= 0) {
           return timedOutChatResult(lastError, attempt, startTime, now);
         }
-        const mult =
-          PROGRESSIVE_TIMEOUT_MULTIPLIERS[
-            Math.min(attempt, PROGRESSIVE_TIMEOUT_MULTIPLIERS.length - 1)
-          ];
-        const requestTimeout = Math.max(
-          1,
-          Math.floor(Math.min(timeoutMs, baseTimeout, remainingMs) * mult),
-        );
+        const requestTimeout = Math.max(1, Math.floor(Math.min(timeoutMs, remainingMs)));
         if (requestTimeout < MIN_TIMEOUT_MS) {
           return timedOutChatResult(lastError, attempt, startTime, now);
         }
@@ -212,6 +247,9 @@ export function createZaiClient(config = {}) {
             durationMs: now() - attemptStartedAt,
             remainingMs,
             requestTimeoutMs: requestTimeout,
+            httpStatus: data.transport?.httpStatus ?? null,
+            providerRequestId: data.transport?.providerRequestId ?? null,
+            requestBytes: data.transport?.requestBytes ?? null,
             success: true,
           });
           return { success: true, data };
@@ -224,9 +262,17 @@ export function createZaiClient(config = {}) {
             durationMs: now() - attemptStartedAt,
             remainingMs,
             requestTimeoutMs: requestTimeout,
+            httpStatus: Number.isFinite(error?.status) ? error.status : null,
+            retryAfterMs: Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : null,
+            providerRequestId: error?.providerRequestId || null,
+            requestBytes: Number.isFinite(error?.requestBytes) ? error.requestBytes : null,
             success: false,
           });
-          if (!categorized.retryable || attempt >= maxRetries) {
+          if (
+            !categorized.retryable ||
+            attempt + 1 >= attemptLimit ||
+            (categorized.category === 'timeout' && !retryTimeouts)
+          ) {
             return {
               success: false,
               error: {
@@ -235,14 +281,20 @@ export function createZaiClient(config = {}) {
                 retryable: categorized.retryable,
                 attempts: attempt + 1,
                 totalDuration: now() - startTime,
+                httpStatus: Number.isFinite(error?.status) ? error.status : null,
+                providerRequestId: error?.providerRequestId || null,
               },
             };
           }
-          const delay = baseDelay * 2 ** attempt + Math.floor(Math.random() * 1000);
+          const retryAfterMs = Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : 0;
+          const delay = Math.max(
+            retryAfterMs,
+            baseDelay * 2 ** attempt + Math.floor(Math.random() * 1000),
+          );
           const remainingAfterAttempt = Number.isFinite(deadlineAt)
             ? Math.max(0, deadlineAt - now())
             : Number.POSITIVE_INFINITY;
-          if (remainingAfterAttempt <= delay) {
+          if (remainingAfterAttempt < delay + MIN_TIMEOUT_MS) {
             return timedOutChatResult(lastError, attempt + 1, startTime, now);
           }
           await sleeper(delay);
@@ -254,7 +306,7 @@ export function createZaiClient(config = {}) {
           category: 'internal',
           message: sanitizeErrorMessage(lastError),
           retryable: false,
-          attempts: maxRetries + 1,
+          attempts: attemptLimit,
           totalDuration: now() - startTime,
         },
       };
@@ -271,6 +323,8 @@ function timedOutChatResult(lastError, attempts, startTime, now) {
       retryable: true,
       attempts,
       totalDuration: now() - startTime,
+      httpStatus: Number.isFinite(lastError?.status) ? lastError.status : null,
+      providerRequestId: lastError?.providerRequestId || null,
     },
   };
 }
@@ -341,6 +395,27 @@ function normalizeUsage(usage) {
     completionTokens: Number(usage.completion_tokens) || null,
     totalTokens: Number(usage.total_tokens) || null,
   };
+}
+
+function readProviderRequestId(headers) {
+  if (!headers?.get) return null;
+  for (const name of ['x-request-id', 'request-id', 'x-trace-id']) {
+    const value = headers.get(name);
+    if (typeof value === 'string' && value) return value.slice(0, 200);
+  }
+  return null;
+}
+
+function readRetryAfterMs(headers, now) {
+  const value = headers?.get?.('retry-after');
+  if (typeof value !== 'string' || !value.trim()) return null;
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.floor(seconds * 1000);
+
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt)) return null;
+  return Math.max(0, retryAt - now());
 }
 
 export { ZAI_API_URL, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY_MS };

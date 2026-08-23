@@ -257,6 +257,108 @@ describe('zai-client — createZaiClient.call', () => {
     expect(fetchImpl.mock.calls[0][1].body).toContain('"get_diff"');
   });
 
+  it('allows an agent request timeout longer than the client default', async () => {
+    const fetchImpl = vi.fn(async () => okResponse('review complete'));
+    const onAttempt = vi.fn();
+    const client = createZaiClient({
+      fetch: fetchImpl,
+      sleep: noSleep,
+      now: () => 0,
+    });
+
+    await expect(
+      client.chat({
+        apiKey: 'key',
+        model: 'model',
+        messages: [{ role: 'user', content: 'review' }],
+        timeoutMs: 90000,
+        deadlineAt: 120000,
+        maxAttempts: 2,
+        onAttempt,
+      }),
+    ).resolves.toMatchObject({ success: true });
+
+    expect(onAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestTimeoutMs: 90000,
+        httpStatus: 200,
+        requestBytes: expect.any(Number),
+      }),
+    );
+  });
+
+  it('does not retry a timed-out gathering request when evidence is already available', async () => {
+    const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    const fetchImpl = vi.fn(async () => {
+      throw abort;
+    });
+    const client = createZaiClient({
+      fetch: fetchImpl,
+      sleep: noSleep,
+      now: () => 0,
+    });
+
+    const result = await client.chat({
+      apiKey: 'key',
+      model: 'model',
+      messages: [{ role: 'user', content: 'review' }],
+      timeoutMs: 90000,
+      deadlineAt: 120000,
+      maxAttempts: 2,
+      retryTimeouts: false,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      success: false,
+      error: { category: 'timeout', retryable: true, attempts: 1 },
+    });
+  });
+
+  it('uses Retry-After and the configured total attempt limit for agent retries', async () => {
+    const rateLimited = errResponse(429);
+    rateLimited.headers = {
+      get(name) {
+        return name.toLowerCase() === 'retry-after' ? '5' : null;
+      },
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimited)
+      .mockResolvedValueOnce(okResponse('review complete'));
+    const sleep = vi.fn(() => Promise.resolve());
+    const onAttempt = vi.fn();
+    const client = createZaiClient({
+      fetch: fetchImpl,
+      sleep,
+      baseDelay: 10,
+      now: () => 0,
+    });
+
+    await expect(
+      client.chat({
+        apiKey: 'key',
+        model: 'model',
+        messages: [{ role: 'user', content: 'review' }],
+        timeoutMs: 90000,
+        deadlineAt: 120000,
+        maxAttempts: 2,
+        onAttempt,
+      }),
+    ).resolves.toMatchObject({ success: true });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(5000);
+    expect(onAttempt).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        category: 'rate-limit',
+        httpStatus: 429,
+        retryAfterMs: 5000,
+      }),
+    );
+  });
+
   it('does not start an LLM request that cannot run for the minimum viable timeout', async () => {
     const fetchImpl = vi.fn(async () => errResponse(500));
     const client = createZaiClient({

@@ -13,13 +13,15 @@
   model requests them one at a time. Review metadata records the finalization
   reason and the count of requested versus admitted calls.
 - **Update**: Increased the review agent's absolute wall-clock deadline from
-  two to five minutes while retaining the 30-second per-request Z.ai timeout.
-  A 40-second finalization reserve disables Context Tools, resolves pending
-  calls with safe `FINALIZATION_REQUIRED` responses, and asks the model to
-  complete the review from evidence already in the conversation. Review
-  artifacts and GitHub comments now end with server-generated metadata for
-  executed tools, accepted per-file diff paths, retrieved bytes, and
-  finalization status.
+  two to five minutes. Gathering requests now receive a fixed 90-second
+  timeout and at most two total attempts, bounded by a deadline before the
+  40-second finalization reserve; direct calls retain progressive retries.
+  A gathering timeout after successful tool retrieval spends the reserve on one
+  35-second no-tools final answer rather than issuing progressively shorter
+  retries. Per-attempt logs add safe request timing, body-size, HTTP-status,
+  retry-after, and provider-request-ID telemetry. Review artifacts and GitHub
+  comments continue to end with server-generated metadata for executed tools,
+  accepted per-file diff paths, retrieved bytes, and finalization status.
 
 ## 2026-08-22
 

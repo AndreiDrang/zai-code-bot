@@ -145,6 +145,62 @@ describe('AgentRunner', () => {
     );
   });
 
+  it('uses the reserved time for a no-tools final answer after a gathering timeout', async () => {
+    const call = toolCall('call-1', 'get_diff', '{"path":"src/cache.ts"}');
+    const timeout = {
+      success: false,
+      error: { category: 'timeout', retryable: true, attempts: 1 },
+    };
+    const { runner, llmClient, toolRegistry } = createTestRunner({
+      replies: [
+        assistant(null, [call]),
+        timeout,
+        assistant('## Summary\nReview completed from retrieved evidence.'),
+      ],
+      limits: {
+        maxRunDurationMs: 200000,
+        maxLlmRequestDurationMs: 90000,
+        maxLlmAttempts: 2,
+        finalLlmRequestDurationMs: 35000,
+        finalizationReserveMs: 40000,
+      },
+      now: () => 0,
+    });
+
+    const result = await runner.run({
+      apiKey: 'key',
+      model: 'model',
+      messages: [{ role: 'user', content: 'review' }],
+      tools: [{ type: 'function' }],
+      runId: 'run-1',
+    });
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      toolCalls: 1,
+      finalizedWithAvailableEvidence: true,
+      finalizationReason: 'llm_timeout',
+      llmRequests: 3,
+    });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(1);
+    expect(llmClient.chat.mock.calls[0][0]).toMatchObject({
+      timeoutMs: 90000,
+      deadlineAt: 160000,
+      maxAttempts: 2,
+    });
+    expect(llmClient.chat.mock.calls[1][0]).toMatchObject({
+      timeoutMs: 90000,
+      deadlineAt: 160000,
+      retryTimeouts: false,
+    });
+    expect(llmClient.chat.mock.calls[2][0]).toMatchObject({
+      tools: [],
+      timeoutMs: 35000,
+      deadlineAt: 200000,
+      maxAttempts: 1,
+    });
+  });
+
   it('does not execute late tool calls and asks for a final answer without tools', async () => {
     const now = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15000);
     const call = toolCall('call-1', 'get_diff', '{"path":"src/late.js"}');
@@ -520,6 +576,9 @@ describe('Agent limits', () => {
       maxToolCalls: 30,
       maxRetrievedBytes: 512 * 1024,
       maxRunDurationMs: 5 * 60 * 1000,
+      maxLlmRequestDurationMs: 90000,
+      maxLlmAttempts: 2,
+      finalLlmRequestDurationMs: 35000,
       finalizationReserveMs: 40000,
     });
     expect(resolveAgentLimits({ unknownLimit: 2 })).not.toHaveProperty('unknownLimit');

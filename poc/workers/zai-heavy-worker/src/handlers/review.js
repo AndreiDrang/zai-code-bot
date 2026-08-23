@@ -31,7 +31,9 @@ const REVIEW_AGENT_LIMITS = Object.freeze({
   maxToolCallsPerIteration: 7,
   maxRetrievedBytes: 256 * 1024,
   maxRunDurationMs: 5 * 60 * 1000,
-  maxLlmRequestDurationMs: 30000,
+  maxLlmRequestDurationMs: 90000,
+  maxLlmAttempts: 2,
+  finalLlmRequestDurationMs: 35000,
   finalizationReserveMs: 40000,
 });
 

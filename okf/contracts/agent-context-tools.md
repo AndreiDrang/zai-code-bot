@@ -93,8 +93,10 @@ tool messages the model can react to.
 
 The review agent has a 50-call Context Tool budget, a 256 KiB accepted-result
 budget, and a 40-second finalization reserve within its five-minute wall-clock
-budget. Once any of these retrieval budgets is exhausted, the runner withholds
-all tool definitions and resolves pending calls with a safe tool result; the
-model must finish from already retrieved evidence. Successful, accepted
-`get_diff` paths are retained as review provenance and rendered in a
+budget. Gathering requests may wait up to 90 seconds, but the final reserve is
+kept for one 35-second no-tools answer. Once any retrieval budget is exhausted,
+or a gathering model request times out after tool evidence was retrieved, the
+runner withholds all tool definitions and resolves pending calls with a safe
+tool result; the model must finish from already retrieved evidence. Successful,
+accepted `get_diff` paths are retained as review provenance and rendered in a
 server-generated metadata block at the end of the review.

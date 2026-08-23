@@ -189,6 +189,8 @@ export async function runLlmCommand(
       command,
       category,
       attempts: result.error?.attempts,
+      providerHttpStatus: result.error?.httpStatus ?? null,
+      providerRequestId: result.error?.providerRequestId ?? null,
       agentLimitReasons: result.agent?.limitReasons ?? [],
       agentDuplicateToolCalls: result.agent?.duplicateToolCalls ?? 0,
     });
@@ -329,6 +331,8 @@ async function runAgentCommand({
         error: {
           category: agent.status === 'failed' ? agent.error?.category || 'provider' : agent.status,
           attempts: agent.error?.attempts ?? null,
+          httpStatus: agent.error?.httpStatus ?? null,
+          providerRequestId: agent.error?.providerRequestId ?? null,
           retryable:
             agent.status === 'failed' ? agent.error?.retryable : agent.status === 'timed_out',
         },

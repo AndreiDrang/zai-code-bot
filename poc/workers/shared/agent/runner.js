@@ -17,7 +17,8 @@ export function createAgentRunner({
   async function run({ apiKey, model, messages, tools, runId }) {
     const conversation = Array.isArray(messages) ? [...messages] : [];
     const startedAt = now();
-    const deadlineAt = startedAt + resolvedLimits.maxRunDurationMs;
+    const hardDeadlineAt = startedAt + resolvedLimits.maxRunDurationMs;
+    const gatheringDeadlineAt = hardDeadlineAt - resolvedLimits.finalizationReserveMs;
     let iterations = 0;
     let toolCalls = 0;
     let requestedToolCalls = 0;
@@ -40,14 +41,20 @@ export function createAgentRunner({
     let finalizationStartedAtRemainingMs = null;
 
     while (true) {
-      const remainingMs = deadlineAt - now();
+      const loopNow = now();
+      const remainingMs = hardDeadlineAt - loopNow;
       if (remainingMs <= 0) {
         return buildResult('timed_out');
       }
-      if (remainingMs < resolvedLimits.finalizationReserveMs) {
+      if (!finalizedWithAvailableEvidence && loopNow >= gatheringDeadlineAt) {
         enterFinalization('time_reserve', remainingMs);
       }
 
+      const phase = finalizedWithAvailableEvidence ? 'finalization' : 'gathering';
+      const requestDeadlineAt = finalizedWithAvailableEvidence
+        ? hardDeadlineAt
+        : gatheringDeadlineAt;
+      const requestRemainingMs = requestDeadlineAt - loopNow;
       let response;
       const requestNumber = ++llmRequests;
       const conversationBytes = jsonByteLength(conversation);
@@ -59,14 +66,22 @@ export function createAgentRunner({
           // sequence, not the array that is extended after tool execution.
           messages: [...conversation],
           tools: finalizedWithAvailableEvidence ? [] : tools,
-          timeoutMs: Math.min(remainingMs, resolvedLimits.maxLlmRequestDurationMs),
-          deadlineAt,
+          timeoutMs: Math.min(
+            requestRemainingMs,
+            finalizedWithAvailableEvidence
+              ? resolvedLimits.finalLlmRequestDurationMs
+              : resolvedLimits.maxLlmRequestDurationMs,
+          ),
+          deadlineAt: requestDeadlineAt,
+          maxAttempts: finalizedWithAvailableEvidence ? 1 : resolvedLimits.maxLlmAttempts,
+          retryTimeouts: successfulToolCalls === 0,
           onAttempt: (attempt) => {
             llmAttempts += 1;
             if (attempt.category === 'timeout') llmTimeouts += 1;
             logger?.info('Agent LLM attempt completed', {
               runId,
               requestNumber,
+              phase,
               ...attempt,
               conversationMessages: conversation.length,
               conversationBytes,
@@ -83,6 +98,15 @@ export function createAgentRunner({
         });
       }
       if (!response.success) {
+        if (
+          response.error?.category === 'timeout' &&
+          !finalizedWithAvailableEvidence &&
+          successfulToolCalls > 0 &&
+          hardDeadlineAt - now() > 0
+        ) {
+          enterFinalization('llm_timeout', Math.max(0, hardDeadlineAt - now()));
+          continue;
+        }
         return buildResult('failed', { error: response.error || { category: 'provider' } });
       }
 
@@ -116,12 +140,12 @@ export function createAgentRunner({
           error: { category: 'protocol', code: 'AGENT_FINALIZATION_REQUIRED' },
         });
       }
-      if (deadlineAt - now() < resolvedLimits.finalizationReserveMs) {
+      if (now() >= gatheringDeadlineAt) {
         conversation.push(
           assistant,
           ...calls.map((call) => makeFinalizationToolResult(call.id, 'time_reserve')),
         );
-        enterFinalization('time_reserve', Math.max(0, deadlineAt - now()));
+        enterFinalization('time_reserve', Math.max(0, hardDeadlineAt - now()));
         continue;
       }
 
@@ -231,9 +255,9 @@ export function createAgentRunner({
         limitReasons.add('max_tool_calls');
       }
       if (retrievalBudgetExceeded) {
-        enterFinalization('retrieval_budget', Math.max(0, deadlineAt - now()));
+        enterFinalization('retrieval_budget', Math.max(0, hardDeadlineAt - now()));
       } else if (toolCalls >= resolvedLimits.maxToolCalls) {
-        enterFinalization('tool_call_budget', Math.max(0, deadlineAt - now()));
+        enterFinalization('tool_call_budget', Math.max(0, hardDeadlineAt - now()));
       } else if (perTurnToolBudgetExceeded) {
         limitReasons.add('max_tool_calls_per_iteration');
       }
@@ -295,6 +319,10 @@ export function createAgentRunner({
         maxToolCalls: resolvedLimits.maxToolCalls,
         maxToolCallsPerIteration: resolvedLimits.maxToolCallsPerIteration,
         maxRetrievedBytes: resolvedLimits.maxRetrievedBytes,
+        maxLlmRequestDurationMs: resolvedLimits.maxLlmRequestDurationMs,
+        maxLlmAttempts: resolvedLimits.maxLlmAttempts,
+        finalLlmRequestDurationMs: resolvedLimits.finalLlmRequestDurationMs,
+        finalizationReserveMs: resolvedLimits.finalizationReserveMs,
         conversationBytes,
         durationMs: result.durationMs,
       });
@@ -465,6 +493,9 @@ function finalizationReasonLabel(reason) {
   }
   if (reason === 'retrieval_budget') {
     return 'The context retrieval budget has been reached.';
+  }
+  if (reason === 'llm_timeout') {
+    return 'A context-gathering model request timed out.';
   }
   return 'The investigation time reserve has started.';
 }

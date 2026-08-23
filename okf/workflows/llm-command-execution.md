@@ -85,7 +85,11 @@ LLM ↔ tool protocol and enforces its runtime budgets.
   it disables Context Tools and asks the model to complete the analysis from
   available evidence. A completed review records that finalization reason in
   server-generated metadata; it does not fail merely because its allowed
-  retrieval budget was used.
+  retrieval budget was used. Gathering requests may wait up to 90 seconds and
+  use at most two attempts, but they are bounded by the deadline before the
+  40-second finalization reserve. A gathering timeout after successful tool
+  retrieval enters a single 35-second, no-tools finalization request instead
+  of repeating shorter timeout attempts.
 
 ## describe — agent mode
 
@@ -110,12 +114,14 @@ sanitized explanation. Terminal comments distinguish execution, tool-call,
 retrieved-context, and investigation limits; timeouts; rate limits; temporary
 provider unavailability; rejected credentials or invalid requests; malformed
 responses; and internal failures. Where it is safe to do so, the message also
-states completed context requests, retrieved bytes, or retry attempts. The Z.ai
-client adds per-attempt retry with progressive timeouts (100% → 67% → 50% →
-33%; direct calls have a 10s floor) and error categorization (auth / validation
-/ provider / rate-limit / timeout / internal). Agent-mode calls cap each
-attempt and backoff at AgentRunner's absolute deadline, so neither can exceed
-the run budget.
+states completed context requests, retrieved bytes, or retry attempts. Direct
+Z.ai calls retain progressive retry timeouts (100% → 67% → 50% → 33%; 10s
+floor). Agent-mode calls instead use a fixed per-attempt timeout, a
+stage-specific absolute deadline, and bounded attempts so a reasoning response
+is not made less likely to complete by each retry. Per-attempt telemetry records
+the timeout, duration, request-body size, HTTP status, retry-after value, and
+allowlisted provider request ID; neither prompt content nor raw provider errors
+are logged.
 
 ## Command-result persistence
 
