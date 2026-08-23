@@ -9,7 +9,7 @@ WORKER_HEAVY := workers/zai-heavy-worker
 help:
 	@printf '%s\n' \
 		'make dependencies    Install Node.js dev dependencies (prettier, vitest, etc.)' \
-		'make test            Run the Vitest unit-test suite with v8 coverage' \
+		'make test            Run the Vitest suite with v8 coverage, then print per-column averages' \
 		'make test-watch      Run Vitest in watch mode (re-runs on file change)' \
 		'make refactor-js     Install ALL deps, then auto-format worker JavaScript' \
 		'make format-check    Check JS formatting without writing (CI-style)' \
@@ -25,9 +25,13 @@ help:
 dependencies:
 	@npm install
 
-# Run the Vitest unit-test suite with coverage (globals + miniflare env).
+# Run the Vitest unit-test suite with coverage (globals + miniflare env),
+# then print the average value for each coverage column (% Stmts / % Branch /
+# % Funcs / % Lines) from the istanbul JSON the suite emits — overall and per
+# threshold glob, mirroring vitest.config.js.
 test:
 	@npm test
+	@node scripts/coverage-averages.js
 
 # Run Vitest in watch mode (re-runs on file change).
 test-watch:
