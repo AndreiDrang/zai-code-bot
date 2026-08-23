@@ -204,6 +204,59 @@ describe('AgentRunner', () => {
     expect(toolRegistry.execute).not.toHaveBeenCalled();
   });
 
+  it('allows 50 requests across configured iterations before enforcing the tool-call limit', async () => {
+    const calls = Array.from({ length: 51 }, (_, index) =>
+      toolCall(`call-${index}`, 'get_diff', `{"path":"src/file-${index}.js"}`),
+    );
+    const replies = [];
+    for (let offset = 0; offset < 49; offset += 7) {
+      replies.push(assistant(null, calls.slice(offset, offset + 7)));
+    }
+    replies.push(assistant(null, [calls[49]]));
+    replies.push(assistant(null, [calls[50]]));
+    const { runner, toolRegistry } = createTestRunner({
+      replies,
+      limits: {
+        maxIterations: 8,
+        maxToolCalls: 50,
+        maxToolCallsPerIteration: 7,
+      },
+    });
+
+    await expect(
+      runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
+    ).resolves.toMatchObject({
+      status: 'max_tool_calls',
+      iterations: 8,
+      toolCalls: 50,
+      limitReasons: ['max_tool_calls'],
+    });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(50);
+  });
+
+  it('skips an identical tool request without repeating retrieval or context data', async () => {
+    const first = toolCall('call-1', 'get_diff', '{"path":"src/cache.ts"}');
+    const duplicate = toolCall('call-2', 'get_diff', '{"path":"src/cache.ts"}');
+    const { runner, llmClient, toolRegistry } = createTestRunner({
+      replies: [assistant(null, [first, duplicate]), assistant('done')],
+    });
+
+    await expect(
+      runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      toolCalls: 2,
+      successfulToolCalls: 1,
+      duplicateToolCalls: 1,
+    });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(1);
+    const duplicateResult = JSON.parse(llmClient.chat.mock.calls[1][0].messages[2].content);
+    expect(duplicateResult).toMatchObject({
+      ok: false,
+      error: { code: 'DUPLICATE_TOOL_REQUEST' },
+    });
+  });
+
   it('stops after the configured iteration limit', async () => {
     const { runner } = createTestRunner({
       replies: [
@@ -256,6 +309,27 @@ describe('AgentRunner', () => {
       status: 'max_retrieved_bytes',
       toolCalls: 1,
       retrievalBudgetExceeded: true,
+    });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves both retrieval and tool-call limit reasons when both are reached', async () => {
+    const { runner, toolRegistry } = createTestRunner({
+      replies: [
+        assistant(null, [toolCall('call-1', 'get_file')]),
+        assistant(null, [toolCall('call-2', 'get_file'), toolCall('call-3', 'get_file')]),
+      ],
+      execute: vi.fn().mockResolvedValue({ content: 'too much context' }),
+      limits: { maxToolCalls: 1, maxRetrievedBytes: 1 },
+    });
+
+    await expect(
+      runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
+    ).resolves.toMatchObject({
+      status: 'max_tool_calls',
+      toolCalls: 1,
+      retrievalBudgetExceeded: true,
+      limitReasons: expect.arrayContaining(['max_tool_calls', 'max_retrieved_bytes']),
     });
     expect(toolRegistry.execute).toHaveBeenCalledTimes(1);
   });

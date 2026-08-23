@@ -84,4 +84,9 @@ tool messages the model can react to.
   when a narrower or different tool is preferable. They do not expose R2/D1/KV,
   artifact keys, checksums, or provider implementation. Shared retrieval policy
   belongs in the workflow's system prompt, while a definition gives only local
-  guidance for that tool.
+  guidance for that tool. The review workflow ranks changed files before retrieval:
+  authentication and authorization, public request boundaries, business logic,
+  stateful infrastructure, deployment configuration, and their behavior tests
+  come before generated files, lockfiles, fixtures, documentation, and mechanical
+  bulk changes. It begins with the highest-priority 3–5 files and reassesses after
+  each batch rather than reading every changed file.

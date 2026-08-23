@@ -17,7 +17,7 @@ export const CONTEXT_TOOL_SCHEMAS = Object.freeze([
   {
     name: 'get_diff',
     description:
-      'Get the unified diff for one file changed by this pull request. During review, use this first to inspect what changed in a changed file. Do not use it for unchanged files or when current implementation is needed; use get_file instead.',
+      'Get the unified diff for one file changed by this pull request. During review, inspect the highest-risk changed files first and use this before requesting source. Do not use it for unchanged files, generated files, lockfiles, or documentation unless they are relevant to a concrete concern. Do not repeat an identical request; use get_file instead when current implementation is needed.',
     input_schema: {
       type: 'object',
       additionalProperties: false,

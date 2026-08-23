@@ -29,6 +29,8 @@ describe('Context Tools', () => {
 
     expect(diff.description).toContain('changed by this pull request');
     expect(diff.description).toContain('Do not use it for unchanged files');
+    expect(diff.description).toContain('highest-risk changed files first');
+    expect(diff.description).toContain('Do not repeat an identical request');
     expect(file.description).toContain('Prefer get_file_range');
     expect(range.input_schema.properties.startLine.description).toContain('1-based inclusive');
     expect(JSON.stringify(definitions)).not.toMatch(/\b(R2|D1|KV|storage key)\b/i);

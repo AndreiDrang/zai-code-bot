@@ -189,6 +189,8 @@ export async function runLlmCommand(
       command,
       category,
       attempts: result.error?.attempts,
+      agentLimitReasons: result.agent?.limitReasons ?? [],
+      agentDuplicateToolCalls: result.agent?.duplicateToolCalls ?? 0,
     });
     const retryable = result.error?.retryable !== false;
     const attempt = Number(job.attempt_count);
@@ -241,11 +243,13 @@ export async function runLlmCommand(
     agentTools: result.agent?.tools ?? [],
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
+    agentDuplicateToolCalls: result.agent?.duplicateToolCalls ?? 0,
     agentLlmRequests: result.agent?.llmRequests ?? null,
     agentLlmAttempts: result.agent?.llmAttempts ?? null,
     agentLlmTimeouts: result.agent?.llmTimeouts ?? null,
     agentRetrievedBytes: result.agent?.retrievedBytes ?? 0,
     agentRetrievalBudgetExceeded: result.agent?.retrievalBudgetExceeded ?? false,
+    agentLimitReasons: result.agent?.limitReasons ?? [],
   });
 
   return baseReturn(doneStatus, {
@@ -263,11 +267,13 @@ export async function runLlmCommand(
     agentTools: result.agent?.tools ?? [],
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
+    agentDuplicateToolCalls: result.agent?.duplicateToolCalls ?? 0,
     agentLlmRequests: result.agent?.llmRequests ?? null,
     agentLlmAttempts: result.agent?.llmAttempts ?? null,
     agentLlmTimeouts: result.agent?.llmTimeouts ?? null,
     agentRetrievedBytes: result.agent?.retrievedBytes ?? 0,
     agentRetrievalBudgetExceeded: result.agent?.retrievalBudgetExceeded ?? false,
+    agentLimitReasons: result.agent?.limitReasons ?? [],
     command,
   });
 }
@@ -341,7 +347,7 @@ function llmCommandError(category, retryable) {
   return error;
 }
 
-function buildFailureNotice({ command, category, error, agent, agentLimits }) {
+export function buildFailureNotice({ command, category, error, agent, agentLimits }) {
   if (category === 'max_tool_calls') {
     const limit = Number(agentLimits?.maxToolCalls);
     const toolCalls = Number(agent?.toolCalls);
@@ -350,10 +356,20 @@ function buildFailureNotice({ command, category, error, agent, agentLimits }) {
       Number.isFinite(toolCalls) && toolCalls > 0
         ? ` after ${toolCalls} context request${toolCalls === 1 ? '' : 's'}`
         : '';
-    return (
+    const notice =
       `The ${command} reached its ${limitText} context-retrieval limit${progress}, ` +
-      `so it could not produce a complete result. Please retry with \`/zai ${command}\`.`
-    );
+      'so it could not produce a complete result.';
+    if (agent?.retrievalBudgetExceeded) {
+      const retrievalLimit = formatByteLimit(agentLimits?.maxRetrievedBytes);
+      const retrieved = formatByteLimit(agent?.retrievedBytes);
+      const retrievalProgress = retrieved ? ` after retrieving ${retrieved}` : '';
+      const retrievalLimitText = retrievalLimit ? ` of ${retrievalLimit}` : '';
+      return (
+        `${notice} It also reached its context-data limit${retrievalProgress}${retrievalLimitText}. ` +
+        `Please retry with \`/zai ${command}\`.`
+      );
+    }
+    return `${notice} Please retry with \`/zai ${command}\`.`;
   }
 
   if (category === 'max_retrieved_bytes') {

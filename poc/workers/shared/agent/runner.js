@@ -27,8 +27,11 @@ export function createAgentRunner({
     let retrievedBytes = 0;
     let retrievalBudgetExceeded = false;
     const toolNames = new Set();
+    const requestedToolCallKeys = new Set();
+    const limitReasons = new Set();
     let successfulToolCalls = 0;
     let failedToolCalls = 0;
+    let duplicateToolCalls = 0;
 
     while (true) {
       const remainingMs = deadlineAt - now();
@@ -118,8 +121,21 @@ export function createAgentRunner({
         tools: calls.map((call) => call.function.name),
       });
       const toolResults = await Promise.all(
-        calls.map((call) =>
-          executeToolCall(call, {
+        calls.map((call) => {
+          const toolCallKey = createToolCallKey(call);
+          if (requestedToolCallKeys.has(toolCallKey)) {
+            duplicateToolCalls += 1;
+            toolNames.add(call.function.name);
+            logger?.info('Agent duplicate tool request skipped', {
+              runId,
+              iteration: iterations,
+              tool: call.function.name,
+            });
+            return Promise.resolve(makeDuplicateToolResult(call.id));
+          }
+
+          requestedToolCallKeys.add(toolCallKey);
+          return executeToolCall(call, {
             iteration: iterations,
             runId,
             onComplete: ({ tool, success }) => {
@@ -127,8 +143,11 @@ export function createAgentRunner({
               if (success) successfulToolCalls += 1;
               else failedToolCalls += 1;
             },
-          }),
-        ),
+          }).then((result) => {
+            if (!result.success) requestedToolCallKeys.delete(toolCallKey);
+            return result;
+          });
+        }),
       );
       const toolMessages = [];
       for (const toolResult of toolResults) {
@@ -137,6 +156,7 @@ export function createAgentRunner({
           retrievedBytes + toolResult.resultBytes > resolvedLimits.maxRetrievedBytes
         ) {
           retrievalBudgetExceeded = true;
+          limitReasons.add('max_retrieved_bytes');
           toolMessages.push(
             makeToolMessage(toolResult.toolCallId, {
               ok: false,
@@ -156,6 +176,8 @@ export function createAgentRunner({
     }
 
     function buildResult(status, extra = {}) {
+      if (status.startsWith('max_')) limitReasons.add(status);
+      const conversationBytes = jsonByteLength(conversation);
       const result = {
         status,
         messages: conversation,
@@ -166,11 +188,14 @@ export function createAgentRunner({
         tools: [...toolNames],
         successfulToolCalls,
         failedToolCalls,
+        duplicateToolCalls,
         llmRequests,
         llmAttempts,
         llmTimeouts,
         retrievedBytes,
         retrievalBudgetExceeded,
+        limitReasons: [...limitReasons],
+        conversationBytes,
         durationMs: now() - startedAt,
         ...extra,
       };
@@ -183,11 +208,18 @@ export function createAgentRunner({
         tools: result.tools,
         successfulToolCalls,
         failedToolCalls,
+        duplicateToolCalls,
         llmRequests,
         llmAttempts,
         llmTimeouts,
         retrievedBytes,
         retrievalBudgetExceeded,
+        limitReasons: result.limitReasons,
+        maxIterations: resolvedLimits.maxIterations,
+        maxToolCalls: resolvedLimits.maxToolCalls,
+        maxToolCallsPerIteration: resolvedLimits.maxToolCallsPerIteration,
+        maxRetrievedBytes: resolvedLimits.maxRetrievedBytes,
+        conversationBytes,
         durationMs: result.durationMs,
       });
       return result;
@@ -288,6 +320,37 @@ function makeToolMessage(toolCallId, content) {
     tool_call_id: toolCallId,
     content: JSON.stringify(content),
   };
+}
+
+function makeDuplicateToolResult(toolCallId) {
+  return {
+    success: false,
+    toolCallId,
+    resultBytes: 0,
+    message: makeToolMessage(toolCallId, {
+      ok: false,
+      error: {
+        code: 'DUPLICATE_TOOL_REQUEST',
+        message:
+          'This exact context request was already completed in this run. Use its earlier result to continue the review.',
+      },
+    }),
+  };
+}
+
+function createToolCallKey(call) {
+  const name = call.function.name;
+  const rawArguments = call.function.arguments ?? '{}';
+  try {
+    const args = JSON.parse(rawArguments);
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return `${name}:${rawArguments}`;
+    const normalized = Object.fromEntries(
+      Object.entries(args).sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey)),
+    );
+    return `${name}:${JSON.stringify(normalized)}`;
+  } catch {
+    return `${name}:${rawArguments}`;
+  }
 }
 
 function jsonByteLength(value) {

@@ -1,5 +1,15 @@
 # Knowledge Bundle Update Log
 
+## 2026-08-23
+
+- **Update**: `/zai review` now ranks security-sensitive request boundaries,
+  business logic, stateful infrastructure, deployment configuration, and
+  behavior tests before lower-signal generated, lock, fixture, documentation,
+  or mechanical files. Its agent profile permits 50 calls across eight turns
+  and 256 KiB of accepted tool-result data. Repeated identical tool requests
+  are skipped, and a terminal GitHub notice can report both retrieval-data and
+  tool-call limits without exposing provider internals.
+
 ## 2026-08-22
 
 - **Update**: Bounded the [Agent tool-calling loop](/contracts/agent-runner.md)

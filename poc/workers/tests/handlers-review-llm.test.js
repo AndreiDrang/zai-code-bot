@@ -24,6 +24,7 @@ vi.mock('../shared/comments.js', () => ({ upsertComment: mocks.upsertComment }))
 vi.mock('../shared/storage/config.js', () => ({ getRepositoryConfig: mocks.getRepositoryConfig }));
 
 import { handleReviewCommand } from '../zai-heavy-worker/src/handlers/review.js';
+import { buildFailureNotice } from '../shared/llm-command-runner.js';
 
 const REPO_ID = 10;
 const PR = 7;
@@ -342,19 +343,19 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
   });
 
   it('updates the review comment with tool-limit progress when the agent reaches its limit', async () => {
-    const calls = Array.from({ length: 20 }, (_, index) => ({
+    const calls = Array.from({ length: 50 }, (_, index) => ({
       id: `call-${index}`,
       type: 'function',
       function: { name: 'get_diff', arguments: '{"path":"a/f"}' },
     }));
-    for (let offset = 0; offset < calls.length; offset += 4) {
+    for (let offset = 0; offset < calls.length; offset += 7) {
       mocks.chat.mockResolvedValueOnce({
         success: true,
         data: {
           message: {
             role: 'assistant',
             content: null,
-            tool_calls: calls.slice(offset, offset + 4),
+            tool_calls: calls.slice(offset, offset + 7),
           },
         },
       });
@@ -378,12 +379,29 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
 
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
     expect(mocks.upsertComment.mock.calls[0][0].body).toContain(
-      'reached its 20-call context-retrieval limit after 20 context requests',
+      'reached its 50-call context-retrieval limit after 50 context requests',
     );
     expect(mocks.upsertComment.mock.calls[0][0]).toMatchObject({
       commentKind: 'review',
       marker: REVIEW_MARKER,
     });
+  });
+
+  it('reports both retrieval limits without exposing provider details', () => {
+    const notice = buildFailureNotice({
+      command: 'review',
+      category: 'max_tool_calls',
+      agent: {
+        toolCalls: 50,
+        retrievedBytes: 255 * 1024,
+        retrievalBudgetExceeded: true,
+      },
+      agentLimits: { maxToolCalls: 50, maxRetrievedBytes: 256 * 1024 },
+    });
+
+    expect(notice).toContain('50-call context-retrieval limit after 50 context requests');
+    expect(notice).toContain('context-data limit after retrieving 255 KiB of 256 KiB');
+    expect(notice).not.toContain('api.z.ai');
   });
 
   it('explains authentication failures without exposing provider response details', async () => {
