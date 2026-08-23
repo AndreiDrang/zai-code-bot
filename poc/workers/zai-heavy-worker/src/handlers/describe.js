@@ -116,7 +116,7 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
   };
 
   if (!commitMessages) {
-    await publishStatus(identity, 'No commits could be loaded for this PR.', 'no_commits');
+    await publishStatus(identity, 'No commits could be loaded for this PR.', 'no_commits', logger);
     return result('no_commits', repoFullName, prNumber);
   }
 
@@ -126,6 +126,7 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
       identity,
       'Description generation is not configured (`ZAI_API_KEY` is unset).',
       'no_api_key',
+      logger,
     );
     return result('no_api_key', repoFullName, prNumber);
   }
@@ -180,6 +181,7 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
         identity,
         `The description could not be generated (${category}). Please retry.`,
         'llm_failed',
+        logger,
       );
     }
     throw describeCommandError(category, retryable && !finalAttempt);
@@ -204,6 +206,7 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
     identity,
     'The PR description was updated from its commit history.',
     'updated',
+    logger,
   );
   logger.info('Describe updated pull request', {
     repo: repoFullName,
@@ -254,11 +257,11 @@ function replaceGeneratedDescription(body, generated) {
   return `${body.slice(0, start).trimEnd()}\n\n${block}${end === -1 ? '' : body.slice(end + DESCRIPTION_END.length)}`.trim();
 }
 
-async function publishStatus(identity, message, status) {
+async function publishStatus(identity, message, status, logger = null) {
   const summary = identity.manifest
     ? `\n\nContext snapshot: \`${identity.manifest.headSha}\`.`
     : '';
-  return upsertComment({
+  const publication = await upsertComment({
     github: identity.github,
     db: identity.db,
     owner: identity.owner,
@@ -271,6 +274,17 @@ async function publishStatus(identity, message, status) {
     body: `## 📝 /zai describe\n\n${message}${summary}\n\n---\n${BOT_FOOTER}\n\n${DESCRIBE_MARKER}`,
     jobId: identity.jobId,
   });
+  if (publication?.skipped && logger) {
+    logger.warn('Describe status publication skipped: lease held by concurrent job', {
+      repo: `${identity.owner}/${identity.repo}`,
+      issue: identity.prNumber,
+      jobId: identity.jobId,
+      status,
+      keptCommentId: publication.id ?? null,
+      attempts: publication.attempts ?? null,
+    });
+  }
+  return publication;
 }
 
 function result(status, repository, issue) {

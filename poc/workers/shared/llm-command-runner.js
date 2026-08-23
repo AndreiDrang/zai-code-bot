@@ -120,15 +120,16 @@ export async function runLlmCommand(
     ? Array.isArray(files) && files.length > 0
     : typeof diff === 'string' && Boolean(diff.trim());
   if (!hasReviewableContext) {
-    await publishNotice(identity, metadata, {
+    const publication = await publishNotice(identity, metadata, {
       message: `No diff could be loaded for this PR, so there is nothing to ${command}.`,
-    });
+    }, logger);
     return baseReturn('no_diff', {
       repository: repoFullName,
       issue: prNumber,
       headSha,
       contextReady: Boolean(metadata),
       command,
+      publicationSkipped: Boolean(publication?.skipped),
     });
   }
 
@@ -143,7 +144,7 @@ export async function runLlmCommand(
       message:
         `LLM ${command} is not configured on this deployment (\`ZAI_API_KEY\` is unset). ` +
         'The gathered PR context is ready and will be used once the key is configured.',
-    });
+    }, logger);
     return baseReturn('no_api_key', {
       repository: repoFullName,
       issue: prNumber,
@@ -206,7 +207,7 @@ export async function runLlmCommand(
           agent: result.agent,
           agentLimits,
         }),
-      });
+      }, logger);
     }
     throw llmCommandError(category, retryable && !finalAttempt);
   }
@@ -232,7 +233,7 @@ export async function runLlmCommand(
   }
 
   // --- Publish the marker-idempotent comment. ---
-  await publishResult(identity, resultData);
+  const publication = await publishResult(identity, resultData, logger);
 
   logger.info(`${command} published`, {
     repo: repoFullName,
@@ -241,6 +242,7 @@ export async function runLlmCommand(
     model,
     promptVersion,
     resultStored,
+    publicationSkipped: Boolean(publication?.skipped),
     agentUsedTools: result.agent?.usedTools ?? false,
     agentIterations: result.agent?.iterations ?? null,
     agentToolCalls: result.agent?.toolCalls ?? null,
@@ -289,6 +291,7 @@ export async function runLlmCommand(
     agentRetrievalBudgetExceeded: result.agent?.retrievalBudgetExceeded ?? false,
     agentLimitReasons: result.agent?.limitReasons ?? [],
     command,
+    publicationSkipped: Boolean(publication?.skipped),
   });
 }
 
@@ -481,31 +484,32 @@ function formatMarkdownCode(value) {
 }
 
 /** Publishes the LLM result as a marker-idempotent comment. */
-async function publishResult(identity, markdown) {
+async function publishResult(identity, markdown, logger = null) {
   const body = `## ${identity.emoji} /zai ${identity.command}\n\n${markdown}\n\n---\n${BOT_FOOTER}\n\n${identity.commentMarker}`;
-  return upsertComment({
-    github: identity.github,
-    db: identity.db,
-    owner: identity.owner,
-    repo: identity.repo,
-    issueNumber: identity.prNumber,
-    repositoryId: identity.repoId,
-    headSha: identity.headSha,
-    commentKind: identity.commentKind,
-    marker: identity.commentMarker,
+  return finishPublication(
+    identity,
+    logger,
     body,
-    jobId: identity.jobId,
-  });
+  );
 }
 
 /** Publishes a short, marker-wrapped notice (no-diff / no-key / failure). */
-async function publishNotice(identity, metadata, { message }) {
+async function publishNotice(identity, metadata, { message }, logger = null) {
   const summary = renderContextSummary(metadata);
   const head = identity.headSha ? ` for \`${identity.headSha.slice(0, 7)}\`` : '';
   const lines = [`## ${identity.emoji} /zai ${identity.command}${head}`, '', message];
   if (summary) lines.push('', summary);
   const body = `${lines.join('\n')}\n\n---\n${BOT_FOOTER}\n\n${identity.commentMarker}`;
-  return upsertComment({
+  return finishPublication(
+    identity,
+    logger,
+    body,
+  );
+}
+
+/** Shared upsert + structured skip warning so a lost lease is never silent. */
+async function finishPublication(identity, logger, body) {
+  const publication = await upsertComment({
     github: identity.github,
     db: identity.db,
     owner: identity.owner,
@@ -518,4 +522,15 @@ async function publishNotice(identity, metadata, { message }) {
     body,
     jobId: identity.jobId,
   });
+  if (publication?.skipped && logger) {
+    logger.warn('Comment publication skipped: lease held by concurrent job', {
+      command: identity.command,
+      repo: `${identity.owner}/${identity.repo}`,
+      issue: identity.prNumber,
+      jobId: identity.jobId,
+      keptCommentId: publication.id ?? null,
+      attempts: publication.attempts ?? null,
+    });
+  }
+  return publication;
 }

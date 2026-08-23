@@ -491,13 +491,62 @@ describe('comment publication edge paths', () => {
   it('skips publication when the lease is held by another job', async () => {
     const input = args({
       db: publicationDb({ claimChanges: 0, publication: { github_comment_id: 42 } }),
+      waitMs: 0,
     });
     await expect(upsertComment(input)).resolves.toEqual({
       id: 42,
       created: false,
       skipped: true,
+      attempts: 1,
     });
     expect(input.github.postComment).not.toHaveBeenCalled();
+  });
+
+  it('waits out a concurrent lease and publishes once the winner finalizes', async () => {
+    const publicationRow = { github_comment_id: 55, status: 'published' };
+    const claimRuns = [];
+    const db = {
+      prepare: vi.fn((sql) => ({
+        bind: () => ({
+          run: vi.fn().mockImplementation(async () => {
+            // First INSERT (claim) loses the lease; the re-claim after the
+            // poll wins. Finalize (UPDATE) always succeeds.
+            if (/INSERT/.test(sql)) {
+              claimRuns.push(1);
+              return { meta: { changes: claimRuns.length > 1 ? 1 : 0 } };
+            }
+            return { meta: { changes: 1 } };
+          }),
+          first: vi.fn().mockResolvedValue(publicationRow),
+        }),
+      })),
+    };
+    const github = {
+      getIssueComments: vi.fn().mockResolvedValue([
+        { id: 55, body: '<!-- marker -->', user: { login: 'bot[bot]', type: 'Bot' } },
+      ]),
+      updateComment: vi.fn().mockImplementation((_o, _r, commentId) => Promise.resolve({ id: commentId })),
+    };
+
+    const out = await upsertComment({
+      github,
+      db,
+      owner: 'o',
+      repo: 'r',
+      issueNumber: 7,
+      repositoryId: 10,
+      headSha: 'abc',
+      commentKind: 'review',
+      marker: '<!-- marker -->',
+      body: 'body',
+      jobId: 'job-2',
+      waitMs: 200,
+      pollMs: 10,
+    });
+
+    expect(out).toMatchObject({ id: 55, created: false, skipped: false });
+    expect(out.attempts).toBeGreaterThanOrEqual(2);
+    expect(github.updateComment).toHaveBeenCalledWith('o', 'r', 55, 'body');
   });
 
   it('posts a fresh comment when the marker comment id differs from the publication record', async () => {

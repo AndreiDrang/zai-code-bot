@@ -491,6 +491,29 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
   });
 
+  it('warns and still succeeds when the publication lease is lost to a concurrent job', async () => {
+    mocks.chat.mockResolvedValue({
+      success: true,
+      data: { message: { role: 'assistant', content: '## Summary\nGood.' } },
+    });
+    mocks.upsertComment.mockResolvedValue({ id: 42, created: false, skipped: true, attempts: 4 });
+
+    const res = await handleReviewCommand({
+      github: makeGithub(),
+      env: makeEnv(),
+      db: {},
+      job,
+      runId: 'run-1',
+    });
+
+    expect(res.status).toBe('reviewed');
+    expect(res.publicationSkipped).toBe(true);
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'Comment publication skipped: lease held by concurrent job',
+      expect.objectContaining({ command: 'review', jobId: 'job-1', keptCommentId: 42, attempts: 4 }),
+    );
+  });
+
   it('lets the model inspect an individual patch before it writes the review', async () => {
     mocks.chat
       .mockResolvedValueOnce({

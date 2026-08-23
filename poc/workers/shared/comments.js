@@ -1,6 +1,16 @@
 import { changedRows, first, prepare, run } from './storage/database.js';
 
 const PUBLICATION_LEASE_SECONDS = 10 * 60;
+// A concurrent job holding the publication lease spans only its GitHub write +
+// finalize (seconds). The loser polls for the row to leave `publishing` within
+// this budget; only a winner that CRASHED mid-publish (lease held for its full
+// expiry) makes the loser give up and report `skipped`.
+const PUBLICATION_WAIT_MS = 15_000;
+const PUBLICATION_POLL_MS = 5_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function leaseExpiry(now, seconds = PUBLICATION_LEASE_SECONDS) {
   return new Date(new Date(now).getTime() + seconds * 1000).toISOString();
@@ -83,7 +93,17 @@ export async function finalizePublication(
   return Number(result?.meta?.changes ?? result?.changes ?? 0) > 0;
 }
 
-/** Finds the bot-owned live comment and updates it, or creates it exactly once. */
+/**
+ * Finds the bot-owned live comment and updates it, or creates it exactly once.
+ *
+ * Lease contention is expected to be short: the winner holds it only across
+ * its GitHub write + finalize. The loser therefore polls until the row leaves
+ * `publishing` and re-claims — bounded by `waitMs` so a crashed winner (lease
+ * held for its full expiry) can only delay, never wedge, this job. On budget
+ * exhaustion the result stays un-posted but preserved (R2 `{command}.md`) and
+ * `skipped: true` is returned for the caller to surface. `waitMs`/`pollMs`
+ * are injectable so tests can shrink the budget.
+ */
 export async function upsertComment({
   github,
   db,
@@ -98,18 +118,31 @@ export async function upsertComment({
   bodyArtifactId = null,
   jobId,
   botLogin = null,
+  waitMs = PUBLICATION_WAIT_MS,
+  pollMs = PUBLICATION_POLL_MS,
 }) {
   if (!jobId) throw new TypeError('A job ID is required for comment publication');
-  const publication = await claimPublication(db, {
-    repositoryId,
-    prNumber: issueNumber,
-    commentKind,
-    marker,
-    jobId,
-  });
+
+  const deadline = Date.now() + Math.max(0, waitMs);
+  let attempts = 0;
+  let publication = null;
+  for (;;) {
+    attempts += 1;
+    publication = await claimPublication(db, {
+      repositoryId,
+      prNumber: issueNumber,
+      commentKind,
+      marker,
+      jobId,
+    });
+    if (publication) break;
+    if (Date.now() >= deadline) break;
+    await sleep(Math.max(1, Math.min(pollMs, deadline - Date.now())));
+  }
+
   if (!publication) {
     const existing = await findPublication(db, repositoryId, issueNumber, commentKind);
-    return { id: existing?.github_comment_id || null, created: false, skipped: true };
+    return { id: existing?.github_comment_id ?? null, created: false, skipped: true, attempts };
   }
 
   const markerComment = await findMarkerComment(
@@ -140,7 +173,7 @@ export async function upsertComment({
     bodyArtifactId,
   });
   if (!finalized) throw new Error('Comment publication lease was lost');
-  return { id: comment.id, created: !existing };
+  return { id: comment.id, created: !existing, skipped: false, attempts };
 }
 
 async function findMarkerComment(
