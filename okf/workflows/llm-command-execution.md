@@ -81,12 +81,11 @@ LLM ↔ tool protocol and enforces its runtime budgets.
   bounded background (`summary` ≤ ~8% of the context budget).
 - Review permits up to 50 context-tool calls (at most seven per agent turn)
   and 256 KiB of accepted tool results over a five-minute deadline. At less
-  than 40 seconds remaining it disables Context Tools and asks the model to
-  complete the analysis from available evidence. If a tool-call limit is
-  reached before final Markdown is produced, the
-  marker-owned review comment is created or updated with the limit and the
-  number of context requests completed; the job then fails without exposing
-  provider detail.
+  than 40 seconds remaining, or after either retrieval budget is exhausted,
+  it disables Context Tools and asks the model to complete the analysis from
+  available evidence. A completed review records that finalization reason in
+  server-generated metadata; it does not fail merely because its allowed
+  retrieval budget was used.
 
 ## describe — agent mode
 

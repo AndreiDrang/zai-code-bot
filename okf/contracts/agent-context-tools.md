@@ -91,9 +91,10 @@ tool messages the model can react to.
   bulk changes. It begins with the highest-priority 3–5 files and reassesses after
   each batch rather than reading every changed file.
 
-The review agent has a 40-second finalization reserve within its five-minute
-wall-clock budget. Once this reserve starts, the runner withholds all tool
-definitions and resolves any pending calls with `FINALIZATION_REQUIRED`; the
+The review agent has a 50-call Context Tool budget, a 256 KiB accepted-result
+budget, and a 40-second finalization reserve within its five-minute wall-clock
+budget. Once any of these retrieval budgets is exhausted, the runner withholds
+all tool definitions and resolves pending calls with a safe tool result; the
 model must finish from already retrieved evidence. Successful, accepted
 `get_diff` paths are retained as review provenance and rendered in a
 server-generated metadata block at the end of the review.

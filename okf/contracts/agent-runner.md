@@ -1,7 +1,7 @@
 ---
 type: Contract
 title: Agent tool-calling loop
-description: The provider-neutral agent runner that drives Z.ai chat completions in a bounded tool-calling loop — iteration, call, cumulative retrieval, and absolute-duration budgets with protocol validation, safe tool errors, and a time-reserve finalization mode.
+description: The provider-neutral agent runner that drives Z.ai chat completions in a bounded tool-calling loop — call, cumulative retrieval, and absolute-duration budgets with protocol validation, safe tool errors, and graceful no-tools finalization.
 source_paths:
   - poc/workers/shared/agent/runner.js
   - poc/workers/shared/agent/limits.js
@@ -41,10 +41,15 @@ Each iteration:
    JSON-string arguments) — protocol violations fail with
    `AGENT_PROTOCOL_ERROR` rather than crash.
 4. No tool calls → **completed**, the assistant text is the result.
-5. Execute all calls of the iteration **in parallel**; each result is a
+5. Execute every call that fits the total and per-turn call budgets **in
+   parallel**; each result is a
    `tool` message `{ ok: true, data }` or `{ ok: false, error: { code, message } }`
    — tool errors become information the model can react to, never a thrown
    exception that kills the run.
+   Calls beyond the available budget receive a safe tool error, while calls
+   that still fit are executed. The total call budget, accepted-result budget,
+   and time reserve then enter finalization mode: no more tool definitions are
+   sent and the model must produce final Markdown from the available evidence.
    An identical tool name and argument object is retrieved only once per run.
    Later requests receive a safe `DUPLICATE_TOOL_REQUEST` response that directs
    the model to the earlier result already in the conversation.
@@ -58,7 +63,6 @@ Default limits (`shared/agent/limits.js`, overridable per run):
 
 | Limit | Default |
 | --- | --- |
-| `maxIterations` | 10 |
 | `maxToolCalls` (total) | 30 |
 | `maxToolCallsPerIteration` | 10 |
 | `maxRetrievedBytes` (accepted UTF-8 tool-result data) | 524288 (512 KiB) |
@@ -66,29 +70,31 @@ Default limits (`shared/agent/limits.js`, overridable per run):
 | `maxLlmRequestDurationMs` | 30000 |
 | `finalizationReserveMs` | 40000 |
 
-Exceeding a budget returns a typed terminal status (`max_iterations`,
-`max_tool_calls`, `max_retrieved_bytes`, `timed_out`) — distinct from `failed`, which is reserved
-for provider/protocol errors.
+`iterations` is telemetry, not a budget: a model that requests one tool at a
+time may use up to the total call budget. When the call or accepted-result
+budget is reached, the runner enters finalization mode rather than returning a
+terminal limit status. `timed_out` remains terminal; `failed` is reserved for
+provider, protocol, or a model that requests tools after a no-tools
+finalization request.
 
 When a tool result would exceed `maxRetrievedBytes`, the current turn receives
-one safe `TOOL_BUDGET_EXCEEDED` tool response so the model can finish with its
-existing evidence. A subsequent tool-requesting turn terminates as
-`max_retrieved_bytes`; this prevents an unbounded error loop.
+one safe `TOOL_BUDGET_EXCEEDED` tool response and the runner immediately
+requests final Markdown without tools.
 
 `/zai review` uses a stricter but larger workflow-specific profile:
-8 iterations, 50 total calls, 7 calls per iteration, 256 KiB accepted
-tool-result data, a five-minute absolute deadline, and a 40-second
+50 total calls, 7 calls per iteration, 256 KiB accepted tool-result data, a
+five-minute absolute deadline, and a 40-second
 finalization reserve. The reserve keeps enough wall time for a final
 no-tools analysis and result publication rather than spending the end of a run
 on additional retrieval.
 When more than one limit is encountered, the result retains every applicable
-`limitReasons` value so the GitHub failure notice can explain all safe,
-actionable causes.
+`limitReasons` value for server-generated review metadata and operational
+telemetry.
 
 # Run result
 
-`{ status, messages, usage, iterations, toolCalls, successfulToolCalls,
-failedToolCalls, duplicateToolCalls, executedToolCalls, reviewedDiffPaths,
+`{ status, messages, usage, iterations, requestedToolCalls, toolCalls,
+successfulToolCalls, failedToolCalls, duplicateToolCalls, executedToolCalls, reviewedDiffPaths,
 finalizedWithAvailableEvidence, finalizationReason,
 finalizationStartedAtRemainingMs, llmRequests, llmAttempts, llmTimeouts,
 retrievedBytes, retrievalBudgetExceeded, limitReasons, conversationBytes,

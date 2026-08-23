@@ -263,32 +263,40 @@ describe('AgentRunner', () => {
     expect(toolResult.error).toMatchObject({ code: 'UNKNOWN_TOOL' });
   });
 
-  it('stops before executing calls over the global safety limit', async () => {
-    const { runner, toolRegistry } = createTestRunner({
-      replies: [assistant(null, [toolCall('a', 'get_diff'), toolCall('b', 'get_diff')])],
+  it('executes calls that fit the global safety limit and finalizes with the rest', async () => {
+    const { runner, llmClient, toolRegistry } = createTestRunner({
+      replies: [
+        assistant(null, [toolCall('a', 'get_diff'), toolCall('b', 'get_diff')]),
+        assistant('done'),
+      ],
       limits: { maxToolCalls: 1 },
     });
 
     await expect(
       runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
-    ).resolves.toMatchObject({ status: 'max_tool_calls', toolCalls: 0 });
-    expect(toolRegistry.execute).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      status: 'completed',
+      toolCalls: 1,
+      requestedToolCalls: 2,
+      finalizedWithAvailableEvidence: true,
+      finalizationReason: 'tool_call_budget',
+    });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(1);
+    const rejectedResult = JSON.parse(llmClient.chat.mock.calls[1][0].messages[2].content);
+    expect(rejectedResult).toMatchObject({
+      ok: false,
+      error: { code: 'TOTAL_TOOL_CALL_LIMIT_REACHED' },
+    });
+    expect(llmClient.chat.mock.calls[1][0].tools).toEqual([]);
   });
 
-  it('allows 50 requests across configured iterations before enforcing the tool-call limit', async () => {
-    const calls = Array.from({ length: 51 }, (_, index) =>
+  it('allows 50 single-call turns before finalizing without tools', async () => {
+    const calls = Array.from({ length: 50 }, (_, index) =>
       toolCall(`call-${index}`, 'get_diff', `{"path":"src/file-${index}.js"}`),
     );
-    const replies = [];
-    for (let offset = 0; offset < 49; offset += 7) {
-      replies.push(assistant(null, calls.slice(offset, offset + 7)));
-    }
-    replies.push(assistant(null, [calls[49]]));
-    replies.push(assistant(null, [calls[50]]));
-    const { runner, toolRegistry } = createTestRunner({
-      replies,
+    const { runner, llmClient, toolRegistry } = createTestRunner({
+      replies: [...calls.map((call) => assistant(null, [call])), assistant('done')],
       limits: {
-        maxIterations: 8,
         maxToolCalls: 50,
         maxToolCallsPerIteration: 7,
       },
@@ -297,12 +305,16 @@ describe('AgentRunner', () => {
     await expect(
       runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
     ).resolves.toMatchObject({
-      status: 'max_tool_calls',
-      iterations: 8,
+      status: 'completed',
+      iterations: 50,
       toolCalls: 50,
+      requestedToolCalls: 50,
+      finalizedWithAvailableEvidence: true,
+      finalizationReason: 'tool_call_budget',
       limitReasons: ['max_tool_calls'],
     });
     expect(toolRegistry.execute).toHaveBeenCalledTimes(50);
+    expect(llmClient.chat.mock.calls[50][0].tools).toEqual([]);
   });
 
   it('skips an identical tool request without repeating retrieval or context data', async () => {
@@ -328,18 +340,48 @@ describe('AgentRunner', () => {
     });
   });
 
-  it('stops after the configured iteration limit', async () => {
-    const { runner } = createTestRunner({
+  it('does not treat iterations as an execution budget', async () => {
+    const { runner, toolRegistry } = createTestRunner({
       replies: [
-        assistant(null, [toolCall('call-1', 'get_diff')]),
-        assistant(null, [toolCall('call-2', 'get_diff')]),
+        assistant(null, [toolCall('call-1', 'get_diff', '{"path":"src/a.js"}')]),
+        assistant(null, [toolCall('call-2', 'get_diff', '{"path":"src/b.js"}')]),
+        assistant('done'),
       ],
-      limits: { maxIterations: 1 },
+      limits: { maxToolCalls: 3 },
     });
 
     await expect(
       runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
-    ).resolves.toMatchObject({ status: 'max_iterations', iterations: 1, toolCalls: 1 });
+    ).resolves.toMatchObject({ status: 'completed', iterations: 2, toolCalls: 2 });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('executes a ninth retrieval turn when eight earlier turns used only 23 calls', async () => {
+    const calls = Array.from({ length: 24 }, (_, index) =>
+      toolCall(`call-${index}`, 'get_diff', `{"path":"src/file-${index}.js"}`),
+    );
+    const replies = [
+      ...Array.from({ length: 7 }, (_, index) =>
+        assistant(null, calls.slice(index * 3, index * 3 + 3)),
+      ),
+      assistant(null, calls.slice(21, 23)),
+      assistant(null, [calls[23]]),
+      assistant('done'),
+    ];
+    const { runner, toolRegistry } = createTestRunner({
+      replies,
+      limits: { maxToolCalls: 50, maxToolCallsPerIteration: 7 },
+    });
+
+    await expect(
+      runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      iterations: 9,
+      toolCalls: 24,
+      requestedToolCalls: 24,
+    });
+    expect(toolRegistry.execute).toHaveBeenCalledTimes(24);
   });
 
   it('returns one bounded tool result to the model before requiring a final answer', async () => {
@@ -364,12 +406,9 @@ describe('AgentRunner', () => {
     });
   });
 
-  it('stops instead of executing another retrieval after the result budget is exhausted', async () => {
-    const { runner, toolRegistry } = createTestRunner({
-      replies: [
-        assistant(null, [toolCall('call-1', 'get_file')]),
-        assistant(null, [toolCall('call-2', 'get_file')]),
-      ],
+  it('finalizes instead of executing another retrieval after the result budget is exhausted', async () => {
+    const { runner, llmClient, toolRegistry } = createTestRunner({
+      replies: [assistant(null, [toolCall('call-1', 'get_file')]), assistant('done')],
       execute: vi.fn().mockResolvedValue({ content: 'too much context' }),
       limits: { maxRetrievedBytes: 1 },
     });
@@ -377,19 +416,19 @@ describe('AgentRunner', () => {
     await expect(
       runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
     ).resolves.toMatchObject({
-      status: 'max_retrieved_bytes',
+      status: 'completed',
       toolCalls: 1,
       retrievalBudgetExceeded: true,
+      finalizedWithAvailableEvidence: true,
+      finalizationReason: 'retrieval_budget',
     });
     expect(toolRegistry.execute).toHaveBeenCalledTimes(1);
+    expect(llmClient.chat.mock.calls[1][0].tools).toEqual([]);
   });
 
   it('preserves both retrieval and tool-call limit reasons when both are reached', async () => {
     const { runner, toolRegistry } = createTestRunner({
-      replies: [
-        assistant(null, [toolCall('call-1', 'get_file')]),
-        assistant(null, [toolCall('call-2', 'get_file'), toolCall('call-3', 'get_file')]),
-      ],
+      replies: [assistant(null, [toolCall('call-1', 'get_file')]), assistant('done')],
       execute: vi.fn().mockResolvedValue({ content: 'too much context' }),
       limits: { maxToolCalls: 1, maxRetrievedBytes: 1 },
     });
@@ -397,7 +436,7 @@ describe('AgentRunner', () => {
     await expect(
       runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
     ).resolves.toMatchObject({
-      status: 'max_tool_calls',
+      status: 'completed',
       toolCalls: 1,
       retrievalBudgetExceeded: true,
       limitReasons: expect.arrayContaining(['max_tool_calls', 'max_retrieved_bytes']),
@@ -418,6 +457,23 @@ describe('AgentRunner', () => {
       status: 'failed',
       error: { category: 'protocol', code: 'AGENT_PROTOCOL_ERROR' },
     });
+  });
+
+  it('fails safely when the no-tools finalization request asks for another tool', async () => {
+    const { runner, toolRegistry } = createTestRunner({
+      replies: [assistant(null, [toolCall('call-1', 'get_diff')])],
+      limits: { maxRunDurationMs: 39999, finalizationReserveMs: 40000 },
+      now: () => 0,
+    });
+
+    await expect(
+      runner.run({ apiKey: 'key', model: 'model', messages: [], tools: [], runId: 'run-1' }),
+    ).resolves.toMatchObject({
+      status: 'failed',
+      error: { category: 'protocol', code: 'AGENT_FINALIZATION_REQUIRED' },
+      requestedToolCalls: 1,
+    });
+    expect(toolRegistry.execute).not.toHaveBeenCalled();
   });
 
   it('returns transport failures and a timed out run without invoking tools', async () => {
@@ -460,12 +516,12 @@ describe('AgentRunner', () => {
 
 describe('Agent limits', () => {
   it('retains defaults while accepting positive numeric overrides only', () => {
-    expect(resolveAgentLimits({ maxIterations: 2, maxToolCalls: 0 })).toMatchObject({
-      maxIterations: 2,
+    expect(resolveAgentLimits({ unknownLimit: 2, maxToolCalls: 0 })).toMatchObject({
       maxToolCalls: 30,
       maxRetrievedBytes: 512 * 1024,
       maxRunDurationMs: 5 * 60 * 1000,
       finalizationReserveMs: 40000,
     });
+    expect(resolveAgentLimits({ unknownLimit: 2 })).not.toHaveProperty('unknownLimit');
   });
 });

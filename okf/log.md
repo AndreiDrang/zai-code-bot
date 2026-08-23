@@ -5,10 +5,13 @@
 - **Update**: `/zai review` now ranks security-sensitive request boundaries,
   business logic, stateful infrastructure, deployment configuration, and
   behavior tests before lower-signal generated, lock, fixture, documentation,
-  or mechanical files. Its agent profile permits 50 calls across eight turns
-  and 256 KiB of accepted tool-result data. Repeated identical tool requests
-  are skipped, and a terminal GitHub notice can report both retrieval-data and
-  tool-call limits without exposing provider internals.
+  or mechanical files. Its agent profile permits 50 calls and 256 KiB of
+  accepted tool-result data. Repeated identical tool requests are skipped.
+- **Update**: Retrieval budgets now trigger a no-tools finalization request
+  rather than a terminal job failure. `iterations` is telemetry rather than a
+  limit, so a review may use all 50 allowed Context Tool calls even when the
+  model requests them one at a time. Review metadata records the finalization
+  reason and the count of requested versus admitted calls.
 - **Update**: Increased the review agent's absolute wall-clock deadline from
   two to five minutes while retaining the 30-second per-request Z.ai timeout.
   A 40-second finalization reserve disables Context Tools, resolves pending

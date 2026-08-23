@@ -20,6 +20,7 @@ export function createAgentRunner({
     const deadlineAt = startedAt + resolvedLimits.maxRunDurationMs;
     let iterations = 0;
     let toolCalls = 0;
+    let requestedToolCalls = 0;
     let usage = null;
     let llmRequests = 0;
     let llmAttempts = 0;
@@ -43,7 +44,9 @@ export function createAgentRunner({
       if (remainingMs <= 0) {
         return buildResult('timed_out');
       }
-      if (remainingMs < resolvedLimits.finalizationReserveMs) enterFinalization(remainingMs);
+      if (remainingMs < resolvedLimits.finalizationReserveMs) {
+        enterFinalization('time_reserve', remainingMs);
+      }
 
       let response;
       const requestNumber = ++llmRequests;
@@ -97,45 +100,54 @@ export function createAgentRunner({
         });
       }
       const calls = assistant.tool_calls || [];
+      requestedToolCalls += calls.length;
 
       if (!calls.length) {
         conversation.push(assistant);
         return buildResult('completed', { response: assistant });
       }
 
-      if (
-        finalizedWithAvailableEvidence ||
-        deadlineAt - now() < resolvedLimits.finalizationReserveMs
-      ) {
-        enterFinalization(Math.max(0, deadlineAt - now()));
-        conversation.push(assistant, ...calls.map((call) => makeFinalizationToolResult(call.id)));
+      if (finalizedWithAvailableEvidence) {
+        conversation.push(
+          assistant,
+          ...calls.map((call) => makeFinalizationToolResult(call.id, finalizationReason)),
+        );
+        return buildResult('failed', {
+          error: { category: 'protocol', code: 'AGENT_FINALIZATION_REQUIRED' },
+        });
+      }
+      if (deadlineAt - now() < resolvedLimits.finalizationReserveMs) {
+        conversation.push(
+          assistant,
+          ...calls.map((call) => makeFinalizationToolResult(call.id, 'time_reserve')),
+        );
+        enterFinalization('time_reserve', Math.max(0, deadlineAt - now()));
         continue;
       }
-      if (calls.length > resolvedLimits.maxToolCallsPerIteration) {
-        return buildResult('max_tool_calls');
-      }
-      if (toolCalls + calls.length > resolvedLimits.maxToolCalls) {
-        return buildResult('max_tool_calls');
-      }
-      if (retrievalBudgetExceeded) {
-        return buildResult('max_retrieved_bytes');
-      }
-      if (iterations >= resolvedLimits.maxIterations) {
-        return buildResult('max_iterations');
-      }
+
+      const allowedToolCalls = Math.min(
+        calls.length,
+        resolvedLimits.maxToolCallsPerIteration,
+        Math.max(0, resolvedLimits.maxToolCalls - toolCalls),
+      );
+      const executableCalls = calls.slice(0, allowedToolCalls);
+      const perTurnToolBudgetExceeded = calls.length > resolvedLimits.maxToolCallsPerIteration;
+      const totalToolBudgetExceeded = toolCalls + calls.length > resolvedLimits.maxToolCalls;
 
       iterations += 1;
-      toolCalls += calls.length;
+      toolCalls += executableCalls.length;
       conversation.push(assistant);
 
-      logger?.info('Agent iteration executing tools', {
-        runId,
-        iteration: iterations,
-        toolCalls: calls.length,
-        tools: calls.map((call) => call.function.name),
-      });
+      if (executableCalls.length) {
+        logger?.info('Agent iteration executing tools', {
+          runId,
+          iteration: iterations,
+          toolCalls: executableCalls.length,
+          tools: executableCalls.map((call) => call.function.name),
+        });
+      }
       const toolResults = await Promise.all(
-        calls.map((call) => {
+        executableCalls.map((call) => {
           const toolCallKey = createToolCallKey(call);
           if (requestedToolCallKeys.has(toolCallKey)) {
             duplicateToolCalls += 1;
@@ -164,7 +176,23 @@ export function createAgentRunner({
         }),
       );
       const toolMessages = [];
-      for (const toolResult of toolResults) {
+      for (const [index, call] of calls.entries()) {
+        if (index >= executableCalls.length) {
+          toolMessages.push(
+            makeToolBudgetResult(
+              call.id,
+              totalToolBudgetExceeded
+                ? 'TOTAL_TOOL_CALL_LIMIT_REACHED'
+                : 'TURN_TOOL_CALL_LIMIT_REACHED',
+              totalToolBudgetExceeded
+                ? 'The total context-tool call budget has been reached. Complete the review using the evidence already retrieved.'
+                : 'Only the allowed context-tool calls for this turn were executed. You may request additional context in a later turn.',
+            ),
+          );
+          continue;
+        }
+
+        const toolResult = toolResults[index];
         if (
           toolResult.success &&
           retrievedBytes + toolResult.resultBytes > resolvedLimits.maxRetrievedBytes
@@ -195,6 +223,20 @@ export function createAgentRunner({
         toolMessages.push(toolResult.message);
       }
       conversation.push(...toolMessages);
+
+      if (retrievalBudgetExceeded) {
+        limitReasons.add('max_retrieved_bytes');
+      }
+      if (toolCalls >= resolvedLimits.maxToolCalls) {
+        limitReasons.add('max_tool_calls');
+      }
+      if (retrievalBudgetExceeded) {
+        enterFinalization('retrieval_budget', Math.max(0, deadlineAt - now()));
+      } else if (toolCalls >= resolvedLimits.maxToolCalls) {
+        enterFinalization('tool_call_budget', Math.max(0, deadlineAt - now()));
+      } else if (perTurnToolBudgetExceeded) {
+        limitReasons.add('max_tool_calls_per_iteration');
+      }
     }
 
     function buildResult(status, extra = {}) {
@@ -206,6 +248,7 @@ export function createAgentRunner({
         usage,
         iterations,
         toolCalls,
+        requestedToolCalls,
         usedTools: toolCalls > 0,
         tools: [...toolNames],
         successfulToolCalls,
@@ -231,6 +274,7 @@ export function createAgentRunner({
         status,
         iterations,
         toolCalls,
+        requestedToolCalls,
         usedTools: result.usedTools,
         tools: result.tools,
         successfulToolCalls,
@@ -248,7 +292,6 @@ export function createAgentRunner({
         retrievedBytes,
         retrievalBudgetExceeded,
         limitReasons: result.limitReasons,
-        maxIterations: resolvedLimits.maxIterations,
         maxToolCalls: resolvedLimits.maxToolCalls,
         maxToolCallsPerIteration: resolvedLimits.maxToolCallsPerIteration,
         maxRetrievedBytes: resolvedLimits.maxRetrievedBytes,
@@ -258,17 +301,14 @@ export function createAgentRunner({
       return result;
     }
 
-    function enterFinalization(remainingMs) {
+    function enterFinalization(reason, remainingMs) {
       if (finalizedWithAvailableEvidence) return;
       finalizedWithAvailableEvidence = true;
-      finalizationReason = 'time_reserve';
+      finalizationReason = reason;
       finalizationStartedAtRemainingMs = remainingMs;
       conversation.push({
         role: 'system',
-        content:
-          'The investigation time reserve has started. Do not request or call any more tools. ' +
-          'Complete the review now using only the evidence already in this conversation. ' +
-          'Do not infer facts about files or diffs that were not retrieved.',
+        content: makeFinalizationInstruction(reason),
       });
       logger?.info('Agent finalization started', {
         runId,
@@ -394,15 +434,39 @@ function makeDuplicateToolResult(toolCallId) {
   };
 }
 
-function makeFinalizationToolResult(toolCallId) {
+function makeToolBudgetResult(toolCallId, code, message) {
+  return makeToolMessage(toolCallId, {
+    ok: false,
+    error: { code, message },
+  });
+}
+
+function makeFinalizationToolResult(toolCallId, reason) {
   return makeToolMessage(toolCallId, {
     ok: false,
     error: {
       code: 'FINALIZATION_REQUIRED',
-      message:
-        'The investigation time reserve has started. No more context can be retrieved; finalize using the evidence already available.',
+      message: `${finalizationReasonLabel(reason)} No more context can be retrieved; finalize using the evidence already available.`,
     },
   });
+}
+
+function makeFinalizationInstruction(reason) {
+  return (
+    `${finalizationReasonLabel(reason)} Do not request or call any more tools. ` +
+    'Complete the review now using only the evidence already in this conversation. ' +
+    'Do not infer facts about files or diffs that were not retrieved.'
+  );
+}
+
+function finalizationReasonLabel(reason) {
+  if (reason === 'tool_call_budget') {
+    return 'The total context-tool call budget has been reached.';
+  }
+  if (reason === 'retrieval_budget') {
+    return 'The context retrieval budget has been reached.';
+  }
+  return 'The investigation time reserve has started.';
 }
 
 function createToolCallKey(call) {

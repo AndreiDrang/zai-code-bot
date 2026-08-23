@@ -380,7 +380,7 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(mocks.upsertComment).not.toHaveBeenCalled();
   });
 
-  it('updates the review comment with tool-limit progress when the agent reaches its limit', async () => {
+  it('publishes a review after finalizing at the Context Tool call budget', async () => {
     const calls = Array.from({ length: 50 }, (_, index) => ({
       id: `call-${index}`,
       type: 'function',
@@ -400,9 +400,7 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     }
     mocks.chat.mockResolvedValueOnce({
       success: true,
-      data: {
-        message: { role: 'assistant', content: null, tool_calls: [calls[0]] },
-      },
+      data: { message: { role: 'assistant', content: '## Summary\nCompleted.' } },
     });
 
     await expect(
@@ -413,11 +411,16 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
         job,
         runId: 'run-1',
       }),
-    ).rejects.toMatchObject({ code: 'llm_max_tool_calls', retryable: false });
+    ).resolves.toMatchObject({
+      status: 'reviewed',
+      agentToolCalls: 50,
+      agentFinalizedWithAvailableEvidence: true,
+      agentFinalizationReason: 'tool_call_budget',
+    });
 
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
     expect(mocks.upsertComment.mock.calls[0][0].body).toContain(
-      'reached its 50-call context-retrieval limit after 50 context requests',
+      'the Context Tool call budget was reached; this review was completed',
     );
     expect(mocks.upsertComment.mock.calls[0][0]).toMatchObject({
       commentKind: 'review',

@@ -242,6 +242,7 @@ export async function runLlmCommand(
     agentUsedTools: result.agent?.usedTools ?? false,
     agentIterations: result.agent?.iterations ?? null,
     agentToolCalls: result.agent?.toolCalls ?? null,
+    agentRequestedToolCalls: result.agent?.requestedToolCalls ?? null,
     agentTools: result.agent?.tools ?? [],
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
@@ -270,6 +271,7 @@ export async function runLlmCommand(
     agentUsedTools: result.agent?.usedTools ?? false,
     agentIterations: result.agent?.iterations ?? null,
     agentToolCalls: result.agent?.toolCalls ?? null,
+    agentRequestedToolCalls: result.agent?.requestedToolCalls ?? null,
     agentTools: result.agent?.tools ?? [],
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
@@ -391,20 +393,6 @@ export function buildFailureNotice({ command, category, error, agent, agentLimit
     );
   }
 
-  if (category === 'max_iterations') {
-    const limit = Number(agentLimits?.maxIterations);
-    const toolCalls = Number(agent?.toolCalls);
-    const limitText = Number.isFinite(limit) && limit > 0 ? `${limit}-turn` : 'investigation';
-    const progress =
-      Number.isFinite(toolCalls) && toolCalls > 0
-        ? ` after ${toolCalls} context request${toolCalls === 1 ? '' : 's'}`
-        : '';
-    return (
-      `The ${command} reached its ${limitText} investigation limit${progress} before producing ` +
-      `a complete result. Please retry with \`/zai ${command}\`.`
-    );
-  }
-
   const attempts = formatAttemptCount(error?.attempts);
   const notices = {
     timed_out: `The ${command} reached its execution-time limit before Z.ai produced a complete result.`,
@@ -438,6 +426,7 @@ function formatByteLimit(value) {
 
 function appendReviewMetadata(markdown, agent = {}) {
   const toolCalls = positiveInteger(agent.toolCalls);
+  const requestedToolCalls = positiveInteger(agent.requestedToolCalls);
   const successfulToolCalls = positiveInteger(agent.successfulToolCalls);
   const failedToolCalls = positiveInteger(agent.failedToolCalls);
   const duplicateToolCalls = positiveInteger(agent.duplicateToolCalls);
@@ -452,16 +441,25 @@ function appendReviewMetadata(markdown, agent = {}) {
     '### Review metadata',
     '',
     `- Context Tool calls executed: ${executedToolCalls} (${successfulToolCalls} successful, ${failedToolCalls} failed).`,
-    `- Context Tool requests: ${toolCalls}${duplicateToolCalls ? ` (${duplicateToolCalls} duplicate request${duplicateToolCalls === 1 ? '' : 's'} skipped)` : ''}.`,
+    `- Context Tool requests: ${requestedToolCalls}; admitted: ${toolCalls}${duplicateToolCalls ? ` (${duplicateToolCalls} duplicate request${duplicateToolCalls === 1 ? '' : 's'} skipped)` : ''}.`,
     reviewedDiffPaths.length
       ? `- Per-file diffs reviewed: ${reviewedDiffPaths.map(formatMarkdownCode).join(', ')}.`
       : '- Per-file diffs reviewed: none. Findings are based on the initial PR context and any non-diff context retrieved during this run.',
     `- Retrieved context: ${retrieved}.`,
-    agent.finalizedWithAvailableEvidence
-      ? '- Finalization: the 40-second time reserve started; this review was completed using the evidence retrieved above.'
-      : '- Finalization: normal completion.',
+    finalizationMetadataLine(agent),
   ];
   return lines.join('\n');
+}
+
+function finalizationMetadataLine(agent) {
+  if (!agent.finalizedWithAvailableEvidence) return '- Finalization: normal completion.';
+  if (agent.finalizationReason === 'tool_call_budget') {
+    return '- Finalization: the Context Tool call budget was reached; this review was completed using the evidence retrieved above.';
+  }
+  if (agent.finalizationReason === 'retrieval_budget') {
+    return '- Finalization: the context-data budget was reached; this review was completed using the evidence retrieved above.';
+  }
+  return '- Finalization: the 40-second time reserve started; this review was completed using the evidence retrieved above.';
 }
 
 function positiveInteger(value) {
