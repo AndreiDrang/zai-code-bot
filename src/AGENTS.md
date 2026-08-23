@@ -34,8 +34,9 @@ src/
   `Response`, `Headers` only. No `node:fs`, `node:path`, or Node-only APIs.
 - Changes to `shared/` affect both deployed workers; both dry-runs must pass.
 - Tests import modules directly (e.g. `../shared/crypto.js`) and run under
-  `vitest` with miniflare (see `vitest.config.js`); `TEST_ENV` can flip to
-  `node` if miniflare breaks on the current Node version.
+  `vitest` in the plain `node` environment (see `vitest.config.js`) — all
+  bindings are mocked, and `shared/` only uses Web APIs that Node 20+
+  provides natively.
 - Coverage applies to `src/shared/**` and all of `src/zai-main-worker/src/**`
   (entrypoint included — `index.js` is tested via
   `src/tests/index-fetch.test.js` with mocked bindings; `job-enqueuer.js`
@@ -54,9 +55,9 @@ npm run build                # both deploy dry-runs in one command
 
 Deploy, dev, and dry-run scripts: `deploy:main[:dry-run]`, `deploy:heavy[:dry-run]`,
 `dev:main`, `dev:heavy`, `tail:main`, `tail:heavy` — all from the repo root.
-The `wrangler` binary is expected on PATH (per the Makefile); CI instead
-installs per-worker dependencies under each worker's `node_modules` before
-the dry-runs.
+`wrangler` is a root devDependency (one version for both workers; current
+wrangler 4.x releases need Node >= 22), so `npm ci` is the only setup step.
+The per-worker `node_modules` installs CI used to perform are gone.
 
 ## Nearby docs
 

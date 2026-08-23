@@ -121,8 +121,9 @@ GitHub webhooks ─▶ zai-main-worker ─{schemaVersion, jobId}─▶ bot-jobs 
 ### Workspace, tests, and CI
 
 - Responsibility: single script source at the root `package.json`
-  (per-Worker manifests serve Wrangler only); vitest + miniflare suites;
-  deploy dry-run and audit gates; prompt codegen.
+  (per-Worker manifests serve Wrangler only; wrangler itself is a root
+  devDependency); vitest suites in the plain node environment (bindings
+  mocked); deploy dry-run and audit gates; prompt codegen.
 - Code locations: `vitest.config.js` (root), `src/tests/`,
   `.github/workflows/ci.yml`, `Makefile`.
 - Entry points: `npm test`; `npm run deploy:*:dry-run`; `make deploy`
@@ -149,7 +150,7 @@ src/                          # all deployed code; npm project lives at the repo
 │  ├─ context-tools/          # LLM tool registry and JSON schemas
 │  ├─ agent/                  # bounded LLM tool-loop runner and limits
 │  └─ prompts/                # system-prompt composition and context policies
-└─ tests/                     # vitest suites, miniflare-backed
+└─ tests/                     # vitest suites (node env, mocked bindings)
 okf/                          # curated knowledge bundle (entry: okf/index.md)
 .agents/skills/               # vendored Cloudflare skills (reference only)
 .github/workflows/ci.yml      # test + coverage, dry-run deploys, npm audit

@@ -21,11 +21,12 @@ help:
 		'make tail-heavy      Tail live logs for the heavy worker' \
 		'make clean           Remove node_modules and wrangler local state'
 
-# Install Node.js dev dependencies (prettier for formatting; wrangler is used from PATH).
+# Install Node.js dev dependencies (prettier, vitest, wrangler — the wrangler
+# binary lands in the root node_modules/.bin so all root npm scripts work).
 dependencies:
 	@npm install
 
-# Run the Vitest unit-test suite with coverage (globals + miniflare env),
+# Run the Vitest unit-test suite with coverage (globals + node env),
 # then print the average value for each coverage column (% Stmts / % Branch /
 # % Funcs / % Lines) from the istanbul JSON the suite emits — overall and per
 # threshold glob, mirroring vitest.config.js.
