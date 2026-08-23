@@ -41,13 +41,12 @@ export default defineConfig({
       // (queue.test.js, handlers-review-llm.test.js), not unit coverage.
       include: ['workers/shared/**/*.js', 'workers/zai-main-worker/src/**/*.js'],
       exclude: ['workers/tests/**', '**/*.d.ts'],
-      // Per-glob thresholds: a uniform 70% floor (branches included) keeps
-      // the gate green while the branch debt in llm-command-runner,
-      // context-service, and zai-client is paid down. Actuals today:
-      // shared ~81% branches / ~97% lines, main-worker ~94% branches / ~99%
-      // lines. Ratchet the floor up as tests land: 85 → 90 → 93.
+      // Per-glob thresholds: a ratcheting floor (branches included) tracks
+      // the test-coverage paydown. Actuals after Phase 1: shared ~86%
+      // branches / ~97% lines, main-worker ~94% branches / ~99% lines.
+      // Ratchet the floor up as tests land: 90 after Phase 3, 93 after Phase 5.
       thresholds: {
-        'workers/shared/**': { lines: 70, functions: 70, branches: 70, statements: 70 },
+        'workers/shared/**': { lines: 70, functions: 70, branches: 85, statements: 70 },
         'workers/zai-main-worker/src/**': {
           lines: 70,
           functions: 70,
