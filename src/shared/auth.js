@@ -1,10 +1,10 @@
 /**
  * Authorization helpers — shared by both workers.
  *
- * POC policy: require repository collaborator status (stricter than the parent
- * GitHub Actions bot, which authorizes any identifiable user). Centralizing it
- * here lets both workers apply the same policy and makes a future policy change
- * a one-file edit.
+ * Authorization policy: require repository collaborator status (stricter than
+ * the earlier GitHub Actions bot, which authorized any identifiable user).
+ * Centralizing it here lets both workers apply the same policy and makes a
+ * future policy change a one-file edit.
  */
 
 import { GitHubClient } from './github.js';

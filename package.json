@@ -1,0 +1,31 @@
+{
+  "name": "zai-code-bot-workers",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Cloudflare Workers for Z.ai Code Bot: webhook ingress and durable review/describe processing",
+  "type": "module",
+  "scripts": {
+    "build": "npm run deploy:heavy:dry-run && npm run deploy:main:dry-run",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "format:js": "prettier --write \"src/**/*.js\"",
+    "format:js:check": "prettier --check \"src/**/*.js\"",
+    "dev:main": "cd src/zai-main-worker && wrangler dev",
+    "dev:heavy": "cd src/zai-heavy-worker && wrangler dev",
+    "deploy:main": "cd src/zai-main-worker && wrangler deploy",
+    "deploy:heavy": "cd src/zai-heavy-worker && wrangler deploy",
+    "deploy:main:dry-run": "cd src/zai-main-worker && wrangler deploy --dry-run",
+    "deploy:heavy:dry-run": "cd src/zai-heavy-worker && wrangler deploy --dry-run",
+    "tail:main": "cd src/zai-main-worker && wrangler tail",
+    "tail:heavy": "cd src/zai-heavy-worker && wrangler tail"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.0",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8",
+    "vitest-environment-miniflare": "^2.14.4"
+  }
+}

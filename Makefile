@@ -1,8 +1,8 @@
 SHELL := /bin/sh
 
 # Worker directories
-WORKER_MAIN  := workers/zai-main-worker
-WORKER_HEAVY := workers/zai-heavy-worker
+WORKER_MAIN  := src/zai-main-worker
+WORKER_HEAVY := src/zai-heavy-worker
 
 .PHONY: help dependencies test test-watch refactor-js format-check deploy-dry-run deploy dev-main dev-heavy tail-main tail-heavy clean
 
@@ -70,4 +70,4 @@ tail-heavy:
 	@cd $(WORKER_HEAVY) && wrangler tail
 
 clean:
-	@rm -rf node_modules workers/zai-main-worker/.wrangler workers/zai-heavy-worker/.wrangler
+	@rm -rf node_modules src/zai-main-worker/.wrangler src/zai-heavy-worker/.wrangler

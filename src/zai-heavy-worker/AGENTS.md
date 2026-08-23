@@ -2,10 +2,10 @@
 
 ## Scope and inheritance
 
-Applies to: `poc/workers/zai-heavy-worker/` and its descendants.
+Applies to: `src/zai-heavy-worker/` and its descendants.
 
-Inherits repository-wide guidance from `../../../AGENTS.md` and workspace
-mechanics from `../../AGENTS.md`. This file defines only local rules for the
+Inherits repository-wide guidance from `../../AGENTS.md` and tree mechanics
+from `../AGENTS.md`. This file defines only local rules for the
 private Queue consumer.
 
 ## What lives here
@@ -44,12 +44,12 @@ wrangler.toml          # Queue consumer config; workers_dev = false
 ## Validation
 
 ```bash
-npm run deploy:heavy:dry-run   # from poc/ — must pass before any deploy
+npm run deploy:heavy:dry-run   # from the repo root — must pass before any deploy
 ```
 
-`workers/shared/` changes additionally require `npm run deploy:main:dry-run`.
+`src/shared/` changes additionally require `npm run deploy:main:dry-run`.
 
 ## Nearby docs
 
 - Command flow, queue contract, bindings → `../../README.md`
-- Queue delivery failures and recovery → `../../../RUNBOOK.md`
+- Queue delivery failures and recovery → `../../RUNBOOK.md`

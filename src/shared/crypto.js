@@ -1,7 +1,7 @@
 /**
  * Web Crypto utilities for Cloudflare Workers.
  *
- * Replaces the POC's Node-style `crypto.createHmac` / `crypto.timingSafeEqual`
+ * Replaces the earlier Node-style `crypto.createHmac` / `crypto.timingSafeEqual`
  * / `Buffer` webhook-signature verification, which required the
  * `nodejs_compat` flag. This implementation uses the standard Web Crypto API
  * (`crypto.subtle`) and runs on Workers with no compatibility flags.

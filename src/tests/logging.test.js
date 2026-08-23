@@ -6,7 +6,7 @@ describe('shared/logging', () => {
   afterEach(() => vi.restoreAllMocks());
 
   describe('createLogger', () => {
-    it('exposes log/info/warn/error/debug that do not throw (POC this-binding bug fixed)', () => {
+    it('exposes log/info/warn/error/debug that do not throw (historical this-binding bug fixed)', () => {
       logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const logger = createLogger({ NODE_ENV: 'development' }, 'ctx');
       expect(() => {

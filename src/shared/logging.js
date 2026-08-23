@@ -1,10 +1,10 @@
 /**
  * Logging utilities for Cloudflare Workers.
  *
- * FIX (from POC): the original returned an object whose `info`/`warn`/`error`/
- * `debug` arrow-function properties called `this.log(...)`, losing the `this`
- * binding and throwing at runtime. This version closes over `log` directly so
- * every method works regardless of call-site `this`.
+ * Historical note: an earlier version returned an object whose `info`/`warn`/
+ * `error`/`debug` arrow-function properties called `this.log(...)`, losing the
+ * `this` binding and throwing at runtime. This version closes over `log`
+ * directly so every method works regardless of call-site `this`.
  */
 
 /**

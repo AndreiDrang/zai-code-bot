@@ -2,10 +2,10 @@
 
 ## Scope and inheritance
 
-Applies to: `poc/workers/zai-main-worker/` and its descendants.
+Applies to: `src/zai-main-worker/` and its descendants.
 
-Inherits repository-wide guidance from `../../../AGENTS.md` and workspace
-mechanics from `../../AGENTS.md`. This file defines only local rules for the
+Inherits repository-wide guidance from `../../AGENTS.md` and tree mechanics
+from `../AGENTS.md`. This file defines only local rules for the
 public ingress Worker.
 
 ## What lives here
@@ -43,13 +43,13 @@ wrangler.toml          # Public routes, bindings, Secrets Store, cron trigger
 ## Validation
 
 ```bash
-npm run deploy:main:dry-run   # from poc/ — must pass before any deploy
+npm run deploy:main:dry-run   # from the repo root — must pass before any deploy
 ```
 
-`workers/shared/` changes additionally require `npm run deploy:heavy:dry-run`.
+`src/shared/` changes additionally require `npm run deploy:heavy:dry-run`.
 
 ## Nearby docs
 
-- Runtime diagram and boundaries → `../../../ARCHITECTURE.md`
+- Runtime diagram and boundaries → `../../ARCHITECTURE.md`
 - Command flow and bindings → `../../README.md`
-- Cron sweep failure recovery → `../../../RUNBOOK.md`
+- Cron sweep failure recovery → `../../RUNBOOK.md`

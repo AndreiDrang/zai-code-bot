@@ -79,10 +79,10 @@ const entries = Object.entries(coverage).map(([file, data]) => ({
 
 const scopes = [
   { label: 'all files', files: entries },
-  { label: 'shared', files: entries.filter((e) => e.relPath.startsWith('workers/shared/')) },
+  { label: 'shared', files: entries.filter((e) => e.relPath.startsWith('src/shared/')) },
   {
     label: 'main-worker',
-    files: entries.filter((e) => e.relPath.startsWith('workers/zai-main-worker/src/')),
+    files: entries.filter((e) => e.relPath.startsWith('src/zai-main-worker/src/')),
   },
 ];
 
