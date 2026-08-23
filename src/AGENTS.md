@@ -17,7 +17,9 @@ src/
 ├── shared/               # Code bundled into BOTH workers — no worker-specific logic
 │   ├── storage/          # D1 jobs/leases, R2 artifacts, KV config, key helpers
 │   ├── context/          # PR-context gather service + limits
-│   └── context-tools/    # Structured tool schemas/registry for Z.ai calls
+│   ├── context-tools/    # Structured tool schemas/registry for Z.ai calls
+│   ├── agent/            # Bounded LLM tool-loop runner + limits
+│   └── prompts/          # System-prompt composition + context policies
 ├── zai-main-worker/      # Webhook ingress, D1 jobs, Queue producer (own AGENTS.md)
 ├── zai-heavy-worker/     # Queue consumer + LLM handlers (own AGENTS.md)
 └── tests/                # Flat *.test.js suite (no __tests__/, no mirroring)
@@ -52,6 +54,9 @@ npm run build                # both deploy dry-runs in one command
 
 Deploy, dev, and dry-run scripts: `deploy:main[:dry-run]`, `deploy:heavy[:dry-run]`,
 `dev:main`, `dev:heavy`, `tail:main`, `tail:heavy` — all from the repo root.
+The `wrangler` binary is expected on PATH (per the Makefile); CI instead
+installs per-worker dependencies under each worker's `node_modules` before
+the dry-runs.
 
 ## Nearby docs
 

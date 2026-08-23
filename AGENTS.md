@@ -81,8 +81,11 @@ npm run deploy:main:dry-run
 npm run deploy:heavy:dry-run
 ```
 
-CI additionally runs `npm audit --audit-level=moderate`. Workspace mechanics
-(script inventory, tests, coverage) are in `src/AGENTS.md`.
+CI additionally runs `npm audit --audit-level=moderate`. A root `Makefile`
+wraps the same flows: `make test` also prints coverage-column averages via
+`scripts/coverage-averages.js`; `make deploy` publishes heavy first, then
+main. Workspace mechanics (script inventory, tests, coverage) are in
+`src/AGENTS.md`.
 
 <!-- okf-knowledge:start -->
 
