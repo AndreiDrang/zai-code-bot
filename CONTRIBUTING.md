@@ -1,12 +1,11 @@
 # Contributing
 
-The maintained application is under `poc/`. The repository no longer contains
-the old GitHub Action source or generated bundle.
+The maintained application is under `src/` (Cloudflare Workers). The repository
+no longer contains the old GitHub Action source or generated bundle.
 
 ## Development
 
 ```bash
-cd poc
 npm ci
 npm test
 ```
@@ -21,4 +20,4 @@ after both Wrangler dry-runs succeed.
 - Keep Queue messages limited to `{ schemaVersion, jobId }`.
 - Preserve marker idempotency for comments and the `describe` PR-body section.
 - Store secrets in Cloudflare Secrets Store, never in source or committed vars.
-- Update `README.md` and `poc/README.md` when bindings or workflows change.
+- Update `README.md` and `ARCHITECTURE.md` when bindings or workflows change.

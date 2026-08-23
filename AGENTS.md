@@ -10,18 +10,18 @@ Z.ai-powered review and describe results.
 - `zai-heavy-worker` — private Queue consumer for `review`, `describe`, and the
   internal `pr_context` / `pr_summary` gather jobs.
 
-All implementation and tests live under `poc/`; everything else at the root is
-docs or tooling:
+All implementation and tests live under `src/`; the repository root holds the
+npm project (package.json, vitest, prettier, Makefile, CI). Everything else at
+the root is docs or tooling:
 
 ```text
-poc/                  # Workers implementation (see poc/AGENTS.md)
+src/                  # Workers implementation (see src/AGENTS.md)
 okf/                  # OKF knowledge bundle; okf/index.md is the entry point
 .agents/skills/       # Vendored Cloudflare skills (wrangler, workers-best-practices, …)
-dist/ coverage/       # Untracked leftovers of the removed GitHub Action runtime
 *.md                  # ARCHITECTURE, RUNBOOK, SECURITY, CONTRIBUTING, README
 ```
 
-The old GitHub Action runtime (`action.yml`, `src/`, `dist/`, and its tests) has
+The old GitHub Action runtime (`action.yml`, its `src/`, and `dist` bundle) has
 been removed. Do not recreate it.
 
 ## Supported product surface
@@ -33,15 +33,15 @@ been removed. Do not recreate it.
 
 | Area | Location |
 | --- | --- |
-| Webhook routing | `poc/workers/zai-main-worker/src/index.js` |
-| Command allowlist | `poc/workers/shared/constants.js` |
-| Command parsing | `poc/workers/shared/commands.js` |
-| Review | `poc/workers/zai-heavy-worker/src/handlers/review.js` |
-| Describe | `poc/workers/zai-heavy-worker/src/handlers/describe.js` |
-| Queue lifecycle | `poc/workers/zai-heavy-worker/src/queue.js` |
-| GitHub API | `poc/workers/shared/github.js` |
-| Job/publication storage | `poc/workers/shared/storage/` |
-| Worker configuration | `poc/workers/*/wrangler.toml` |
+| Webhook routing | `src/zai-main-worker/src/index.js` |
+| Command allowlist | `src/shared/constants.js` |
+| Command parsing | `src/shared/commands.js` |
+| Review | `src/zai-heavy-worker/src/handlers/review.js` |
+| Describe | `src/zai-heavy-worker/src/handlers/describe.js` |
+| Queue lifecycle | `src/zai-heavy-worker/src/queue.js` |
+| GitHub API | `src/shared/github.js` |
+| Job/publication storage | `src/shared/storage/` |
+| Worker configuration | `src/*/wrangler.toml` |
 
 ## Invariants
 
@@ -60,10 +60,11 @@ been removed. Do not recreate it.
 Read only when relevant:
 
 - Cross-worker data flow or boundary changes → `ARCHITECTURE.md`
-- Command flow, bindings, R2 context layout → `poc/README.md`
+- Command flow, bindings, R2 context layout → `README.md`
 - Operational failures and recovery → `RUNBOOK.md`
 - Trust boundaries and user-visible output rules → `SECURITY.md`
 - Change rules and commit expectations → `CONTRIBUTING.md`
+- Workspace mechanics, tests, coverage → `src/AGENTS.md`
 - Cloudflare platform questions → `.agents/skills/wrangler/SKILL.md`,
   `.agents/skills/workers-best-practices/SKILL.md`
 - `okf/` is a curated knowledge artifact, not source code — start from
@@ -71,10 +72,9 @@ Read only when relevant:
 
 ## Validation
 
-CI (`.github/workflows/ci.yml`) runs from `poc/` on Node 20 and 22:
+CI (`.github/workflows/ci.yml`) runs on Node 20 and 22:
 
 ```bash
-cd poc
 npm ci
 npm test
 npm run deploy:main:dry-run
@@ -82,7 +82,7 @@ npm run deploy:heavy:dry-run
 ```
 
 CI additionally runs `npm audit --audit-level=moderate`. Workspace mechanics
-(script inventory, tests, coverage) are in `poc/AGENTS.md`.
+(script inventory, tests, coverage) are in `src/AGENTS.md`.
 
 <!-- okf-knowledge:start -->
 ## Open Knowledge Format (OKF)
