@@ -155,7 +155,9 @@ beforeEach(() => {
     getIssueComments: vi.fn().mockResolvedValue([]),
     getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'zai-pat-bot' }),
   };
-  GitHubClient.mockImplementation(() => github);
+  GitHubClient.mockImplementation(function () {
+    return github;
+  });
   authorizeCommenter.mockResolvedValue(true);
   enqueueJob.mockResolvedValue(true);
   createCommandJob.mockResolvedValue({ job: { job_id: 'cmd-1' }, created: true });

@@ -1,31 +1,20 @@
 import { defineConfig } from 'vitest/config';
 
-// Test environment.
+// Test environment: plain Node.
 //
-// The reference project (tb-bcse-securities-collector) uses `miniflare` for
-// Cloudflare Workers runtime fidelity, relying on its root wrangler.toml. This
-// repo has no root wrangler.toml (each worker keeps its own), so miniflare is
-// configured inline via `environmentOptions`.
-//
-// If miniflare proves incompatible on this Node version, flip TEST_ENV to
-// 'node': Node 18+ natively provides every Web API the shared modules use
-// (Web Crypto subtle, fetch, Response, Headers), so the unit tests stay valid.
-const TEST_ENV = 'miniflare';
+// All Cloudflare bindings (D1, R2, Queue) are exercised through mocked
+// objects (see src/tests/*), and `shared/` only uses portable Web APIs
+// (Web Crypto subtle, fetch, Response, Headers) that Node 18+ provides
+// natively — so no workerd/miniflare runtime is needed for the suite.
+// This also drops the deprecated `vitest-environment-miniflare` dependency
+// (its miniflare 2 / undici 5 transitive tree carries unpatchable audit
+// findings).
+const TEST_ENV = 'node';
 
 export default defineConfig({
   test: {
     globals: true,
     environment: TEST_ENV,
-    environmentOptions:
-      TEST_ENV === 'miniflare'
-        ? {
-            miniflare: {
-              compatibilityDate: '2024-09-23',
-              modules: true,
-              script: 'export default { fetch() { return new Response("ok"); } }',
-            },
-          }
-        : undefined,
 
     include: ['src/tests/**/*.test.js'],
 
