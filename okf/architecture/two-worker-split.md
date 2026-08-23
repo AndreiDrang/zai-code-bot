@@ -22,14 +22,14 @@ window. The POC splits execution across two Workers so the main worker can
 acknowledge instantly while the heavy worker runs to completion on its own CPU
 and wall-time budget, driven by a durable [Queue](/contracts/queue-message.md).
 
-# Workers
+## Workers
 
 | Worker | Owns | Driven by |
 | --- | --- | --- |
 | `zai-main-worker` | webhook ingress, signature gate, parse, auth, routing, incremental slice refreshes, D1 write + queue publish, 5-min self-healing cron | `fetch` (webhook) + `scheduled` (cron) |
 | `zai-heavy-worker` | queue consumer, job claiming, `pr_context` / `pr_summary` / `review` / `describe` handlers, artifact + context writes, comment publication | `queue` (consumer) |
 
-# Decoupled lifetimes
+## Decoupled lifetimes
 
 The durable command path is decoupled so neither worker holds the other alive:
 
@@ -38,14 +38,14 @@ The durable command path is decoupled so neither worker holds the other alive:
 2. Heavy consumes the queue message on its own lifetime and claims the job via a
    bounded lease.
 
-# Relationships
+## Relationships
 
 - Main's [webhook ingress](/workflows/webhook-ingress.md) is the entry point
   for all events.
 - [Command routing](/workflows/command-routing.md) sends both supported
   commands across the Queue boundary.
 
-# Open Questions
+## Open Questions
 
 - None. Deployment topology is fixed: the main worker serves
   `zai-worker.tokenbel.info` (custom domain); the heavy worker has

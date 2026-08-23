@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Command routing
-description: Routes help inline and the two LLM commands to durable Queue jobs; command jobs resolve the PR head so their rows match PR-event job shape.
+description: Routes help inline and the two LLM commands to durable Queue jobs; only `created` comment actions may execute a command.
 source_paths:
   - poc/workers/shared/constants.js
   - poc/workers/zai-main-worker/src/router.js
