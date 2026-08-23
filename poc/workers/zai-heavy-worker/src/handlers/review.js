@@ -25,12 +25,15 @@ import {
 } from '../../../shared/prompts/review.js';
 import { REVIEW_PROMPT } from '../../generated/prompts.js';
 
-const PROMPT_VERSION = 'review-v3';
+const PROMPT_VERSION = 'review-v4';
 const REVIEW_AGENT_LIMITS = Object.freeze({
   maxIterations: 8,
   maxToolCalls: 50,
   maxToolCallsPerIteration: 7,
   maxRetrievedBytes: 256 * 1024,
+  maxRunDurationMs: 5 * 60 * 1000,
+  maxLlmRequestDurationMs: 30000,
+  finalizationReserveMs: 40000,
 });
 
 /**

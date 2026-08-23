@@ -194,8 +194,7 @@ export async function runLlmCommand(
     });
     const retryable = result.error?.retryable !== false;
     const attempt = Number(job.attempt_count);
-    const finalAttempt =
-      !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
+    const finalAttempt = !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
     if (finalAttempt) {
       await publishNotice(identity, metadata, {
         message: buildFailureNotice({
@@ -210,13 +209,16 @@ export async function runLlmCommand(
     throw llmCommandError(category, retryable && !finalAttempt);
   }
 
+  const resultData =
+    command === 'review' ? appendReviewMetadata(result.data, result.agent) : result.data;
+
   // --- Persist result to /context/{command}.md (overwrite, per-command).
   // Best-effort: a failure here must not lose the comment. readCommandResult is
   // the reader that pairs with this write (anti-write-only).
   let resultStored = false;
   if (env?.BOT_ARTIFACTS?.put) {
     try {
-      await env.BOT_ARTIFACTS.put(prCommandResultKey(repoId, prNumber, command), result.data);
+      await env.BOT_ARTIFACTS.put(prCommandResultKey(repoId, prNumber, command), resultData);
       resultStored = true;
     } catch (persistError) {
       logger.error('Failed to persist command result', {
@@ -228,7 +230,7 @@ export async function runLlmCommand(
   }
 
   // --- Publish the marker-idempotent comment. ---
-  await publishResult(identity, result.data);
+  await publishResult(identity, resultData);
 
   logger.info(`${command} published`, {
     repo: repoFullName,
@@ -244,6 +246,10 @@ export async function runLlmCommand(
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
     agentDuplicateToolCalls: result.agent?.duplicateToolCalls ?? 0,
+    agentExecutedToolCalls: result.agent?.executedToolCalls ?? 0,
+    agentReviewedDiffPaths: result.agent?.reviewedDiffPaths ?? [],
+    agentFinalizedWithAvailableEvidence: result.agent?.finalizedWithAvailableEvidence ?? false,
+    agentFinalizationReason: result.agent?.finalizationReason ?? null,
     agentLlmRequests: result.agent?.llmRequests ?? null,
     agentLlmAttempts: result.agent?.llmAttempts ?? null,
     agentLlmTimeouts: result.agent?.llmTimeouts ?? null,
@@ -268,6 +274,10 @@ export async function runLlmCommand(
     agentSuccessfulToolCalls: result.agent?.successfulToolCalls ?? 0,
     agentFailedToolCalls: result.agent?.failedToolCalls ?? 0,
     agentDuplicateToolCalls: result.agent?.duplicateToolCalls ?? 0,
+    agentExecutedToolCalls: result.agent?.executedToolCalls ?? 0,
+    agentReviewedDiffPaths: result.agent?.reviewedDiffPaths ?? [],
+    agentFinalizedWithAvailableEvidence: result.agent?.finalizedWithAvailableEvidence ?? false,
+    agentFinalizationReason: result.agent?.finalizationReason ?? null,
     agentLlmRequests: result.agent?.llmRequests ?? null,
     agentLlmAttempts: result.agent?.llmAttempts ?? null,
     agentLlmTimeouts: result.agent?.llmTimeouts ?? null,
@@ -318,9 +328,7 @@ async function runAgentCommand({
           category: agent.status === 'failed' ? agent.error?.category || 'provider' : agent.status,
           attempts: agent.error?.attempts ?? null,
           retryable:
-            agent.status === 'failed'
-              ? agent.error?.retryable
-              : agent.status === 'timed_out',
+            agent.status === 'failed' ? agent.error?.retryable : agent.status === 'timed_out',
         },
         agent,
       };
@@ -399,17 +407,13 @@ export function buildFailureNotice({ command, category, error, agent, agentLimit
 
   const attempts = formatAttemptCount(error?.attempts);
   const notices = {
-    timed_out:
-      `The ${command} reached its execution-time limit before Z.ai produced a complete result.`,
+    timed_out: `The ${command} reached its execution-time limit before Z.ai produced a complete result.`,
     timeout: `Z.ai did not respond within the allowed time${attempts}.`,
     'rate-limit': `Z.ai temporarily rate-limited ${command} requests${attempts}.`,
     provider: `Z.ai was temporarily unavailable while running ${command}${attempts}.`,
-    auth:
-      `Z.ai rejected this deployment's credentials, so ${command} cannot run until a maintainer fixes the configuration.`,
-    validation:
-      `Z.ai rejected the ${command} request as invalid. A maintainer needs to inspect the deployment configuration.`,
-    protocol:
-      `Z.ai returned a response that could not be safely processed for ${command}.`,
+    auth: `Z.ai rejected this deployment's credentials, so ${command} cannot run until a maintainer fixes the configuration.`,
+    validation: `Z.ai rejected the ${command} request as invalid. A maintainer needs to inspect the deployment configuration.`,
+    protocol: `Z.ai returned a response that could not be safely processed for ${command}.`,
     agent_internal: `The ${command} runner encountered an internal error before producing a result.`,
     internal: `The ${command} service encountered an internal error before producing a result.`,
   };
@@ -430,6 +434,48 @@ function formatByteLimit(value) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '';
   if (bytes < 1024) return `${Math.round(bytes)} bytes`;
   return `${Math.round((bytes / 1024) * 10) / 10} KiB`;
+}
+
+function appendReviewMetadata(markdown, agent = {}) {
+  const toolCalls = positiveInteger(agent.toolCalls);
+  const successfulToolCalls = positiveInteger(agent.successfulToolCalls);
+  const failedToolCalls = positiveInteger(agent.failedToolCalls);
+  const duplicateToolCalls = positiveInteger(agent.duplicateToolCalls);
+  const executedToolCalls = successfulToolCalls + failedToolCalls;
+  const retrieved = formatByteLimit(agent.retrievedBytes) || '0 bytes';
+  const reviewedDiffPaths = uniqueStringValues(agent.reviewedDiffPaths);
+  const lines = [
+    String(markdown || '').trimEnd(),
+    '',
+    '---',
+    '',
+    '### Review metadata',
+    '',
+    `- Context Tool calls executed: ${executedToolCalls} (${successfulToolCalls} successful, ${failedToolCalls} failed).`,
+    `- Context Tool requests: ${toolCalls}${duplicateToolCalls ? ` (${duplicateToolCalls} duplicate request${duplicateToolCalls === 1 ? '' : 's'} skipped)` : ''}.`,
+    reviewedDiffPaths.length
+      ? `- Per-file diffs reviewed: ${reviewedDiffPaths.map(formatMarkdownCode).join(', ')}.`
+      : '- Per-file diffs reviewed: none. Findings are based on the initial PR context and any non-diff context retrieved during this run.',
+    `- Retrieved context: ${retrieved}.`,
+    agent.finalizedWithAvailableEvidence
+      ? '- Finalization: the 40-second time reserve started; this review was completed using the evidence retrieved above.'
+      : '- Finalization: normal completion.',
+  ];
+  return lines.join('\n');
+}
+
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : 0;
+}
+
+function uniqueStringValues(values) {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.filter((value) => typeof value === 'string' && value.length > 0))];
+}
+
+function formatMarkdownCode(value) {
+  return `\`${value.replaceAll('\\', '\\\\').replaceAll('`', '\\`').replaceAll(/\r?\n/g, ' ')}\``;
 }
 
 /** Publishes the LLM result as a marker-idempotent comment. */

@@ -1,7 +1,7 @@
 ---
 type: Contract
 title: Agent tool-calling loop
-description: The provider-neutral agent runner that drives Z.ai chat completions in a bounded tool-calling loop — iteration, call, cumulative retrieval, and absolute-duration budgets with protocol validation and safe tool errors.
+description: The provider-neutral agent runner that drives Z.ai chat completions in a bounded tool-calling loop — iteration, call, cumulative retrieval, and absolute-duration budgets with protocol validation, safe tool errors, and a time-reserve finalization mode.
 source_paths:
   - poc/workers/shared/agent/runner.js
   - poc/workers/shared/agent/limits.js
@@ -27,7 +27,10 @@ exhausted.
 
 Each iteration:
 
-1. Check the wall-clock budget → `timed_out` if exceeded.
+1. Check the wall-clock budget → `timed_out` if exceeded. When the remaining
+   duration is below `finalizationReserveMs`, enter finalization mode instead:
+   append a trusted instruction to stop retrieving context and request final
+   Markdown with no tools.
 2. Call `llmClient.chat({ apiKey, model, messages, tools, timeoutMs,
    deadlineAt })` with
    an immutable copy of the conversation (the client must observe this
@@ -45,6 +48,9 @@ Each iteration:
    An identical tool name and argument object is retrieved only once per run.
    Later requests receive a safe `DUPLICATE_TOOL_REQUEST` response that directs
    the model to the earlier result already in the conversation.
+   If the time reserve starts after the model requested tools, every pending
+   call receives a safe `FINALIZATION_REQUIRED` tool response; no registry
+   operation runs and the next request has no tool definitions.
 
 # Budgets
 
@@ -56,8 +62,9 @@ Default limits (`shared/agent/limits.js`, overridable per run):
 | `maxToolCalls` (total) | 30 |
 | `maxToolCallsPerIteration` | 10 |
 | `maxRetrievedBytes` (accepted UTF-8 tool-result data) | 524288 (512 KiB) |
-| `maxRunDurationMs` | 120000 (2 min) |
+| `maxRunDurationMs` | 300000 (5 min) |
 | `maxLlmRequestDurationMs` | 30000 |
+| `finalizationReserveMs` | 40000 |
 
 Exceeding a budget returns a typed terminal status (`max_iterations`,
 `max_tool_calls`, `max_retrieved_bytes`, `timed_out`) — distinct from `failed`, which is reserved
@@ -69,8 +76,11 @@ existing evidence. A subsequent tool-requesting turn terminates as
 `max_retrieved_bytes`; this prevents an unbounded error loop.
 
 `/zai review` uses a stricter but larger workflow-specific profile:
-8 iterations, 50 total calls, 7 calls per iteration, and 256 KiB accepted
-tool-result data. The two-minute absolute run deadline remains unchanged.
+8 iterations, 50 total calls, 7 calls per iteration, 256 KiB accepted
+tool-result data, a five-minute absolute deadline, and a 40-second
+finalization reserve. The reserve keeps enough wall time for a final
+no-tools analysis and result publication rather than spending the end of a run
+on additional retrieval.
 When more than one limit is encountered, the result retains every applicable
 `limitReasons` value so the GitHub failure notice can explain all safe,
 actionable causes.
@@ -78,12 +88,15 @@ actionable causes.
 # Run result
 
 `{ status, messages, usage, iterations, toolCalls, successfulToolCalls,
-failedToolCalls, duplicateToolCalls, llmRequests, llmAttempts, llmTimeouts,
+failedToolCalls, duplicateToolCalls, executedToolCalls, reviewedDiffPaths,
+finalizedWithAvailableEvidence, finalizationReason,
+finalizationStartedAtRemainingMs, llmRequests, llmAttempts, llmTimeouts,
 retrievedBytes, retrievalBudgetExceeded, limitReasons, conversationBytes,
 durationMs, response? }`
 — the run transcript is returned so callers can log and inspect agent
-behavior (`agentIterations` / `agentToolCalls` surface in review job
-results).
+behavior. `reviewedDiffPaths` contains only successful `get_diff` results that
+were accepted into the model context, which makes it suitable for the
+server-generated review evidence metadata.
 
 # Relationships
 

@@ -9,6 +9,14 @@
   and 256 KiB of accepted tool-result data. Repeated identical tool requests
   are skipped, and a terminal GitHub notice can report both retrieval-data and
   tool-call limits without exposing provider internals.
+- **Update**: Increased the review agent's absolute wall-clock deadline from
+  two to five minutes while retaining the 30-second per-request Z.ai timeout.
+  A 40-second finalization reserve disables Context Tools, resolves pending
+  calls with safe `FINALIZATION_REQUIRED` responses, and asks the model to
+  complete the review from evidence already in the conversation. Review
+  artifacts and GitHub comments now end with server-generated metadata for
+  executed tools, accepted per-file diff paths, retrieved bytes, and
+  finalization status.
 
 ## 2026-08-22
 

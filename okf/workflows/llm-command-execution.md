@@ -72,12 +72,18 @@ LLM ↔ tool protocol and enforces its runtime budgets.
   content at the immutable PR head); everything else reads the gathered
   snapshot.
 - The result is the agent's final Markdown (Summary / severity-prefixed
-  Findings / Notes), stored at `context/review.md` and published as the
-  marker-owned review comment.
+  Findings / Notes), followed by server-generated `Review metadata`, stored at
+  `context/review.md` and published as the marker-owned review comment. The
+  metadata reports actual Context Tool executions, accepted per-file diffs, the
+  retrieved-context size, and whether time-reserve finalization was used; it is
+  not model-generated.
 - A matching-head [PR summary](/workflows/pr-summary-job.md) is injected as
   bounded background (`summary` ≤ ~8% of the context budget).
-- Review permits up to 20 context-tool calls (at most four per agent turn).
-  If that limit is reached before final Markdown is produced, the
+- Review permits up to 50 context-tool calls (at most seven per agent turn)
+  and 256 KiB of accepted tool results over a five-minute deadline. At less
+  than 40 seconds remaining it disables Context Tools and asks the model to
+  complete the analysis from available evidence. If a tool-call limit is
+  reached before final Markdown is produced, the
   marker-owned review comment is created or updated with the limit and the
   number of context requests completed; the job then fails without exposing
   provider detail.

@@ -189,7 +189,12 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
 
     // The result is written to the per-command /context/ key (overwrite store).
     const expectedKey = prCommandResultKey(REPO_ID, PR, 'review');
-    expect(env.BOT_ARTIFACTS.put).toHaveBeenCalledWith(expectedKey, '## Summary\nGood.');
+    expect(env.BOT_ARTIFACTS.put).toHaveBeenCalledWith(
+      expectedKey,
+      expect.stringContaining('## Summary\nGood.\n\n---\n\n### Review metadata'),
+    );
+    expect(env.BOT_ARTIFACTS.put.mock.calls[0][1]).toContain('Context Tool calls executed: 0');
+    expect(env.BOT_ARTIFACTS.put.mock.calls[0][1]).toContain('Per-file diffs reviewed: none');
 
     // Comment is marker-idempotent, no per-run artifact id anymore.
     expect(mocks.upsertComment).toHaveBeenCalledOnce();
@@ -216,6 +221,39 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
         agentFailedToolCalls: 0,
       }),
     );
+  });
+
+  it('records the retrieved per-file diffs in server-generated review metadata', async () => {
+    mocks.chat
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'get_diff', arguments: '{"path":"a/f"}' },
+              },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { message: { role: 'assistant', content: '## Summary\nGood.' } },
+      });
+    const env = makeEnv();
+
+    await handleReviewCommand({ github: makeGithub(), env, db: {}, job, runId: 'run-1' });
+
+    const review = env.BOT_ARTIFACTS.put.mock.calls[0][1];
+    expect(review).toContain('Context Tool calls executed: 1 (1 successful, 0 failed).');
+    expect(review).toContain('Per-file diffs reviewed: `a/f`.');
+    expect(review).toContain('Finalization: normal completion.');
+    expect(mocks.upsertComment.mock.calls[0][0].body).toContain('### Review metadata');
   });
 
   it('sends complete inexpensive PR context and tool schemas, without the aggregate diff', async () => {

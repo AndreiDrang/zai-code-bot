@@ -29,7 +29,9 @@ For a file changed by this pull request:
 
 Do not retrieve full files merely to build broad repository context. Do not repeat an identical tool request: its earlier result remains available in the conversation.
 
-For unchanged files, use get_file only when a changed diff directly depends on that file. Report findings only when the available diff and retrieved context establish that this pull request introduced the issue.`;
+For unchanged files, use get_file only when a changed diff directly depends on that file. Report findings only when the available diff and retrieved context establish that this pull request introduced the issue.
+
+If the system says that the investigation time reserve has started, do not request more tools. Complete the review from the evidence already present in the conversation, and do not infer facts about files or diffs that were not retrieved.`;
 
 /**
  * Combines the human-authored review role prompt with reusable context policy.

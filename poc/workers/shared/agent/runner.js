@@ -32,12 +32,18 @@ export function createAgentRunner({
     let successfulToolCalls = 0;
     let failedToolCalls = 0;
     let duplicateToolCalls = 0;
+    const reviewedDiffPaths = [];
+    const reviewedDiffPathSet = new Set();
+    let finalizedWithAvailableEvidence = false;
+    let finalizationReason = null;
+    let finalizationStartedAtRemainingMs = null;
 
     while (true) {
       const remainingMs = deadlineAt - now();
       if (remainingMs <= 0) {
         return buildResult('timed_out');
       }
+      if (remainingMs < resolvedLimits.finalizationReserveMs) enterFinalization(remainingMs);
 
       let response;
       const requestNumber = ++llmRequests;
@@ -49,7 +55,7 @@ export function createAgentRunner({
           // The client/mock must observe this iteration's immutable message
           // sequence, not the array that is extended after tool execution.
           messages: [...conversation],
-          tools,
+          tools: finalizedWithAvailableEvidence ? [] : tools,
           timeoutMs: Math.min(remainingMs, resolvedLimits.maxLlmRequestDurationMs),
           deadlineAt,
           onAttempt: (attempt) => {
@@ -97,6 +103,14 @@ export function createAgentRunner({
         return buildResult('completed', { response: assistant });
       }
 
+      if (
+        finalizedWithAvailableEvidence ||
+        deadlineAt - now() < resolvedLimits.finalizationReserveMs
+      ) {
+        enterFinalization(Math.max(0, deadlineAt - now()));
+        conversation.push(assistant, ...calls.map((call) => makeFinalizationToolResult(call.id)));
+        continue;
+      }
       if (calls.length > resolvedLimits.maxToolCallsPerIteration) {
         return buildResult('max_tool_calls');
       }
@@ -169,7 +183,15 @@ export function createAgentRunner({
           );
           continue;
         }
-        if (toolResult.success) retrievedBytes += toolResult.resultBytes;
+        if (toolResult.success) {
+          retrievedBytes += toolResult.resultBytes;
+          if (toolResult.tool === 'get_diff' && typeof toolResult.args?.path === 'string') {
+            if (!reviewedDiffPathSet.has(toolResult.args.path)) {
+              reviewedDiffPathSet.add(toolResult.args.path);
+              reviewedDiffPaths.push(toolResult.args.path);
+            }
+          }
+        }
         toolMessages.push(toolResult.message);
       }
       conversation.push(...toolMessages);
@@ -189,6 +211,11 @@ export function createAgentRunner({
         successfulToolCalls,
         failedToolCalls,
         duplicateToolCalls,
+        executedToolCalls: successfulToolCalls + failedToolCalls,
+        reviewedDiffPaths,
+        finalizedWithAvailableEvidence,
+        finalizationReason,
+        finalizationStartedAtRemainingMs,
         llmRequests,
         llmAttempts,
         llmTimeouts,
@@ -209,6 +236,12 @@ export function createAgentRunner({
         successfulToolCalls,
         failedToolCalls,
         duplicateToolCalls,
+        executedToolCalls: successfulToolCalls + failedToolCalls,
+        reviewedDiffCount: reviewedDiffPaths.length,
+        reviewedDiffPaths,
+        finalizedWithAvailableEvidence,
+        finalizationReason,
+        finalizationStartedAtRemainingMs,
         llmRequests,
         llmAttempts,
         llmTimeouts,
@@ -223,6 +256,27 @@ export function createAgentRunner({
         durationMs: result.durationMs,
       });
       return result;
+    }
+
+    function enterFinalization(remainingMs) {
+      if (finalizedWithAvailableEvidence) return;
+      finalizedWithAvailableEvidence = true;
+      finalizationReason = 'time_reserve';
+      finalizationStartedAtRemainingMs = remainingMs;
+      conversation.push({
+        role: 'system',
+        content:
+          'The investigation time reserve has started. Do not request or call any more tools. ' +
+          'Complete the review now using only the evidence already in this conversation. ' +
+          'Do not infer facts about files or diffs that were not retrieved.',
+      });
+      logger?.info('Agent finalization started', {
+        runId,
+        reason: finalizationReason,
+        remainingMs,
+        toolCalls,
+        reviewedDiffCount: reviewedDiffPaths.length,
+      });
     }
   }
 
@@ -249,6 +303,8 @@ export function createAgentRunner({
       });
       return {
         success: true,
+        tool: name,
+        args,
         toolCallId,
         resultBytes,
         message: makeToolMessage(toolCallId, content),
@@ -336,6 +392,17 @@ function makeDuplicateToolResult(toolCallId) {
       },
     }),
   };
+}
+
+function makeFinalizationToolResult(toolCallId) {
+  return makeToolMessage(toolCallId, {
+    ok: false,
+    error: {
+      code: 'FINALIZATION_REQUIRED',
+      message:
+        'The investigation time reserve has started. No more context can be retrieved; finalize using the evidence already available.',
+    },
+  });
 }
 
 function createToolCallKey(call) {

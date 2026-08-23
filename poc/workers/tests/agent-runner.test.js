@@ -87,6 +87,7 @@ describe('AgentRunner', () => {
     });
 
     expect(result).toMatchObject({ status: 'completed', iterations: 1, toolCalls: 1 });
+    expect(result.reviewedDiffPaths).toEqual(['src/cache.ts']);
     expect(toolRegistry.execute).toHaveBeenCalledWith('get_diff', { path: 'src/cache.ts' });
     expect(llmClient.chat.mock.calls[0][0].messages).toHaveLength(1);
     const secondMessages = llmClient.chat.mock.calls[1][0].messages;
@@ -106,6 +107,76 @@ describe('AgentRunner', () => {
         failedToolCalls: 0,
       }),
     );
+  });
+
+  it('finalizes without tools when the time reserve has started', async () => {
+    const { runner, llmClient, toolRegistry } = createTestRunner({
+      replies: [assistant('## Summary\nReview completed from available evidence.')],
+      limits: { maxRunDurationMs: 39999, finalizationReserveMs: 40000 },
+      now: () => 0,
+    });
+
+    const result = await runner.run({
+      apiKey: 'key',
+      model: 'model',
+      messages: [{ role: 'user', content: 'review' }],
+      tools: [{ type: 'function' }],
+      runId: 'run-1',
+    });
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      finalizedWithAvailableEvidence: true,
+      finalizationReason: 'time_reserve',
+      finalizationStartedAtRemainingMs: 39999,
+      toolCalls: 0,
+    });
+    expect(toolRegistry.execute).not.toHaveBeenCalled();
+    expect(llmClient.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [],
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringContaining('investigation time reserve'),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('does not execute late tool calls and asks for a final answer without tools', async () => {
+    const now = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15000);
+    const call = toolCall('call-1', 'get_diff', '{"path":"src/late.js"}');
+    const { runner, llmClient, toolRegistry } = createTestRunner({
+      replies: [assistant(null, [call]), assistant('## Summary\nFinal review.')],
+      limits: { maxRunDurationMs: 50000, finalizationReserveMs: 40000 },
+      now,
+    });
+
+    const result = await runner.run({
+      apiKey: 'key',
+      model: 'model',
+      messages: [{ role: 'user', content: 'review' }],
+      tools: [{ type: 'function' }],
+      runId: 'run-1',
+    });
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      toolCalls: 0,
+      finalizedWithAvailableEvidence: true,
+      reviewedDiffPaths: [],
+    });
+    expect(toolRegistry.execute).not.toHaveBeenCalled();
+    expect(llmClient.chat.mock.calls[1][0]).toMatchObject({ tools: [] });
+    const finalizationToolResult = llmClient.chat.mock.calls[1][0].messages.find(
+      (message) => message.role === 'tool',
+    );
+    expect(JSON.parse(finalizationToolResult.content)).toMatchObject({
+      ok: false,
+      error: { code: 'FINALIZATION_REQUIRED' },
+    });
   });
 
   it('executes tool calls from one assistant response concurrently and preserves order', async () => {
@@ -393,6 +464,8 @@ describe('Agent limits', () => {
       maxIterations: 2,
       maxToolCalls: 30,
       maxRetrievedBytes: 512 * 1024,
+      maxRunDurationMs: 5 * 60 * 1000,
+      finalizationReserveMs: 40000,
     });
   });
 });
