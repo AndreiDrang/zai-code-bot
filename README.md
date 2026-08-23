@@ -1,5 +1,7 @@
 # Z.ai Code Bot
 
+[![codecov](https://codecov.io/gh/AndreiDrang/zai-code-bot/graph/badge.svg?token=OZYcalMMXv)](https://codecov.io/gh/AndreiDrang/zai-code-bot)
+
 Cloudflare Workers that turn `/zai` GitHub PR comments into Z.ai-powered
 review and describe results:
 
