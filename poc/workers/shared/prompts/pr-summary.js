@@ -1,8 +1,5 @@
 import { buildContextBlock } from '../llm-context.js';
-import {
-  CONTEXT_RETRIEVAL_POLICY,
-  UNTRUSTED_REPOSITORY_CONTENT_POLICY,
-} from './context-policy.js';
+import { CONTEXT_RETRIEVAL_POLICY, UNTRUSTED_REPOSITORY_CONTENT_POLICY } from './context-policy.js';
 
 /**
  * Builds the static system prompt for the PR-summary agent. The base prompt

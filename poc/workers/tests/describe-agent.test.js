@@ -77,17 +77,12 @@ function fakeBucket() {
         },
       ]),
     ],
-    [
-      prContextKey(10, 7, 'comments'),
-      JSON.stringify({ issue: [], review: [] }),
-    ],
+    [prContextKey(10, 7, 'comments'), JSON.stringify({ issue: [], review: [] })],
     [prContextDiffKey(10, 7, 'src/cache.js'), '@@ -1 +1 @@\n+invalidateCache();'],
   ]);
   return {
     store,
-    get: vi.fn(async (key) =>
-      store.has(key) ? { text: async () => store.get(key) } : null,
-    ),
+    get: vi.fn(async (key) => (store.has(key) ? { text: async () => store.get(key) } : null)),
     put: vi.fn(async (key, value) => store.set(key, value)),
   };
 }
@@ -100,9 +95,7 @@ describe('handleDescribeCommand with Context Tools', () => {
   it('lets the describe agent retrieve a diff before updating the bot-owned description block', async () => {
     const bucket = fakeBucket();
     const github = {
-      getPullRequest: vi
-        .fn()
-        .mockResolvedValue({ body: 'Existing user description.' }),
+      getPullRequest: vi.fn().mockResolvedValue({ body: 'Existing user description.' }),
       updatePullRequest: vi.fn().mockResolvedValue({}),
       getPrCommits: vi.fn(),
       getFileContent: vi.fn(),
@@ -143,9 +136,7 @@ describe('handleDescribeCommand with Context Tools', () => {
     const initialRequest = mocks.zaiChat.mock.calls[0][0];
     expect(initialRequest.messages[1].content).toContain('## Changed files');
     expect(initialRequest.messages[1].content).not.toContain('## Diff');
-    expect(initialRequest.tools.map((tool) => tool.function.name)).toContain(
-      'get_diff',
-    );
+    expect(initialRequest.tools.map((tool) => tool.function.name)).toContain('get_diff');
 
     const followUp = mocks.zaiChat.mock.calls[1][0];
     const toolResult = followUp.messages.at(-1);

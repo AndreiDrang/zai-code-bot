@@ -164,13 +164,11 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
   });
 
   if (agent.status !== 'completed') {
-    const category =
-      agent.status === 'failed' ? agent.error?.category || 'internal' : agent.status;
+    const category = agent.status === 'failed' ? agent.error?.category || 'internal' : agent.status;
     const retryable =
       agent.status === 'failed' ? agent.error?.retryable !== false : agent.status === 'timed_out';
     const attempt = Number(job.attempt_count);
-    const finalAttempt =
-      !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
+    const finalAttempt = !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
     logger.error('Z.ai describe call failed', {
       repo: repoFullName,
       issue: prNumber,

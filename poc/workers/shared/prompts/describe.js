@@ -1,8 +1,5 @@
 import { buildContextBlock } from '../llm-context.js';
-import {
-  CONTEXT_RETRIEVAL_POLICY,
-  UNTRUSTED_REPOSITORY_CONTENT_POLICY,
-} from './context-policy.js';
+import { CONTEXT_RETRIEVAL_POLICY, UNTRUSTED_REPOSITORY_CONTENT_POLICY } from './context-policy.js';
 
 /**
  * Adds shared tool-use and untrusted-content policy to the describe task.
