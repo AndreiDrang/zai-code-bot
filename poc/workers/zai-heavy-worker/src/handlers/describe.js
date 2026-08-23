@@ -257,7 +257,7 @@ function replaceGeneratedDescription(body, generated) {
   return `${body.slice(0, start).trimEnd()}\n\n${block}${end === -1 ? '' : body.slice(end + DESCRIPTION_END.length)}`.trim();
 }
 
-async function publishStatus(identity, message, status, logger = null) {
+async function publishStatus(identity, message, status, logger) {
   const summary = identity.manifest
     ? `\n\nContext snapshot: \`${identity.manifest.headSha}\`.`
     : '';
@@ -274,14 +274,14 @@ async function publishStatus(identity, message, status, logger = null) {
     body: `## 📝 /zai describe\n\n${message}${summary}\n\n---\n${BOT_FOOTER}\n\n${DESCRIBE_MARKER}`,
     jobId: identity.jobId,
   });
-  if (publication?.skipped && logger) {
+  if (publication.skipped) {
     logger.warn('Describe status publication skipped: lease held by concurrent job', {
       repo: `${identity.owner}/${identity.repo}`,
       issue: identity.prNumber,
       jobId: identity.jobId,
       status,
-      keptCommentId: publication.id ?? null,
-      attempts: publication.attempts ?? null,
+      keptCommentId: publication.id,
+      attempts: publication.attempts,
     });
   }
   return publication;

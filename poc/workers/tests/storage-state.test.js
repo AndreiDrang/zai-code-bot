@@ -25,7 +25,7 @@ import {
   recordOutboxFailure,
   startAnalysisRun,
 } from '../shared/storage/jobs.js';
-import { claimPublication, upsertComment } from '../shared/comments.js';
+import { claimPublication, isBotOwnedComment, upsertComment } from '../shared/comments.js';
 
 const job = {
   job_id: 'job-1',
@@ -448,6 +448,39 @@ describe('expired-lease recovery paths', () => {
   });
 });
 
+describe('isBotOwnedComment', () => {
+  const comment = (over = {}) => ({
+    id: 1,
+    body: 'text',
+    user: { login: 'u', type: 'User' },
+    ...over,
+  });
+
+  it('rejects null comments and non-string bodies', () => {
+    expect(isBotOwnedComment(null)).toBe(false);
+    expect(isBotOwnedComment({ id: 1, body: 42 })).toBe(false);
+  });
+
+  it('accepts the tracked comment id unconditionally', () => {
+    expect(
+      isBotOwnedComment(comment({ user: { login: 'someone-else', type: 'User' } }), {
+        expectedCommentId: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts GitHub App comments', () => {
+    expect(isBotOwnedComment(comment({ user: { login: 'app[bot]', type: 'Bot' } }))).toBe(true);
+  });
+
+  it('matches a configured PAT login only when exact', () => {
+    expect(isBotOwnedComment(comment(), { botLogin: 'u' })).toBe(true);
+    expect(isBotOwnedComment(comment(), { botLogin: 'other' })).toBe(false);
+    // Without a botLogin, a plain User comment is never bot-owned.
+    expect(isBotOwnedComment(comment())).toBe(false);
+  });
+});
+
 describe('comment publication edge paths', () => {
   /** db stub keyed on SQL shape: INSERT = claim, UPDATE = finalize, first = publication row. */
   function publicationDb({ claimChanges = 1, finalizeChanges = 1, publication = {} } = {}) {
@@ -500,6 +533,19 @@ describe('comment publication edge paths', () => {
       attempts: 1,
     });
     expect(input.github.postComment).not.toHaveBeenCalled();
+  });
+
+  it('reports a null id when no publication row exists at all', async () => {
+    const input = args({
+      db: publicationDb({ claimChanges: 0, publication: null }),
+      waitMs: 0,
+    });
+    await expect(upsertComment(input)).resolves.toEqual({
+      id: null,
+      created: false,
+      skipped: true,
+      attempts: 1,
+    });
   });
 
   it('waits out a concurrent lease and publishes once the winner finalizes', async () => {
