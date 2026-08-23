@@ -257,7 +257,7 @@ describe('zai-client — createZaiClient.call', () => {
     expect(fetchImpl.mock.calls[0][1].body).toContain('"get_diff"');
   });
 
-  it('does not start a retry that cannot fit within the agent deadline', async () => {
+  it('does not start an LLM request that cannot run for the minimum viable timeout', async () => {
     const fetchImpl = vi.fn(async () => errResponse(500));
     const client = createZaiClient({
       fetch: fetchImpl,
@@ -274,10 +274,10 @@ describe('zai-client — createZaiClient.call', () => {
       deadlineAt: 5,
     });
 
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       success: false,
-      error: { category: 'timeout', retryable: true, attempts: 1 },
+      error: { category: 'timeout', retryable: true, attempts: 0 },
     });
   });
 });

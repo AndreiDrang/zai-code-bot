@@ -22,7 +22,7 @@ const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 2000;
 // Progressive timeout multipliers — each retry gets a shorter timeout.
-// 1st attempt: 100%, 2nd: 67%, 3rd: 50%, 4th: 33% (floor 10s).
+// 1st attempt: 100%, 2nd: 67%, 3rd: 50%, 4th: 33%.
 const PROGRESSIVE_TIMEOUT_MULTIPLIERS = [1.0, 0.67, 0.5, 0.33];
 const MIN_TIMEOUT_MS = 10000;
 
@@ -180,8 +180,9 @@ export function createZaiClient(config = {}) {
       const startTime = now();
       let lastError;
       for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-        const remainingMs =
-          Number.isFinite(deadlineAt) ? Math.max(0, deadlineAt - now()) : Number.POSITIVE_INFINITY;
+        const remainingMs = Number.isFinite(deadlineAt)
+          ? Math.max(0, deadlineAt - now())
+          : Number.POSITIVE_INFINITY;
         if (remainingMs <= 0) {
           return timedOutChatResult(lastError, attempt, startTime, now);
         }
@@ -193,6 +194,9 @@ export function createZaiClient(config = {}) {
           1,
           Math.floor(Math.min(timeoutMs, baseTimeout, remainingMs) * mult),
         );
+        if (requestTimeout < MIN_TIMEOUT_MS) {
+          return timedOutChatResult(lastError, attempt, startTime, now);
+        }
         const attemptStartedAt = now();
         try {
           const data = await complete({
@@ -235,10 +239,9 @@ export function createZaiClient(config = {}) {
             };
           }
           const delay = baseDelay * 2 ** attempt + Math.floor(Math.random() * 1000);
-          const remainingAfterAttempt =
-            Number.isFinite(deadlineAt)
-              ? Math.max(0, deadlineAt - now())
-              : Number.POSITIVE_INFINITY;
+          const remainingAfterAttempt = Number.isFinite(deadlineAt)
+            ? Math.max(0, deadlineAt - now())
+            : Number.POSITIVE_INFINITY;
           if (remainingAfterAttempt <= delay) {
             return timedOutChatResult(lastError, attempt + 1, startTime, now);
           }
