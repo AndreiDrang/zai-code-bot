@@ -383,3 +383,303 @@ describe('zai-client — createZaiClient.call', () => {
     });
   });
 });
+
+describe('zai-client — transport edges', () => {
+  it('attaches requestBytes and reports transport nulls on network failures', async () => {
+    const fetchImpl = vi.fn(() => Promise.reject(new Error('fetch failed')));
+    const onAttempt = vi.fn();
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, maxRetries: 0 });
+
+    const result = await client.chat({
+      apiKey: 'k',
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxAttempts: 1,
+      onAttempt,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatchObject({
+      category: 'provider',
+      httpStatus: null,
+      providerRequestId: null,
+    });
+    const failure = onAttempt.mock.calls.map(([call]) => call).find((call) => !call.success);
+    expect(failure).toMatchObject({
+      category: 'provider',
+      httpStatus: null,
+      retryAfterMs: null,
+      providerRequestId: null,
+    });
+    expect(Number.isFinite(failure.requestBytes)).toBe(true);
+    expect(failure.requestBytes).toBeGreaterThan(0);
+  });
+
+  it('survives error bodies that fail to load', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 502,
+        text: () => Promise.reject(new Error('unreadable')),
+      }),
+    );
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, maxRetries: 0 });
+    const result = await client.call({ apiKey: 'k', model: 'm', messages: [] });
+    // Retryable per categorization even though the attempt budget is exhausted.
+    expect(result.error).toMatchObject({ category: 'provider', retryable: true, attempts: 1 });
+  });
+
+  it('surfaces a protocol error when the response has no assistant message', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ choices: [] }) }),
+    );
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, maxRetries: 0 });
+    const result = await client.call({ apiKey: 'k', model: 'm', messages: [] });
+    expect(result.error).toMatchObject({ category: 'internal', retryable: false });
+    expect(result.error.message).toContain('no assistant message');
+  });
+
+  it('treats a tool-call-only response as empty for call()', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(toolCallResponse()));
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, maxRetries: 0 });
+    const result = await client.call({ apiKey: 'k', model: 'm', messages: [] });
+    expect(result.error).toMatchObject({ category: 'provider', attempts: 1 });
+    expect(result.error.message).toContain('empty response');
+  });
+
+  it('returns the defensive tail result when maxRetries is negative', async () => {
+    const client = createZaiClient({ fetch: vi.fn(), sleep: noSleep, maxRetries: -1 });
+    const result = await client.call({ apiKey: 'k', model: 'm', messages: [] });
+    expect(result).toMatchObject({
+      success: false,
+      usedFallback: false,
+      error: { category: 'internal', retryable: false, attempts: 0 },
+    });
+    expect(client.config).toMatchObject({ timeout: 30000, maxRetries: -1, baseDelay: 2000 });
+  });
+
+  it('uses the global fetch and the default sleeper when not injected', async () => {
+    const globalFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        headers: new Headers(),
+        text: async () => '',
+      })
+      .mockResolvedValueOnce(okResponse('done'));
+    vi.stubGlobal('fetch', globalFetch);
+    try {
+      const client = createZaiClient({ baseDelay: 1, maxRetries: 1 });
+      const result = await client.call({ apiKey: 'k', model: 'm', messages: [] });
+      expect(result).toMatchObject({ success: true, data: 'done' });
+      expect(globalFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('zai-client — chat deadlines and retries', () => {
+  it('aborts a hanging request at the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(
+        (_url, { signal }) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => {
+              const error = new Error('The operation was aborted');
+              error.name = 'AbortError';
+              reject(error);
+            });
+          }),
+      );
+      const onAttempt = vi.fn();
+      const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, now: () => 0 });
+
+      const pending = client.chat({
+        apiKey: 'k',
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        timeoutMs: 10000,
+        maxAttempts: 1,
+        onAttempt,
+      });
+      await vi.advanceTimersByTimeAsync(10000);
+      const result = await pending;
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatchObject({ category: 'timeout', retryable: true, attempts: 1 });
+      expect(result.error.message).toContain('timed out');
+      const failure = onAttempt.mock.calls.map(([call]) => call).find((call) => !call.success);
+      expect(failure.requestBytes).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clamps maxAttempts to at least one', async () => {
+    const onAttempt = vi.fn();
+    const client = createZaiClient({
+      fetch: vi.fn(() => Promise.resolve(okResponse('ok'))),
+      sleep: noSleep,
+    });
+    const result = await client.chat({
+      apiKey: 'k',
+      model: 'm',
+      messages: [],
+      maxAttempts: 0,
+      onAttempt,
+    });
+    expect(result.success).toBe(true);
+    expect(onAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, success: true }),
+    );
+  });
+
+  it('returns a timeout result when the deadline is already past', async () => {
+    const fixedNow = 1700000000000;
+    const fetchImpl = vi.fn();
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, now: () => fixedNow });
+    const result = await client.chat({
+      apiKey: 'k',
+      model: 'm',
+      messages: [],
+      deadlineAt: fixedNow - 5,
+    });
+    expect(result).toMatchObject({
+      success: false,
+      error: { category: 'timeout', retryable: true, attempts: 0 },
+    });
+    expect(result.error.message).toContain('Agent deadline exceeded');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('times out when the remaining budget cannot fit the next retry', async () => {
+    const fixedNow = 1700000000000;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 429,
+        headers: new Headers({ 'retry-after': '5' }),
+        text: async () => '',
+      }),
+    );
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep, now: () => fixedNow });
+    const result = await client.chat({
+      apiKey: 'k',
+      model: 'm',
+      messages: [],
+      deadlineAt: fixedNow + 12000,
+      maxAttempts: 4,
+    });
+    expect(result).toMatchObject({
+      success: false,
+      error: { category: 'timeout', retryable: true, attempts: 1, httpStatus: 429 },
+    });
+  });
+
+  it('retries a plain 500 without retry-after and succeeds', async () => {
+    const onAttempt = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        headers: new Headers(),
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'x-request-id': 'req-9' }),
+        json: async () => ({
+          choices: [{ message: { content: 'ok' } }],
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        }),
+      });
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep });
+    const result = await client.chat({ apiKey: 'k', model: 'm', messages: [], onAttempt });
+    expect(result.success).toBe(true);
+    expect(result.data.usage).toEqual({ promptTokens: 3, completionTokens: 2, totalTokens: 5 });
+    expect(result.data.transport).toMatchObject({ httpStatus: 200, providerRequestId: 'req-9' });
+    const successCall = onAttempt.mock.calls.map(([call]) => call).find((call) => call.success);
+    expect(successCall.providerRequestId).toBe('req-9');
+  });
+});
+
+describe('zai-client — header and usage parsing', () => {
+  it('reads provider request ids from several header names', async () => {
+    const withHeader = (name, value) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ [name]: value }),
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+    for (const [name, value] of [
+      ['request-id', 'r-1'],
+      ['x-trace-id', 't-1'],
+      ['x-request-id', ''],
+    ]) {
+      const client = createZaiClient({
+        fetch: vi.fn(() => Promise.resolve(withHeader(name, value))),
+        sleep: noSleep,
+      });
+      const result = await client.chat({ apiKey: 'k', model: 'm', messages: [] });
+      expect(result.data.transport.providerRequestId).toBe(value || null);
+    }
+  });
+
+  it('normalizes garbage usage values to nulls', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: 'ok' } }],
+          usage: { prompt_tokens: 'x', completion_tokens: null, total_tokens: 7 },
+        }),
+      }),
+    );
+    const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep });
+    const result = await client.chat({ apiKey: 'k', model: 'm', messages: [] });
+    expect(result.data.usage).toEqual({ promptTokens: null, completionTokens: null, totalTokens: 7 });
+  });
+
+  it('parses numeric and HTTP-date retry-after values', async () => {
+    const fixedNow = 1700000000000;
+    const withRetryAfter = (value) => ({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': value }),
+      text: async () => '',
+    });
+    const cases = [
+      ['2', 2000],
+      [new Date(fixedNow + 60000).toISOString(), 60000],
+      // Negative values fall through to the date parse, which clamps past
+      // dates to zero — an immediate retry, never a negative delay.
+      ['-1', 0],
+      ['not-a-date', null],
+    ];
+    for (const [value, expected] of cases) {
+      const onAttempt = vi.fn();
+      const client = createZaiClient({
+        fetch: vi.fn(() => Promise.resolve(withRetryAfter(value))),
+        sleep: noSleep,
+        now: () => fixedNow,
+        maxRetries: 0,
+      });
+      await client.chat({ apiKey: 'k', model: 'm', messages: [], maxAttempts: 1, onAttempt });
+      const failure = onAttempt.mock.calls.map(([call]) => call).find((call) => !call.success);
+      expect(failure.retryAfterMs).toBe(expected);
+    }
+  });
+
+  it('sanitizes missing messages and credentialed URLs', () => {
+    expect(sanitizeErrorMessage(null)).toBe('An unknown error occurred');
+    expect(sanitizeErrorMessage(new Error('failed https://user:pass@host/path'))).toBe(
+      'failed [URL_REDACTED]',
+    );
+  });
+});

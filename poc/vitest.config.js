@@ -42,16 +42,16 @@ export default defineConfig({
       include: ['workers/shared/**/*.js', 'workers/zai-main-worker/src/**/*.js'],
       exclude: ['workers/tests/**', '**/*.d.ts'],
       // Per-glob thresholds: a ratcheting floor (branches included) tracks
-      // the test-coverage paydown. Actuals after Phase 1: shared ~86%
+      // the test-coverage paydown. Actuals after Phase 3: shared ~90.5%
       // branches / ~97% lines, main-worker ~94% branches / ~99% lines.
-      // Ratchet the floor up as tests land: 90 after Phase 3, 93 after Phase 5.
+      // Final ratchet: 93 branches for shared after Phase 5.
       thresholds: {
-        'workers/shared/**': { lines: 70, functions: 70, branches: 85, statements: 70 },
+        'workers/shared/**': { lines: 90, functions: 90, branches: 90, statements: 90 },
         'workers/zai-main-worker/src/**': {
-          lines: 70,
-          functions: 70,
-          branches: 70,
-          statements: 70,
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
         },
       },
     },
