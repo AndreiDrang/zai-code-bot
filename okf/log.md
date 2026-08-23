@@ -2,6 +2,11 @@
 
 ## 2026-08-23
 
+- **Update**: Commands now execute only on `created` comment actions — added an action gate to [Command routing](/workflows/command-routing.md). `issue_comment.edited`/`.deleted` deliveries carry the full body but no longer re-run the LLM; the comments-slice mirror intentionally keeps refreshing on all three actions.
+- **Update**: [Cron self-healing sweep](/workflows/cron-self-healing.md) gained a fourth sweep — `requeueStrandedJobs()` re-enqueues `queued`/`retryable` jobs ≥120 s past `available_at` whose queue message was lost (early redelivery acked before its time, or a crash between the retryable transition and `message.retry()`). The queue consumer also re-delays claim-null redeliveries that arrive before `available_at` instead of acking them.
+- **Update**: A job that loses the [comment publication](/state/comment-publication.md) lease to a concurrent job now waits bounded time (15 s, 5 s poll) for the winner to finalize instead of silently skipping; on exhaustion the skip is logged as a structured warning and reported as `publicationSkipped` in the handler result.
+- **Update**: The inline `/zai help` path now updates only bot-owned comments (exact tracked id, GitHub App type `Bot`, or the configured/resolved PAT login via `isBotOwnedComment`); a user comment embedding the `zai-help` marker is never rewritten. `GITHUB_BOT_LOGIN` is an optional main-worker var.
+- **Update**: [Two-worker split](/architecture/two-worker-split.md) topology — the main worker's ingress is a single `custom_domain` route (the redundant `zone_name` route entry was removed from `wrangler.toml`).
 - **Update**: `/zai review` now ranks security-sensitive request boundaries,
   business logic, stateful infrastructure, deployment configuration, and
   behavior tests before lower-signal generated, lock, fixture, documentation,

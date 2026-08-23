@@ -34,6 +34,17 @@ Any other command remains syntactically parseable for a safe
 unsupported-command response but is not in `AVAILABLE_COMMANDS` and cannot
 reach a handler.
 
+## Action gating
+
+Only `created` comment actions may execute a command
+(`COMMAND_TRIGGER_ACTIONS` in `comment-events.js`). `issue_comment.edited`
+and `.deleted` deliveries still carry the full comment body, but re-running
+the LLM on them would trigger exactly what the user tried to retract, so the
+command gate skips them with a plain `200`. The comments-slice mirror
+intentionally still refreshes on all three actions — a deletion must
+propagate to the conversation snapshot even though execution must not. A
+missing `action` degrades to `created` (GitHub always sends one).
+
 ## Command job creation
 
 Unlike PR-event jobs, a command arrives on an `issue_comment`, which carries
