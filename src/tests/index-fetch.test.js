@@ -155,9 +155,16 @@ beforeEach(() => {
     getIssueComments: vi.fn().mockResolvedValue([]),
     getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'zai-pat-bot' }),
   };
-  GitHubClient.mockImplementation(function () {
-    return github;
-  });
+  // vitest 4 can only construct callable mocks; arrow-function
+  // implementations are rejected by `new`. Keep a constructable class
+  // here — lint autofixes must not rewrite this to an arrow function.
+  GitHubClient.mockImplementation(
+    class {
+      constructor() {
+        return github;
+      }
+    },
+  );
   authorizeCommenter.mockResolvedValue(true);
   enqueueJob.mockResolvedValue(true);
   createCommandJob.mockResolvedValue({ job: { job_id: 'cmd-1' }, created: true });
