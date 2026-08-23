@@ -31,6 +31,20 @@ export async function findPublication(db, repositoryId, prNumber, commentKind) {
   );
 }
 
+/**
+ * Ownership test for a comment the bot may safely rewrite. A comment is
+ * bot-owned when it is the exact id we previously published (tracked in
+ * comment_publications), was posted by a GitHub App (type 'Bot'), or was
+ * posted by the configured `botLogin` (a PAT-owned bot, type 'User').
+ * Used by both upsertComment and the inline /zai help path so a user comment
+ * that merely embeds a marker is never rewritten.
+ */
+export function isBotOwnedComment(comment, { botLogin = null, expectedCommentId = null } = {}) {
+  if (!comment || typeof comment.body !== 'string') return false;
+  if (expectedCommentId && comment.id === expectedCommentId) return true;
+  return comment.user?.type === 'Bot' || Boolean(botLogin && comment.user?.login === botLogin);
+}
+
 /** Atomically reserves the single live publication row for one job. */
 export async function claimPublication(
   db,
@@ -188,17 +202,17 @@ async function findMarkerComment(
   for (let page = 1; page <= 10; page += 1) {
     const comments = await github.getIssueComments(owner, repo, issueNumber, page, 100);
     if (!Array.isArray(comments) || comments.length === 0) return null;
-    const botComments = comments.filter((comment) => {
-      if (typeof comment.body !== 'string' || !comment.body.includes(marker)) return false;
-      // The exact comment we previously published — tracked by id in
-      // comment_publications — is unambiguously ours. Accept it regardless of
-      // whether it was posted by a GitHub App (type 'Bot') or a PAT-owned bot
-      // (type 'User'), so synchronize updates the existing comment instead of
-      // creating a new one when GITHUB_BOT_LOGIN is not configured.
-      if (expectedCommentId && comment.id === expectedCommentId) return true;
-      const login = comment.user?.login;
-      return comment.user?.type === 'Bot' || (botLogin && login === botLogin);
-    });
+    const botComments = comments.filter(
+      (comment) =>
+        typeof comment.body === 'string' &&
+        comment.body.includes(marker) &&
+        // The exact comment we previously published — tracked by id in
+        // comment_publications — is unambiguously ours. Accept it regardless of
+        // whether it was posted by a GitHub App (type 'Bot') or a PAT-owned bot
+        // (type 'User'), so synchronize updates the existing comment instead of
+        // creating a new one when GITHUB_BOT_LOGIN is not configured.
+        isBotOwnedComment(comment, { botLogin, expectedCommentId }),
+    );
     const match = expectedCommentId
       ? botComments.find((comment) => comment.id === expectedCommentId)
       : botComments[0];

@@ -129,6 +129,11 @@ describe('shared/github (GitHubClient)', () => {
       ]);
     });
 
+    it('getAuthenticatedUser GETs /user', async () => {
+      await client.getAuthenticatedUser();
+      expect(fetchSpy.mock.calls[0][0]).toBe('https://api.github.com/user');
+    });
+
     it('postComment POSTs to the issues-comments endpoint with a body', async () => {
       await client.postComment('o', 'r', 42, 'hello');
       const [url, opts] = fetchSpy.mock.calls[0];

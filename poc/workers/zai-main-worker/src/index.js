@@ -20,6 +20,7 @@ import {
 import { authorizeCommenter } from '../../shared/auth.js';
 import { createLogger, generateCorrelationId } from '../../shared/logging.js';
 import { COMMENT_MARKER, BOT_FOOTER, HELP_MARKER } from '../../shared/constants.js';
+import { isBotOwnedComment } from '../../shared/comments.js';
 import { classifyCommand } from './router.js';
 import {
   extractPullRequestEvent,
@@ -183,7 +184,8 @@ export default {
       const bucket = classifyCommand(parsed.type);
 
       if (bucket === 'help') {
-        await postHelp(github, owner, name, webhookData.issue.number);
+        const botLogin = await resolveBotLogin(env, github);
+        await postHelp(github, owner, name, webhookData.issue.number, botLogin);
         return json(200, { status: 'help', command: parsed.type });
       }
 
@@ -348,12 +350,32 @@ async function postUnsupported(github, owner, name, issueNumber, commandType) {
   }
 }
 
-async function postHelp(github, owner, name, issueNumber) {
+/**
+ * Resolves the login that owns this deployment's GitHub token, so help-comment
+ * updates can recognize PAT-owned (type 'User') bot comments. Prefers an
+ * explicit GITHUB_BOT_LOGIN var; otherwise asks the API once (help is rare,
+ * no caching warranted). Resolving is best-effort: on failure only comments
+ * from GitHub Apps (type 'Bot') match, which at worst posts a fresh help
+ * comment instead of updating a PAT-owned one — never rewrites a user's.
+ */
+async function resolveBotLogin(env, github) {
+  if (env?.GITHUB_BOT_LOGIN) return env.GITHUB_BOT_LOGIN;
+  try {
+    return (await github.getAuthenticatedUser())?.login || null;
+  } catch {
+    return null;
+  }
+}
+
+async function postHelp(github, owner, name, issueNumber, botLogin = null) {
   try {
     const comments = await github.getIssueComments(owner, name, issueNumber);
     const existing = Array.isArray(comments)
       ? comments.find(
-          (comment) => typeof comment.body === 'string' && comment.body.includes(HELP_MARKER),
+          (comment) =>
+            typeof comment.body === 'string' &&
+            comment.body.includes(HELP_MARKER) &&
+            isBotOwnedComment(comment, { botLogin }),
         )
       : null;
     if (existing?.id) {

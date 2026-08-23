@@ -82,6 +82,11 @@ export class GitHubClient {
     return this.request('GET', `/repos/${owner}/${repo}`);
   }
 
+  /** The authenticated user behind this token (used to recognize PAT-owned bot comments). */
+  getAuthenticatedUser() {
+    return this.request('GET', '/user');
+  }
+
   /** Posts a comment to an issue or PR. */
   postComment(owner, repo, issueNumber, body) {
     return this.request('POST', `/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body });

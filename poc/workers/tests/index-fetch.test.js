@@ -153,6 +153,7 @@ beforeEach(() => {
     postComment: vi.fn().mockResolvedValue({}),
     updateComment: vi.fn().mockResolvedValue({}),
     getIssueComments: vi.fn().mockResolvedValue([]),
+    getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'zai-pat-bot' }),
   };
   GitHubClient.mockImplementation(() => github);
   authorizeCommenter.mockResolvedValue(true);
@@ -417,13 +418,55 @@ describe('inline commands', () => {
   });
 
   it('updates the existing help comment instead of posting a new one', async () => {
-    github.getIssueComments.mockResolvedValue([{ id: 55, body: `old help ${HELP_MARKER} old` }]);
+    github.getIssueComments.mockResolvedValue([
+      { id: 55, body: `old help ${HELP_MARKER} old`, user: { login: 'zai-bot', type: 'Bot' } },
+    ]);
 
     const res = await signedRequest({ body: prCommentPayload({ body: '/zai help' }) });
 
     expect(res.status).toBe(200);
     expect(github.updateComment).toHaveBeenCalledWith('owner', 'repo', 55, formatHelp());
     expect(github.postComment).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite a user comment embedding the help marker', async () => {
+    github.getIssueComments.mockResolvedValue([
+      { id: 77, body: `nice try ${HELP_MARKER}`, user: { login: 'mallory', type: 'User' } },
+    ]);
+
+    const res = await signedRequest({ body: prCommentPayload({ body: '/zai help' }) });
+
+    expect(res.status).toBe(200);
+    expect(github.updateComment).not.toHaveBeenCalled();
+    expect(github.postComment).toHaveBeenCalledWith('owner', 'repo', 7, formatHelp());
+  });
+
+  it('updates a PAT-owned help comment via the resolved bot login', async () => {
+    github.getAuthenticatedUser.mockResolvedValue({ login: 'pat-bot' });
+    github.getIssueComments.mockResolvedValue([
+      { id: 88, body: `help ${HELP_MARKER}`, user: { login: 'pat-bot', type: 'User' } },
+    ]);
+
+    const res = await signedRequest({ body: prCommentPayload({ body: '/zai help' }) });
+
+    expect(res.status).toBe(200);
+    expect(github.updateComment).toHaveBeenCalledWith('owner', 'repo', 88, formatHelp());
+    expect(github.postComment).not.toHaveBeenCalled();
+  });
+
+  it('prefers GITHUB_BOT_LOGIN over the API lookup', async () => {
+    github.getIssueComments.mockResolvedValue([
+      { id: 99, body: `help ${HELP_MARKER}`, user: { login: 'configured-bot', type: 'User' } },
+    ]);
+
+    const res = await signedRequest(
+      { body: prCommentPayload({ body: '/zai help' }) },
+      makeEnv({ GITHUB_BOT_LOGIN: 'configured-bot' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(github.updateComment).toHaveBeenCalledWith('owner', 'repo', 99, formatHelp());
+    expect(github.getAuthenticatedUser).not.toHaveBeenCalled();
   });
 
   it('answers 200 even when the help lookup fails (best-effort)', async () => {
