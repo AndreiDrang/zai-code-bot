@@ -2,6 +2,12 @@
 
 [![codecov](https://codecov.io/gh/AndreiDrang/zai-code-bot/graph/badge.svg?token=OZYcalMMXv)](https://codecov.io/gh/AndreiDrang/zai-code-bot)
 
+> [!NOTE]
+> **Disclaimer:** This repository and bot are a personal project and are **not
+> affiliated with, endorsed by, or related to Z.ai / Zhipu AI** in any way.
+> The bot is an independent tool that simply uses the publicly available Z.ai
+> model API to power its review and describe features.
+
 Cloudflare Workers that turn `/zai` GitHub PR comments into Z.ai-powered
 review and describe results:
 
@@ -12,8 +18,6 @@ review and describe results:
   one marker-owned review comment.
 - `/zai describe` — synthesizes a pull-request description from commit history
   and updates the marker-owned section of the PR body.
-
-All other commands are intentionally unsupported.
 
 ## Architecture
 
