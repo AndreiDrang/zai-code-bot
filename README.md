@@ -1,144 +1,161 @@
-# Zai Code Bot
+# Z.ai Code Bot
 
-[![codecov](https://codecov.io/gh/AndreiDrang/zai-code-bot/graph/badge.svg?token=OZYcalMMXv)](https://codecov.io/gh/AndreiDrang/zai-code-bot)
+Cloudflare Workers that turn `/zai` GitHub PR comments into Z.ai-powered
+review and describe results:
 
-GitHub Action for automatic PR reviews and context-rich `/zai` commands powered by Z.ai models.
+- `/zai help` — lists the available commands. Handled inline by the main
+  Worker after signature verification and authorization; no D1 job, no Queue
+  message.
+- `/zai review` — runs a full-context pull-request review with Z.ai and updates
+  one marker-owned review comment.
+- `/zai describe` — synthesizes a pull-request description from commit history
+  and updates the marker-owned section of the PR body.
 
-## Features
+All other commands are intentionally unsupported.
 
-- Automatic pull request review on `opened` and `synchronize`
-- Interactive PR commands: `/zai ask`, `/zai review`, `/zai explain`, `/zai describe`, `/zai impact`, `/zai update-agents`, `/zai help`
-- Scheduled tasks (cron): periodically regenerate `AGENTS.md` files and open PRs (see [Scheduled Tasks](docs/scheduled-tasks.md))
-- Context-aware command prompts with full-file, diff, and thread context
-- Inline review-comment support (`pull_request_review_comment`) with file/line anchors
-- `/zai explain` auto-detects selected line range from review comments
-- Large-file token protection using scoped windows/enclosing blocks instead of full-file dumps
-- Large-PR auto-review batching with final synthesis for PRs that exceed single-request context limits
-- Prefix normalization: use either `/zai ...` or `@zai-bot ...`
-- Threaded command replies with progress feedback and lifecycle reactions
-- Marker-based idempotent comments to avoid duplicate review spam
-- Fork-aware authorization with fork-PR creator command allowance
+## Architecture
 
-## Quickstart
-
-Create `.github/workflows/code-review.yml`:
-
-```yaml
-name: Zai Code Bot
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request) || github.event_name == 'pull_request_review_comment'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run Zai Code Bot
-        uses: AndreiDrang/zai-code-bot@v0.0.6
-        with:
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          ZAI_MODEL: ${{ vars.ZAI_MODEL }}
-          GITHUB_TOKEN: ${{ github.token }}
+```mermaid
+flowchart TD
+  GH[GitHub webhook] --> MAIN[zai-main-worker]
+  MAIN -->|verify signature and authorize| D1[(D1)]
+  MAIN -->|small job ID| Q[[bot-jobs Queue]]
+  Q --> HEAVY[zai-heavy-worker]
+  HEAVY -->|read context| R2[(R2)]
+  HEAVY -->|review or describe| ZAI[Z.ai API]
+  HEAVY -->|comment or PR body update| GH
 ```
 
-## Inputs
+`zai-main-worker` (`src/zai-main-worker/`) is the public webhook ingress: it
+verifies the HMAC signature, authorizes commenters, refreshes PR context, and
+publishes opaque `{ schemaVersion, jobId }` messages to the `bot-jobs` Queue.
+It also runs the bounded cron sweep that recovers expired jobs and replays the
+outbox.
 
-| Input | Required | Default | Description |
-|---|---|---|---|
-| `ZAI_API_KEY` | Yes | - | Z.ai API key |
-| `ZAI_MODEL` | No | `glm-5.2` | Z.ai model for review and commands |
-| `GITHUB_TOKEN` | No | `${{ github.token }}` | Token used for GitHub API calls |
-| `ZAI_TIMEOUT` | No | `30000` | Z.ai API request timeout in milliseconds |
-| `ZAI_AUTO_REVIEW_LARGE_PR_FILE_THRESHOLD` | No | `50` | Patchable file count that switches PR auto-review into batched mode |
-| `ZAI_AUTO_REVIEW_MAX_BATCH_CHARS` | No | `120000` | Approximate character budget per batched PR auto-review request |
-| `ZAI_AUTO_REVIEW_MAX_FILES_PER_BATCH` | No | `40` | Maximum distinct files included in each batched PR auto-review request |
-| `ZAI_AUTO_REVIEW_MAX_PATCH_CHARS` | No | `18000` | Maximum diff characters per file chunk before a large patch is split across review parts |
-| `ZAI_SCHEDULED_ENABLED` | No | `true` | Master switch for the scheduled-tasks pipeline |
-| `ZAI_SCHEDULED_CONFIG_PATH` | No | `.zai-scheduled.yml` | Path to the scheduled-tasks config file |
-| `ZAI_AGENTS_GIST_URL` | No | - | Fallback Gist URL for the `update-agents` task (lowest priority) |
+`zai-heavy-worker` (`src/zai-heavy-worker/`) is the private Queue consumer: it
+claims jobs in D1 and runs the `review`, `describe`, `pr_context`, and internal
+`pr_summary` handlers. It has no HTTP endpoint and no service binding.
+Review/describe results are published idempotently through marker-owned GitHub
+comments; `describe` also updates only its own section in the PR body;
+`pr_summary` stores structured JSON context in R2 and does not publish a
+GitHub comment.
 
-## Commands
+## Command flow
 
-Commands are processed from PR issue comments and PR review comments. Supported prefixes: `/zai` and `@zai-bot`.
+```mermaid
+sequenceDiagram
+  participant G as GitHub
+  participant M as Main Worker
+  participant D as D1
+  participant Q as bot-jobs
+  participant H as Heavy Worker
+  participant Z as Z.ai
 
-| Command | Usage | Description |
-|---------|-------|-------------|
-| `/zai ask` | `/zai ask <question>` | Ask a question about the code changes in this PR |
-| `/zai review` | `/zai review [file]` | Review specific files or all changed files |
-| `/zai explain` | `/zai explain <lines>` | Explain selected lines (e.g., `/zai explain 10-25`) |
-| `/zai describe` | `/zai describe` | Generate a PR description from commit messages |
-| `/zai impact` | `/zai impact` | Analyze potential impact of changes |
-| `/zai update-agents` | `/zai update-agents` | Regenerate `AGENTS.md` files on demand (same as the scheduled task) |
-| `/zai help` | `/zai help` | Show command help |
-
-**Note:** Only collaborators (and PR authors on their own fork PRs) can use these commands.
-
-## Behavior
-
-- PR auto-review comments are idempotent and updated via hidden markers
-- Large PRs are reviewed in multiple batches and then synthesized into one final review comment
-- Command replies are posted in-thread to the invoking comment
-- Reactions indicate status (`eyes`, `thinking`, `rocket`, `x`)
-- `/zai explain` can infer the target range from a selected line review comment when no explicit range is provided
-- `/zai review` uses base/head or full-file context, not patch-only prompts
-- Command execution is authorization-gated; fork PR authors can run commands on their own PR
-- If GitHub's changed-files API limit is reached, the final review notes that coverage is incomplete beyond the platform ceiling
-
-## Scheduled Tasks
-
-In addition to PR review and `/zai` commands, Zai Code Bot can run tasks on a
-schedule. The built-in `update-agents` task periodically regenerates your
-`AGENTS.md` knowledge files and opens a pull request with the changes — a PR is
-created only when at least one file actually changed.
-
-### Minimal setup
-
-1. Add a `.zai-scheduled.yml` to your repo root (copy `.zai-scheduled.yml.template`).
-2. Put the generation command in a public Gist and expose its raw URL via the
-   `ZAI_AGENTS_GIST_URL` action input (or `gist_url` in the config).
-3. Add a `schedule` (cron) workflow that runs the action. A ready-to-use
-   workflow snippet is included in `.zai-scheduled.yml.template`.
-
-### `gist_url` priority
-
-The Gist URL is resolved first-non-empty-wins:
-`task.config.gist_url` > `defaults.gist_url` > `ZAI_AGENTS_GIST_URL`.
-
-### Manual run
-
-Trigger an AGENTS.md regeneration on any PR with:
-
-```
-/zai update-agents
+  G->>M: webhook (/zai review or /zai describe)
+  M->>M: verify signature and collaborator
+  M->>D: create durable command job
+  M->>Q: publish {schemaVersion, jobId}
+  M-->>G: 202 Accepted
+  Q->>H: deliver job ID
+  H->>D: claim lease
+  H->>Z: send bounded context
+  Z-->>H: Markdown result
+  H->>G: upsert comment / update PR body
+  H->>D: mark succeeded
 ```
 
-For the full configuration reference, cron syntax, schedule-matching behavior,
-troubleshooting, and examples, see **[docs/scheduled-tasks.md](docs/scheduled-tasks.md)**.
+Pull-request `opened`, `reopened`, `synchronize`, and `ready_for_review` events
+create a `pr_context` job. The gatherer stores V2 context in R2 under
+`v2/prs/{repositoryId}/{prNumber}/context/`: manifest, files, commits,
+description, comments, and one patch artifact for each changed text file. After
+the manifest is committed, it creates an idempotent `pr_summary` job for the
+same PR head and publishes it immediately when the heavy worker's queue
+producer is available; the D1 outbox remains the recovery path. That job sends
+bounded context reconstructed from the V2 per-file patches to Z.ai, validates
+the structured JSON response, and stores it at
+`v2/prs/{repositoryId}/{prNumber}/context/pr-summary.json`. A later review
+command uses a matching-head summary as auxiliary context and treats the
+reconstructed snapshot diff as authoritative.
 
-## Setup
+## Repository layout
 
-1. Generate a Z.ai API key from your Z.ai account.
-2. In GitHub repository settings, add `ZAI_API_KEY` to **Secrets and variables -> Actions**.
-3. (Optional) Add repository variable `ZAI_MODEL` to override the default model.
+```text
+src/
+├── shared/               # GitHub, Z.ai, auth, comments, D1/R2/KV libraries
+├── zai-main-worker/      # webhook ingress and job publisher (own AGENTS.md)
+├── zai-heavy-worker/     # Queue consumer and command handlers (own AGENTS.md)
+└── tests/                # Workers unit tests
+```
 
-## Contributing
+## Configuration
 
-Contributions are welcome. See `CONTRIBUTING.md`.
+Worker-specific bindings and routes are defined in
+`src/zai-main-worker/wrangler.toml` and `src/zai-heavy-worker/wrangler.toml`.
+D1, R2, KV, and Queue bindings are shared by both workers.
+
+The main worker requires:
+
+| Binding                 | Purpose                                       |
+| ----------------------- | --------------------------------------------- |
+| `GITHUB_WEBHOOK_SECRET` | GitHub HMAC webhook secret                    |
+| `GITHUB_TOKEN`          | GitHub API token for authorization and writes |
+| `BOT_DB`                | Durable job and publication state             |
+| `BOT_JOBS`              | Queue producer                                |
+| `BOT_ARTIFACTS`         | Gathered PR context and command results       |
+| `BOT_CACHE`             | Repository configuration and PR card cache    |
+
+The heavy worker consumes `BOT_JOBS` and requires `GITHUB_TOKEN`, `ZAI_API_KEY`,
+`BOT_DB`, `BOT_ARTIFACTS`, and `BOT_CACHE`. The model is controlled by
+`ZAI_MODEL` and defaults to `glm-5.2`.
+
+Required secrets are `GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`, and `ZAI_API_KEY`.
+Secrets are configured through Cloudflare Secrets Store; no credentials belong
+in `wrangler.toml` or source files.
+
+## Development and deployment
+
+```bash
+npm install
+npm test
+npm run dev:main
+npm run dev:heavy
+npm run deploy:main
+npm run deploy:heavy
+```
+
+The main worker webhook URL must be configured in the GitHub repository webhook
+settings for `pull_request`, `issue_comment`, and
+`pull_request_review_comment` events.
+
+Prompt sources live in `src/zai-heavy-worker/prompts/`; regenerate committed
+prompt modules with `npm run generate:prompts` from that worker directory.
+
+## Queue contract
+
+Queue messages contain no secrets or patches:
+
+```json
+{
+  "schemaVersion": 1,
+  "jobId": "d1-job-id"
+}
+```
+
+D1 is authoritative. A consumer acknowledges completed and terminally failed
+jobs, retries transient failures, and a five-minute main-worker cron recovers
+expired leases and unpublished outbox rows.
+
+## Security
+
+- Webhook signatures are verified with Web Crypto before payload processing.
+- Commands require collaborator authorization.
+- Queue payloads contain only an opaque D1 job ID.
+- User-visible errors are sanitized; provider credentials are never posted.
+- The heavy worker has no public route or service binding endpoint.
+
+See [SECURITY.md](SECURITY.md) for trust boundaries and [RUNBOOK.md](RUNBOOK.md)
+for operational failure modes and recovery.
 
 ## License
 
-This project is licensed under MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).

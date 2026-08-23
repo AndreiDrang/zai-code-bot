@@ -1,0 +1,75 @@
+# zai-heavy-worker — consumes durable review, describe, and PR-context jobs.
+name = "zai-heavy-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-05"
+
+[vars]
+NODE_ENV = "production"
+ZAI_MODEL = "glm-5.3"
+R2_RETENTION_DAYS = "180"
+
+# Production resources shared with zai-main-worker.
+# Replace placeholder IDs before deploy.
+
+# No public route: this worker is reached ONLY through the Queue consumer.
+# Disable the default workers.dev route so it has no public ingress at all.
+workers_dev = false
+
+[[d1_databases]]
+binding = "BOT_DB"
+database_name = "bot-db"
+database_id = "2f6c5cd9-ec01-44ad-8ea8-fb1bb5523226"
+
+[[r2_buckets]]
+binding = "BOT_ARTIFACTS"
+bucket_name = "bot-storage"
+
+[[queues.producers]]
+binding = "BOT_JOBS"
+queue = "bot-jobs"
+
+# R2 lifecycle for the PR-context tier: objects under `v2/prs/` expire after
+# R2_RETENTION_DAYS (30). This is a BUCKET-level rule —
+# wrangler.toml has no declarative lifecycle key — apply it once via the CLI:
+#   npx wrangler r2 bucket lifecycle add bot-storage \
+#     --id pr-context-retention --prefix "v2/prs/" --expire-days 30
+# Run-outputs under `v1/runs/` are NOT covered here: they are indexed by the
+# `artifacts` D1 table and swept by deleteExpiredArtifacts on the cron.
+
+[[kv_namespaces]]
+binding = "BOT_CACHE"
+id = "a0fca8c009de4e57a0d241d5ebcaf055"
+
+[[queues.consumers]]
+queue = "bot-jobs"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+
+[placement]
+mode = "smart"
+
+# Secrets — sourced from Cloudflare Secrets Store (NOT per-worker secrets).
+# Same store as zai-main-worker (shared). `binding` = env var the code reads;
+# `secret_name` = key inside the store.
+# Store id: 629e5dd6594845a889e6ddabb26cc009
+#   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT for result comments)
+#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key)
+[[secrets_store_secrets]]
+binding = "GITHUB_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_API_KEY"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_API_KEY"

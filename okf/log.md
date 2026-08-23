@@ -1,0 +1,106 @@
+# Knowledge Bundle Update Log
+
+## 2026-08-24
+
+- **Update**: The workspace migrated from `poc/` to the standard layout — the
+  Workers implementation now lives under `src/` (`src/zai-main-worker/`,
+  `src/zai-heavy-worker/`, `src/shared/`, `src/tests/`) and the npm project
+  moved to the repository root (`package.json`, `vitest.config.js`, `Makefile`,
+  CI). No Concept IDs changed; every concept's `source_paths` and body path
+  references were rewritten (`poc/workers/…` → `src/…`, `poc/README.md` →
+  `README.md`), and POC wording was dropped from titles and prose. Repository
+  evidence and executable behavior are otherwise unchanged.
+
+## 2026-08-23
+
+- **Update**: Commands now execute only on `created` comment actions — added an action gate to [Command routing](/workflows/command-routing.md). `issue_comment.edited`/`.deleted` deliveries carry the full body but no longer re-run the LLM; the comments-slice mirror intentionally keeps refreshing on all three actions.
+- **Update**: [Cron self-healing sweep](/workflows/cron-self-healing.md) gained a fourth sweep — `requeueStrandedJobs()` re-enqueues `queued`/`retryable` jobs ≥120 s past `available_at` whose queue message was lost (early redelivery acked before its time, or a crash between the retryable transition and `message.retry()`). The queue consumer also re-delays claim-null redeliveries that arrive before `available_at` instead of acking them.
+- **Update**: A job that loses the [comment publication](/state/comment-publication.md) lease to a concurrent job now waits bounded time (15 s, 5 s poll) for the winner to finalize instead of silently skipping; on exhaustion the skip is logged as a structured warning and reported as `publicationSkipped` in the handler result.
+- **Update**: The inline `/zai help` path now updates only bot-owned comments (exact tracked id, GitHub App type `Bot`, or the configured/resolved PAT login via `isBotOwnedComment`); a user comment embedding the `zai-help` marker is never rewritten. `GITHUB_BOT_LOGIN` is an optional main-worker var.
+- **Update**: [Two-worker split](/architecture/two-worker-split.md) topology — the main worker's ingress is a single `custom_domain` route (the redundant `zone_name` route entry was removed from `wrangler.toml`).
+- **Update**: `/zai review` now ranks security-sensitive request boundaries,
+  business logic, stateful infrastructure, deployment configuration, and
+  behavior tests before lower-signal generated, lock, fixture, documentation,
+  or mechanical files. Its agent profile permits 50 calls and 256 KiB of
+  accepted tool-result data. Repeated identical tool requests are skipped.
+- **Update**: Retrieval budgets now trigger a no-tools finalization request
+  rather than a terminal job failure. `iterations` is telemetry rather than a
+  limit, so a review may use all 50 allowed Context Tool calls even when the
+  model requests them one at a time. Review metadata records the finalization
+  reason and the count of requested versus admitted calls.
+- **Update**: Increased the review agent's absolute wall-clock deadline from
+  two to five minutes. Gathering requests now receive a fixed 90-second
+  timeout and at most two total attempts, bounded by a deadline before the
+  40-second finalization reserve; direct calls retain progressive retries.
+  A gathering timeout after successful tool retrieval spends the reserve on one
+  35-second no-tools final answer rather than issuing progressively shorter
+  retries. Per-attempt logs add safe request timing, body-size, HTTP-status,
+  retry-after, and provider-request-ID telemetry. Review artifacts and GitHub
+  comments continue to end with server-generated metadata for executed tools,
+  accepted per-file diff paths, retrieved bytes, and finalization status.
+
+## 2026-08-22
+
+- **Update**: Bounded the [Agent tool-calling loop](/contracts/agent-runner.md)
+  with an absolute Z.ai retry deadline and a cumulative UTF-8 tool-result
+  budget. `/zai review` now applies tighter workflow-specific retrieval limits
+  and directs the model to inspect a changed-file diff before requesting full
+  source.
+- **Update**: Increased `/zai review`'s context-tool limit from 12 to 20 calls.
+  A terminal tool-limit failure now creates or updates the marker-owned PR
+  review comment with the configured limit and the number of context requests
+  completed.
+- **Update**: Replaced terminal LLM failure category labels in PR comments with
+  safe, actionable explanations. Comments now identify the applicable retry,
+  context-retrieval, or investigation progress without exposing raw provider
+  responses.
+- **Update**: Corrected [LLM command execution](/workflows/llm-command-execution.md)
+  and [Agent context tools](/contracts/agent-context-tools.md): `describe` and
+  internal `pr_summary`, like review, run through AgentRunner with Context
+  Tools; describe is not a direct-only Z.ai call.
+- **Update**: Retryable LLM provider failures now participate in the durable
+  [three-attempt retry budget](/rules/retry-budget.md) without publishing an
+  intermediate GitHub failure comment. Terminal/non-retryable failures publish
+  one safe marker-owned notice and record a failed job.
+
+## 2026-08-17
+
+- **Update**: Corrected the deployed-model fact in [PR-summary job](/workflows/pr-summary-job.md) and [LLM command execution](/workflows/llm-command-execution.md): `ZAI_MODEL` in both wrangler configs deploys `glm-5.3` (commit `816a09e` predating the previous refresh); `glm-5.2` remains only the in-code fallback, not the effective production model.
+- **Update**: Added the shared GitHub REST client (`shared/github.js`, `GitHubClient`) to the provenance of [Collaborator authorization](/rules/authorization.md), [PR-context gather pipeline](/workflows/pr-context-pipeline.md), and [Agent context tools](/contracts/agent-context-tools.md) — it was previously uncited although it is the transport for the collaborator check, gather pagination, and the live `get_file`/`get_file_range` reads.
+- **Update**: Documented base-prompt provenance in [LLM command execution](/workflows/llm-command-execution.md) and [PR-summary job](/workflows/pr-summary-job.md): the role prompts are human-authored in `prompts/*.txt` and generated into `generated/prompts.js` by `scripts/generate-prompts.mjs`; the review base prompt is composed with the shared policies by `shared/prompts/review.js`.
+- **Create**: [PR-summary job](/workflows/pr-summary-job.md) — the internal `pr_summary` job (migration 0003) that converts a committed V2 snapshot into strictly validated `pr-summary.json` auxiliary context with no GitHub comment.
+- **Create**: [LLM command execution](/workflows/llm-command-execution.md) — the shared `runLlmCommand` lifecycle: guards, direct/agent Z.ai call, `/context/{command}.md` result persistence, marker-idempotent publication. Previously this knowledge was spread across command routing and comment publication.
+- **Create**: [Agent context tools](/contracts/agent-context-tools.md) — the seven read-only LLM tools (list_changed_files, get_diff, get_file, get_file_range, get_description, get_commits, get_comments) over the immutable V2 snapshot, served through the Context Service DTO layer.
+- **Create**: [Agent tool-calling loop](/contracts/agent-runner.md) — the bounded provider-neutral runner (10 iterations / 30 tool calls / 120 s) with protocol validation and safe tool errors.
+- **Update**: Review prompt composition now separates the static review and
+  context-retrieval policy, the untrusted PR-specific initial context, and
+  tool-local descriptions. Repository content is explicitly untrusted; raw
+  storage implementation details never reach the model.
+- **Update**: Rewrote [PR-context gather pipeline](/workflows/pr-context-pipeline.md) for the V2 storage redesign — per-file `diffs/` patches under `v2/prs/`, 1 MiB/file + 20 MiB snapshot budgets with explicit skip reasons, manifest-as-commit-marker, four-point stale-head rejection, and pr_summary scheduling.
+- **Update**: [Storage authority model](/architecture/storage-authority-model.md) now describes the V2 context tier (including command results and pr-summary.json under the context prefix), the independent `PR_CONTEXT_STORAGE_VERSION`, and the Context Service as the sole application reader.
+- **Update**: [D1 storage schema](/datasets/d1-storage-schema.md) — migrations 0002 (command surface) and 0003 (pr_summary) were added after the single-migration consolidation; documented the CHECK-constraint rebuild pattern.
+- **Update**: [30-day R2 retention](/rules/r2-retention.md) now targets the `v2/prs/` prefix and records an open discrepancy: `R2_RETENTION_DAYS = "180"` in vars vs 30 everywhere else (variable is unread by code).
+- **Update**: Refreshed [webhook ingress](/workflows/webhook-ingress.md) (slice-mirror refreshes + PR-context fork), [command routing](/workflows/command-routing.md) (head resolution for command jobs, four job kinds), [job lifecycle](/state/job-lifecycle.md) (job-kind table), [transactional outbox](/contracts/transactional-outbox.md) + [queue message](/contracts/queue-message.md) (heavy worker as a producer), [two-worker split](/architecture/two-worker-split.md) (topology resolved), [comment publication](/state/comment-publication.md) and [retry budget](/rules/retry-budget.md) (links), plus all directory indexes.
+- **Conflict**: Repository `wrangler.toml` sets `R2_RETENTION_DAYS = "180"` while the documented lifecycle rule, comments, and the application constant say 30. The sweep uses the 30-day constant; recorded as an open question in [R2 retention](/rules/r2-retention.md) rather than silently restating either number as fact.
+
+## 2026-08-07
+
+- **Note**: Documented a known limitation of the incremental slice refresh — it deliberately does not touch `manifest.json` (single-key `put`, no read-modify-write), so the manifest's derived `counts.issueComments`/`counts.reviewComments` lag between a comments refresh and the next gather. Only `renderContextSummary`'s coverage line reads them (the `/zai impact` stub notice and a decorative line in `/zai review`); actual review content reads fresh slices directly. Cosmetic, self-heals on next push.
+- **Update**: Added an incremental context-slice refresh mode to the [PR-context pipeline](/workflows/pr-context-pipeline.md) — a second writer (main worker) keeps individual slices fresh between gathers, with no D1 job or schema change. `issue_comment` created/edited/deleted on a PR full-refreshes `comments.json`; `pull_request.edited` with `changes.body` writes `description.md` straight from the payload body (no API call). Both are best-effort `ctx.waitUntil` writes.
+- **Update**: Refreshed the bundle for the per-PR context redesign + live `/zai review`. Re-keyed PR context from per-head (`v1/prs/{repo}/{pr}/{head}/context/{kind}`) to per-PR (`v1/prs/{repo}/{pr}/context/{kind}`): the snapshot is now overwritten on each new head, with the head stamped inside `manifest.headSha` (skip-same-head / overwrite-newer). Updated [PR-context gather pipeline](/workflows/pr-context-pipeline.md), [Storage authority model](/architecture/storage-authority-model.md), and [R2 retention](/rules/r2-retention.md).
+- **Update**: `/zai review` graduated from stub to a live durable LLM job (Z.ai client + `response.json` run-output + marker-idempotent review comment). Updated [Command routing](/workflows/command-routing.md), [One-live-comment publication](/state/comment-publication.md) (added the `review` comment kind), and the gather's diff fallback (reconstruction from per-file patches for >300-file PRs, `diffSource` manifest field) + full commit messages (`title` + `message`).
+- **Update**: Consolidated D1 migrations 0001–0004 into a single cumulative `0001_storage_foundation.sql`. Reframed the [D1 schema](/datasets/d1-storage-schema.md) around the single migration + D1 constraints (no BEGIN/COMMIT; FK always on); fixed broken `source_paths` in [job lifecycle](/state/job-lifecycle.md) and [comment publication](/state/comment-publication.md).
+- **Create**: [PR-context gather pipeline](/workflows/pr-context-pipeline.md) — eager gather of PR task context into deterministic R2 keys + a KV pr-card; consumed by review and describe.
+- **Update**: Synced the bundle + README to the storage-tier redesign: R2 is the PR-context blob tier, KV is a read-through cache, and D1 is authoritative. Updated [Storage authority model](/architecture/storage-authority-model.md), [R2 retention](/rules/r2-retention.md), [D1 storage schema](/datasets/d1-storage-schema.md), [Queue message](/contracts/queue-message.md), [Job lifecycle](/state/job-lifecycle.md), and the directory/root indexes.
+- **Removed**: The metadata-only PR preview and closed lifecycle were removed when the product surface was narrowed to review and describe.
+- **Create**: Added [Unified bot comment footer](/rules/comment-footer.md) — the shared `BOT_FOOTER` now terminates every bot comment.
+- **Historical**: The former metadata-only preview was replaced by the review/describe command flow.
+- **Update**: Refreshed [One-live-comment publication](/state/comment-publication.md), [Queue message format](/contracts/queue-message.md), [30-day R2 retention](/rules/r2-retention.md), and [Storage authority model](/architecture/storage-authority-model.md) to drop file-manifest references and reflect the metadata-only brief.
+- **Creation**: Initialized the OKF bundle documenting the `poc/` Cloudflare Workers business logic. Created 14 concepts across six semantic directories:
+  - `architecture/`: [Two-worker split](/architecture/two-worker-split.md), [Storage authority model](/architecture/storage-authority-model.md).
+  - `workflows/`: [Webhook ingress](/workflows/webhook-ingress.md), [Command routing](/workflows/command-routing.md), [PR-context pipeline](/workflows/pr-context-pipeline.md), [Cron self-healing sweep](/workflows/cron-self-healing.md).
+  - `state/`: [Job lifecycle and bounded leases](/state/job-lifecycle.md), [One-live-comment publication](/state/comment-publication.md).
+  - `rules/`: [Three-attempt retry budget](/rules/retry-budget.md), [30-day R2 retention](/rules/r2-retention.md), [Collaborator authorization](/rules/authorization.md).
+  - `contracts/`: [Queue message format](/contracts/queue-message.md), [Transactional outbox](/contracts/transactional-outbox.md).
+  - `datasets/`: [D1 storage schema](/datasets/d1-storage-schema.md).
+- **Note**: Bundle written at repository root (`okf/`) per explicit request, though evidence scope is `poc/`. Source paths are repo-root-relative.

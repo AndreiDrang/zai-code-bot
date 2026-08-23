@@ -138,3 +138,9 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .sisyphus/
 .osgrep
+
+# Cloudflare Workers (was poc/.gitignore)
+.wrangler/
+.dev.vars
+dist/
+.DS_Store

@@ -1,0 +1,18 @@
+{
+  "name": "zai-heavy-worker",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Z.ai Code Bot queue worker for review and describe jobs",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "echo \"No custom build step; Wrangler bundles this Worker during deploy.\"",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "generate:prompts": "node scripts/generate-prompts.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

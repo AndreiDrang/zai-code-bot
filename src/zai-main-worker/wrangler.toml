@@ -1,0 +1,86 @@
+# zai-main-worker — receives GitHub webhooks and publishes durable jobs.
+name = "zai-main-worker"
+main = "src/index.js"
+compatibility_date = "2026-08-05"
+
+[vars]
+NODE_ENV = "production"
+ZAI_MODEL = "glm-5.3"
+R2_RETENTION_DAYS = "180"
+# Optional: the login owning this deployment's GitHub PAT, used to recognize
+# PAT-owned (type 'User') bot comments when updating the /zai help comment.
+# Unset by default — the worker then resolves the login via GET /user on the
+# (rare) help path. No secret value; set as a plain var if pinning is wanted.
+# GITHUB_BOT_LOGIN = "zai-bot"
+
+# Production resource IDs are supplied before deploy.
+[[d1_databases]]
+binding = "BOT_DB"
+database_name = "bot-db"
+database_id = "2f6c5cd9-ec01-44ad-8ea8-fb1bb5523226"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BOT_ARTIFACTS"
+bucket_name = "bot-storage"
+
+# R2 lifecycle for the PR-context tier: objects under `v2/prs/` expire after
+# R2_RETENTION_DAYS (30). Bucket-level rule — apply via:
+#   npx wrangler r2 bucket lifecycle add bot-storage \
+#     --id pr-context-retention --prefix "v2/prs/" --expire-days 30
+# (Mirrored in zai-heavy-worker/wrangler.toml; the rule lives on the bucket.)
+
+[[kv_namespaces]]
+binding = "BOT_CACHE"
+id = "a0fca8c009de4e57a0d241d5ebcaf055"
+
+[[queues.producers]]
+binding = "BOT_JOBS"
+queue = "bot-jobs"
+
+# Public ingress for GitHub webhooks — a single custom-domain route.
+#   • Cloudflare auto-creates the DNS record + TLS cert for the custom
+#     domain; no pre-existing proxied DNS record or zone route is needed.
+#   • Adding any route INFERS workers_dev=false on the next deploy → the
+#     *.workers.dev URL disappears. Point the GitHub webhook at
+#     https://zai-worker.tokenbel.info (Payload URL).
+[[routes]]
+pattern = "zai-worker.tokenbel.info"
+custom_domain = true
+
+# Secrets — sourced from Cloudflare Secrets Store (NOT per-worker secrets).
+# One store is shared across both workers; `binding` is the env var the code
+# reads (env.<binding>) and `secret_name` is the key inside the store.
+# Store id: 629e5dd6594845a889e6ddabb26cc009
+#   GITHUB_WEBHOOK_SECRET  <- secret ZAI_GITHUB_WEBHOOK_KEY  (HMAC-SHA256 webhook secret)
+#   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT: repo + read:org)
+#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once LLM calls land)
+[[secrets_store_secrets]]
+binding = "GITHUB_WEBHOOK_SECRET"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_WEBHOOK_KEY"
+
+[[secrets_store_secrets]]
+binding = "GITHUB_TOKEN"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "ZAI_API_KEY"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_API_KEY"
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[placement]
+mode = "smart"

@@ -2,163 +2,297 @@
 
 ## 1. High-Level Overview
 
-This repository is a GitHub Action, not a long-running service (`Observed`: `action.yml` declares `using: "node20"` with `main: "dist/index.js"`). The packaged bundle is executed by the GitHub Actions runner in response to webhook events; there is no standalone server process (`Observed`: `package.json` has no `start` script, only `build` and `test`).
+A GitHub bot that turns `/zai` PR comments and PR events into Z.ai-powered
+review and describe results, implemented entirely as Cloudflare Workers: two
+deployable Workers (`src/zai-main-worker/`, `src/zai-heavy-worker/`) plus a
+shared library tree (`src/shared/`). There is no GitHub Action runtime; the
+repository root holds the npm project (tests, tooling, CI) and `src/` holds all
+deployed code.
 
-Its purpose, as declared by inputs and command surface, is twofold (`Observed`: `action.yml` inputs, `README.md` "Commands" section):
+The paradigm is asynchronous, durable job processing. The public main Worker
+validates and schedules; a private heavy Worker consumes the `bot-jobs` Queue
+and performs all LLM work. D1 is authoritative for job state and comment
+publication leases; R2 stores bounded PR context and command results; KV is a
+read-through cache for repository configuration and PR "card" snapshots
+(`shared/storage/keys.js`). The two Workers never call each other directly —
+no service bindings, no cross-worker imports — they coordinate only through
+Queue messages and shared D1/R2/KV bindings declared in
+`src/zai-*/wrangler.toml`.
 
-- Automatic pull-request code review driven by the Z.ai API.
-- Collaborator-gated `/zai` PR comment commands (`ask`, `review`, `explain`, `describe`, `impact`, `help`) plus a scheduled-task execution mode.
+Public ingress is a custom-domain route on the main Worker
+(`zai-worker.tokenbel.info`); the heavy Worker has no HTTP surface at all
+(`workers_dev = false`, queue consumer only).
 
-The overarching paradigm is an **event-driven webhook processor**: GitHub webhook events enter through a single `run()` entrypoint, are classified by event type, and are dispatched into either an auto-review flow or a parse → authorize → handler command pipeline (`Observed`: `src/index.js` functions `run`, `handlePullRequestEvent`, `handleIssueCommentEvent`, `handlePullRequestReviewCommentEvent`, `dispatchCommand`).
-
-Evidence anchors: `action.yml`, `package.json`, `src/index.js`, `src/lib/`, `.github/workflows/ci.yml`, `README.md`.
+Unknowns: none material.
 
 ## 2. System Architecture (Logical)
 
-Three logical layers, with strictly downward dependency direction:
-
-1. **Orchestration layer** — `src/index.js`. Owns the GitHub Actions runtime binding, event-type classification, and the high-level auto-review vs. command pipelines. The only module that reads `github.context` directly and wires handlers to the GitHub event loop.
-2. **Services layer** — `src/lib/*.js`. Cross-cutting, command-agnostic infrastructure: command parsing, authorization/fork policy, PR context fetching, comment lifecycle (markers + threading + reactions), API client with retry, logging/error categorization, continuity-state persistence, and prompt token budgeting.
-3. **Handler layer** — `src/lib/handlers/*.js`. Per-command logic (prompt construction, API call, response formatting). Registered in `src/lib/handlers/index.js` and selected by `dispatchCommand`.
-
-Dependency direction:
-
 ```text
-GitHub Actions runtime
-        │
-        ▼
- src/index.js  (orchestration)
-        │
-        ▼
- src/lib/*.js  (services)
-        │
-        ▼
- src/lib/handlers/*.js  (commands)
-        │
-        ▼
- src/lib/api.js + src/lib/pr-context.js  (external I/O: Z.ai, GitHub)
+GitHub webhooks ─▶ zai-main-worker ─{schemaVersion, jobId}─▶ bot-jobs Queue ─▶ zai-heavy-worker ─▶ Z.ai API
+                  (fetch + cron)                                  (private consumer)     │
+                       │                                                                 ▼
+                       │           pr_summary follow-up re-enqueued onto the same Queue
+                       ▼                                                                 ▼
+                  src/shared/  ◀── imported by both ──▶ GitHub API (result comments)
+                       │
+                       ▼
+     D1 (BOT_DB) · R2 (BOT_ARTIFACTS) · KV (BOT_CACHE) · shared Secrets Store
 ```
 
-Key boundaries:
+### Main Worker — ingress and scheduling
 
-- **Generated vs. source boundary.** `dist/index.js` is the only artifact GitHub executes; `src/` is the maintained source. This is enforced by CI (`Observed`: `.github/workflows/ci.yml` `dist-drift` job fails on uncommitted `dist/` changes).
-- **Authorization precedes execution.** Command handlers must not run before collaborator/fork authorization. The dedicated gate `enforceCommandAuthorization` sits between parsing and dispatch (`Observed`: `src/index.js`; reinforced by `src/lib/auth.js`, `AGENTS.md` anti-patterns).
-- **Handlers do not own GitHub I/O directly.** They receive a shared context structure and call into service modules (`api.js`, `pr-context.js`, `comments.js`) rather than touching Octokit ad hoc (`Inferred` from `buildHandlerContext` in `src/lib/context.js` and handler signatures in `src/lib/handlers/AGENTS.md`).
-- **Not a server, not a library.** There is no HTTP listener and no published package entrypoint for programmatic consumption (`Observed`: `package.json` `main` points at `dist/index.js` for the Action runtime only).
+- Responsibility: public webhook ingress; validation gates (method,
+  content-type, HMAC signature, command parse, collaborator authorization);
+  inline `/zai help`; durable job creation; PR-event planning; bounded cron
+  recovery.
+- Code locations: `src/zai-main-worker/src/`
+- Entry points: `src/index.js` — `fetch` (custom-domain route) and `scheduled`
+  (cron `*/5 * * * *`).
+- Depends on: `src/shared/`; D1, R2, KV, Queue producer `BOT_JOBS`, Secrets
+  Store.
+- Must not depend on: heavy-Worker code (zero cross-worker imports); LLM
+  calls — webhooks time out in ~10s, so command work is always offloaded.
+- Owns: D1 schema (`migrations/`); command classification (`src/router.js`);
+  PR- and comment-event planning (`src/pr-events.js`, `src/comment-events.js`);
+  enqueue, outbox, and recovery (`src/job-enqueuer.js`).
+- State and external boundaries: writes D1 job + outbox rows; publishes Queue
+  messages; best-effort R2 slice refreshes via `ctx.waitUntil`.
+- Evidence: `src/zai-main-worker/src/index.js`,
+  `src/zai-main-worker/wrangler.toml`.
+
+### Heavy Worker — queue consumption and LLM processing
+
+- Responsibility: consume `bot-jobs`, claim D1 leases, run `review`,
+  `describe`, and the internal `pr_context` / `pr_summary` gather jobs.
+- Code locations: `src/zai-heavy-worker/src/`
+- Entry points: `src/index.js` — `queue` handler only, via `src/queue.js`.
+- Depends on: `src/shared/` (Z.ai client, agent runner, context, storage); D1,
+  R2, KV, Secrets Store; Z.ai API; GitHub API for publishing; the Queue (also a
+  producer — it enqueues the `pr_summary` follow-up itself).
+- Must not depend on: main-Worker code; any public HTTP ingress
+  (`workers_dev = false` — reached only via the Queue consumer).
+- Owns: handler pipeline `src/handlers/`; prompt sources `prompts/*.txt` and
+  committed `generated/prompts.js` (from `scripts/generate-prompts.mjs`).
+- State and external boundaries: claims the D1 lease before executing; records
+  runs and artifacts; upserts marker-idempotent comments or the bot-owned PR
+  body section; stores the latest command result in R2.
+- Evidence: `src/zai-heavy-worker/src/queue.js`,
+  `src/zai-heavy-worker/wrangler.toml`, `src/zai-heavy-worker/src/handlers/index.js`.
+
+### Shared libraries — `src/shared/`
+
+- Responsibility: GitHub and Z.ai clients; authorization; command
+  parsing/allowlist; marker-idempotent comments; bounded PR-context gathering;
+  bounded LLM tool-loop execution; system-prompt composition; storage over
+  D1/R2/KV; logging; secret resolution.
+- Code locations: `src/shared/` (subpackages `agent/`, `context/`,
+  `context-tools/`, `prompts/`, `storage/`).
+- Depends on: Workers runtime APIs only (Web Crypto, `fetch`, `Response`).
+- Must not depend on: either Worker's `src/` (no upward imports); Node-only
+  APIs (per `src/AGENTS.md`, enforced by the Workers runtime).
+- Owns: R2 key layout (`storage/keys.js`); job/lease/outbox SQL
+  (`storage/jobs.js`, `storage/deliveries.js`); the agent loop with iteration,
+  tool-call, and duration limits (`agent/runner.js`, `agent/limits.js`);
+  Z.ai error sanitization (`zai-client.js`).
+- Evidence: import scan across `src/`; `src/AGENTS.md`.
+
+### Durable state and coordination plane
+
+- Responsibility: the only medium through which the two Workers interact.
+- Code locations: bindings in both `src/zai-*/wrangler.toml`; access code in
+  `src/shared/storage/`.
+- Owns: D1 `bot-db` — job/outbox/run/artifact tables (current generation
+  `*_v3` in `migrations/0003_pr_summary_job.sql`, with a job-kind CHECK
+  constraint), plus `repositories`, `pull_requests`, `webhook_deliveries`,
+  `comment_publications`, and `repository_configs` from
+  `migrations/0001_storage_foundation.sql`; R2 `bot-storage` (`v2/prs/`
+  context tier with a bucket lifecycle rule applied out-of-band per the
+  `wrangler.toml` comments; `v1/runs/` outputs swept by cron); KV `bot-cache`;
+  `bot-jobs` Queue; one shared Secrets Store.
+- Evidence: both `wrangler.toml` files, `src/zai-main-worker/migrations/`.
+
+### Workspace, tests, and CI
+
+- Responsibility: single script source at the root `package.json`
+  (per-Worker manifests serve Wrangler only); vitest + miniflare suites;
+  deploy dry-run and audit gates; prompt codegen.
+- Code locations: `vitest.config.js` (root), `src/tests/`,
+  `.github/workflows/ci.yml`.
+- Entry points: `npm test`; `deploy:main:dry-run` / `deploy:heavy:dry-run`.
+- Owns: coverage thresholds gating only `src/shared/**` and
+  `src/zai-main-worker/src/**`.
+- Evidence: `vitest.config.js`, `.github/workflows/ci.yml`, `src/AGENTS.md`.
 
 ## 3. Code Map (Physical)
 
 ```text
-.
-├── action.yml                 # Action manifest: inputs + node20 entrypoint contract
-├── src/
-│   ├── index.js               # Runtime entrypoint: event routing + pipelines
-│   └── lib/
-│       ├── commands.js        # `/zai` parser + command allowlist
-│       ├── auth.js            # Collaborator + fork authorization policy
-│       ├── context.js         # Shared handler context (files, ranges, truncation)
-│       ├── pr-context.js      # PR files, file-at-ref, base/head ref resolution
-│       ├── changed-files.js   # Paginated changed-files fetch (3000-file API ceiling)
-│       ├── comments.js        # Marker upsert, threaded replies, reactions
-│       ├── api.js             # Z.ai HTTP client + retry wrapper
-│       ├── logging.js         # Categorized safe errors / logger wrappers
-│       ├── continuity.js      # Hidden-marker state persistence across turns
-│       ├── code-scope.js      # Token/character budgeting for prompts
-│       ├── auto-review.js     # Large-PR batching + synthesis
-│       ├── events.js          # Event-type detection for routing
-│       ├── config/
-│       │   └── scheduled-config.js   # Parses `.zai-scheduled.yml` task config
-│       └── handlers/          # Per-command modules; see `src/lib/handlers/AGENTS.md`
-├── tests/                     # Vitest suite: unit + `tests/integration/` e2e pipelines
-├── dist/                      # Generated ncc bundle (CI executes dist/index.js)
-└── .github/workflows/
-    ├── ci.yml                 # test / build / dist-drift / security-audit gates
-    └── code-review.yml        # Consumer usage example (not runtime logic)
+src/                          # all deployed code; npm project lives at the repo root
+├─ zai-main-worker/           # public webhook ingress + cron recovery (src/index.js)
+│  └─ migrations/             # D1 schema: jobs/outbox/runs (v3), publications, configs
+├─ zai-heavy-worker/          # private Queue consumer (src/queue.js)
+│  ├─ src/handlers/           # review, describe, pr-context, pr-summary
+│  └─ prompts/ + generated/   # prompt sources (.txt) → committed modules (scripts/)
+├─ shared/                    # libraries used by both Workers
+│  ├─ storage/                # D1/R2/KV access + R2 key layout
+│  ├─ context/                # PR-context service and size limits
+│  ├─ context-tools/          # LLM tool registry and JSON schemas
+│  ├─ agent/                  # bounded LLM tool-loop runner and limits
+│  └─ prompts/                # system-prompt composition and context policies
+└─ tests/                     # vitest suites, miniflare-backed
+okf/                          # curated knowledge bundle (entry: okf/index.md)
+.github/workflows/ci.yml      # test + coverage, dry-run deploys, npm audit
 ```
-
-Omitted as non-architectural: `node_modules/`, coverage output, editor config, lockfiles.
 
 ## 4. Life of a Request / Primary Data Flow
 
-The runtime is triggered once per webhook event by the Actions runner (`Observed`: `action.yml` `node20` runtime; `src/index.js` `run()`).
+### `/zai review` / `/zai describe` command (sync ingress → async processing)
 
-**Command path** (issue comment or review comment):
+1. Trigger: GitHub comment webhook carrying a `/zai` command body.
+2. Entry point: `zai-main-worker/src/index.js` `fetch`.
+3. Coordination: gate chain (method → content-type → HMAC → parse →
+   collaborator authorization); classification in `src/router.js`; durable job
+   row via `shared/storage/deliveries.js`.
+4. Core or domain processing: main Worker publishes `{ schemaVersion, jobId }`
+   to `bot-jobs` (D1 outbox row is the recovery fallback), returns 202; heavy
+   Worker `src/queue.js` claims the D1 lease and dispatches to
+   `src/handlers/review.js` / `describe.js`;
+   `shared/llm-command-runner.js` drives the bounded agent loop
+   (`shared/agent/runner.js`) over `shared/zai-client.js`, fetching diffs and
+   source files lazily via Context Tools.
+5. Persistence or external interaction: run and result recorded in D1
+   (`analysis_runs`, `artifacts`) and R2; comment upsert guarded by the
+   `comment_publications` lease.
+6. Output or side effect: marker-idempotent review comment or bot-owned PR
+   body section; job marked succeeded/failed/retryable in D1.
 
-```text
-GitHub webhook event
-  → src/index.js: run()
-  → handleIssueCommentEvent | handlePullRequestReviewCommentEvent
-  → src/lib/commands.js: parseCommand          (extract + validate `/zai` command)
-  → src/index.js: enforceCommandAuthorization  (collaborator + fork gate via src/lib/auth.js)
-  → src/index.js: dispatchCommand (switch on command)
-  → src/lib/handlers/<cmd>.js                  (prompt build, context via src/lib/context.js + pr-context.js)
-  → src/lib/api.js: callWithRetry → Z.ai       (external LLM call)
-  → src/lib/comments.js: upsertComment         (marker-idempotent, threaded reply, reaction)
-```
+Architectural boundaries crossed: public HTTP → main Worker; Queue → private
+heavy Worker; shared code → D1/R2/KV/GitHub/Z.ai. Evidence:
+`src/zai-main-worker/src/index.js`, `src/zai-heavy-worker/src/queue.js`,
+sequence diagram in `README.md`.
 
-The handler dispatch `switch` over `command` lives in `src/index.js` (`Observed`: `case 'help'`, `'review'`, `'explain'`, `'describe'`, `'ask'`, `'impact'`, `'update-agents'`).
+### PR context gathering and summary chain (event-driven)
 
-**Auto-review path** (pull_request events):
+1. Trigger: PR `opened` / `reopened` / `synchronize` / `ready_for_review`
+   (plus description-edit and comment-refresh planning in
+   `src/pr-events.js`, `src/comment-events.js`).
+2. Entry point: main Worker `fetch` → planning in `src/pr-events.js`.
+3. Coordination: `pr_context` job created and enqueued like a command job.
+4. Core or domain processing: `handlers/pr-context.js` gathers V2 context to
+   R2 `v2/prs/{repositoryId}/{prNumber}/context/` (manifest, files, commits,
+   description, comments, per-file patches); once the manifest commits, an
+   idempotent `pr_summary` job is enqueued (outbox fallback) and
+   `handlers/pr-summary.js` stores the validated Z.ai JSON summary there.
+5. Persistence or external interaction: R2 context tier plus D1 job rows.
+6. Output or side effect: later `review` commands reuse the matching-head
+   summary as auxiliary context.
 
-```text
-GitHub pull_request event
-  → handlePullRequestEvent
-  → src/lib/changed-files.js: fetchAllChangedFiles   (pagination, 3000-file ceiling)
-  → src/lib/auto-review.js: createReviewBatches       (large-PR chunking, token budgeting)
-  → executeReviewBatch → src/lib/api.js → Z.ai
-  → src/lib/comments.js: upsertComment                (marker create/update)
-```
+Architectural boundaries crossed: GitHub → main Worker → Queue → heavy Worker
+→ GitHub API, R2, Z.ai. Evidence: `src/zai-main-worker/src/pr-events.js`,
+`src/zai-heavy-worker/src/handlers/pr-context.js` and `pr-summary.js`.
 
-**Scheduled-task path**: enabled by the `ZAI_SCHEDULED_*` inputs (`Observed`: `action.yml`); configuration is loaded by `src/lib/config/scheduled-config.js` and executed by `src/lib/handlers/scheduled.js`. The precise scheduling trigger source is `Inferred` to be the Action's scheduled workflow invocation from `README.md`/`action.yml`, not a self-contained scheduler.
+### Cron recovery sweep (scheduled)
+
+1. Trigger: cron `*/5 * * * *` on the main Worker.
+2. Entry point: `scheduled` handler in `zai-main-worker/src/index.js`.
+3. Coordination: bounded batches in `src/job-enqueuer.js`.
+4. Core or domain processing: recover expired job leases, replay due outbox
+   rows, sweep expired storage via `deleteExpiredArtifacts` (`v1/runs/`
+   objects indexed by the `artifacts` table).
+5. Persistence or external interaction: D1 lease/outbox/artifact rows; R2
+   deletions only.
+6. Output or side effect: stranded jobs become retriable; orphaned R2 objects
+   removed.
+
+Boundaries crossed: scheduler → main Worker → D1/R2 only (no GitHub/Z.ai).
+Evidence: `src/zai-main-worker/src/job-enqueuer.js`, `shared/storage/artifacts.js`,
+`RUNBOOK.md`.
 
 ## 5. Architectural Invariants & Constraints
 
-- **Rule:** The GitHub runtime executes `dist/index.js` only; all maintained logic lives in `src/`.
-  - **Rationale:** Single deployable artifact, auditable source-of-truth.
-  - **Enforcement / Signals (Observed):** `action.yml` `main: "dist/index.js"`; `.github/workflows/ci.yml` `dist-drift` job fails on uncommitted `dist/` changes.
+- Rule: Verify the webhook HMAC signature before parsing or dispatching.
+- Rationale: the fetch handler is the only public, unauthenticated surface.
+- Enforcement / Signals: gate ordering in `zai-main-worker/src/index.js`;
+  `tests/crypto.test.js`, `tests/router.test.js`.
 
-- **Rule:** Source changes must be rebuilt (`npm run build`) and `dist/index.js` + `dist/licenses.txt` committed together.
-  - **Rationale:** CI executes the bundle, not the source tree.
-  - **Enforcement / Signals (Observed):** `package.json` `build` script; `ci.yml` dist-drift gate.
+- Rule: Queue messages carry only `{ schemaVersion, jobId }` — no tokens or
+  source data.
+- Rationale: keeps secrets and content out of the transport; D1 stays the
+  single source of truth.
+- Enforcement / Signals: producer in `shared/storage/deliveries.js`; consumer
+  validates `schemaVersion === 1` in `zai-heavy-worker/src/queue.js`.
 
-- **Rule:** Command handlers run only after `enforceCommandAuthorization` succeeds (collaborator status + fork policy).
-  - **Rationale:** Prevents unauthorized or fork-secret-leaking execution.
-  - **Enforcement / Signals (Observed):** dedicated function in `src/index.js`; `src/lib/auth.js`; `AGENTS.md` anti-patterns.
+- Rule: D1 is authoritative for job state and comment publication leases; a
+  lease must be claimed before a handler runs.
+- Rationale: at-least-once delivery plus cron recovery need one durable
+  arbiter; duplicate deliveries must be idempotent.
+- Enforcement / Signals: `claimJob` in `shared/storage/jobs.js`; lease/outbox
+  tables in `migrations/` (current generation `*_v3`).
 
-- **Rule:** Command execution is scoped to PR contexts — issue comments on non-PR issues must not dispatch handlers.
-  - **Rationale:** Commands are PR-contextual (`review`, `explain`, etc.).
-  - **Enforcement / Signals (Observed):** `handleIssueCommentEvent` uses `issue?.number` and PR presence checks.
+- Rule: the two Workers are isolated deployment units — no cross-worker
+  imports, no service bindings, and no public HTTP endpoint on the heavy
+  Worker (queue consumer only).
+- Rationale: keeps ingress and processing independently deployable and keeps
+  LLM work and GitHub writes reachable only through the Queue.
+- Enforcement / Signals: zero cross-worker imports; no `services` entries and
+  `workers_dev = false` in the `wrangler.toml` files; queue-only export in
+  `zai-heavy-worker/src/index.js` (structural convention, not linted).
 
-- **Rule:** Handlers must not pass unbounded diffs/patches into prompts; sizing is bounded via `src/lib/code-scope.js` and `src/lib/context.js`.
-  - **Rationale:** Deterministic token budgets and prompt safety.
-  - **Enforcement / Signals (Observed + Inferred):** `code-scope.js`, `auto-review.js` batching; `AGENTS.md` anti-patterns.
+- Rule: `src/shared/` runs on Workers runtime APIs only — no Node built-ins.
+- Rationale: the same code deploys into both Workers; Node APIs fail at
+  runtime.
+- Enforcement / Signals: `src/AGENTS.md`; Workers runtime and both dry-run
+  builds in CI.
 
-- **Rule:** Automated comments are idempotent and threaded via marker constants and `replyToId`.
-  - **Rationale:** Avoids duplicate spam; ties responses to the invoking comment.
-  - **Enforcement / Signals (Observed):** `src/lib/comments.js` `upsertComment`; marker assertions in `tests/integration/`.
+- Rule: the heavy Worker never calls Z.ai or GitHub from an HTTP request
+  path; all such calls run inside claimed Queue jobs.
+- Rationale: webhooks time out in ~10s; durable leases make retries safe.
+- Enforcement / Signals: main-Worker `fetch` only enqueues; LLM and publish
+  calls appear only under `src/queue.js` handlers.
 
-- **Rule:** No raw exception internals or secrets are surfaced in PR comments.
-  - **Rationale:** User-safe failure reporting.
-  - **Enforcement / Signals (Observed + Inferred):** `src/lib/logging.js` categorized safe errors; handler conventions in `AGENTS.md`.
+- Rule: GitHub comments are marker-idempotent, `describe` body markers are
+  preserved, and secrets or raw provider errors are never surfaced.
+- Rationale: repeated deliveries must not duplicate output; comments are
+  public-facing.
+- Enforcement / Signals: `shared/comments.js`; `comment_publications` lease;
+  `sanitizeErrorMessage` in `shared/zai-client.js`; `SECURITY.md`.
 
-- **Rule:** The services layer (`src/lib/*.js`) stays policy-centric; orchestration stays in `src/index.js`; command-specific logic stays in `src/lib/handlers/`.
-  - **Rationale:** Layered separation of concerns.
-  - **Enforcement / Signals (Observed + Inferred):** layout convention documented in `src/lib/AGENTS.md`; not machine-enforced.
+- Rule: context sent to Z.ai is bounded, and agent runs are capped by
+  iteration, tool-call, and duration limits.
+- Rationale: cost and prompt-size control; a runaway tool loop must not burn
+  a Worker invocation.
+- Enforcement / Signals: limits in `shared/context/context-limits.js` and
+  `shared/agent/limits.js`; `tests/context-service.test.js`,
+  `tests/agent-runner.test.js`.
 
-- **Rule:** External I/O (Z.ai, GitHub) is funneled through `src/lib/api.js` and `src/lib/pr-context.js` rather than ad-hoc calls in handlers.
-  - **Rationale:** Centralized retry, size limits, and user-safe fallbacks.
-  - **Enforcement / Signals (Inferred):** handler signatures and shared-context pattern; documented in `src/lib/handlers/AGENTS.md`.
+- Rule: secrets come only from Cloudflare Secrets Store bindings, never from
+  `wrangler.toml` or source.
+- Rationale: one shared store keeps a single rotation point for both Workers.
+- Enforcement / Signals: `[[secrets_store_secrets]]` in both `wrangler.toml`;
+  `shared/secrets.js`; `npm audit` gate in CI.
+
+- Rule: the public command surface and job kinds are fixed — `help` inline;
+  `review`, `describe`, `pr_context`, `pr_summary` durable.
+- Rationale: the allowlist is a product contract, not a convenience.
+- Enforcement / Signals: `shared/constants.js` allowlist; job-kind CHECK
+  constraint in `migrations/0003_pr_summary_job.sql`; `shared/commands.js`
+  parsing, `router.js` classification.
 
 ## 6. Documentation Strategy
 
-`ARCHITECTURE.md` (this file) is the global map and invariant catalog: it describes layers, dependency direction, entrypoints, and hard rules that span the whole repository.
+`ARCHITECTURE.md` (this file) owns the global architecture map: components,
+dependency direction, representative flows, and invariants. It deliberately
+does not duplicate operational or local detail:
 
-Local, subtree-specific detail lives in the existing `AGENTS.md` tree:
+- `AGENTS.md` (root) — repository-wide agent rules and task-based routing.
+- `src/AGENTS.md` — tree mechanics, local boundaries, coverage-gate policy.
+- `src/zai-main-worker/AGENTS.md`, `src/zai-heavy-worker/AGENTS.md` —
+  per-Worker local instructions (including prompt regeneration).
+- `README.md` — bindings, command-flow sequence diagram, R2 `v2/prs/`
+  layout, development workflow.
+- `RUNBOOK.md` — operational failure modes and cron-based recovery.
+- `SECURITY.md` — trust boundaries and user-visible output rules.
+- `CONTRIBUTING.md` — change rules and commit expectations.
+- `okf/index.md` — curated, navigation-oriented knowledge bundle.
 
-- `AGENTS.md` — repository overview, code map, build/test commands, gotchas.
-- `src/lib/AGENTS.md` — services-layer module guide.
-- `src/lib/handlers/AGENTS.md` — per-command handler guide.
-- `tests/AGENTS.md` — test strategy and suite layout.
-- `tests/integration/AGENTS.md` — end-to-end pipeline test guide.
-
-Global architecture concerns (boundaries, data flow, invariants) belong here. Local concerns (which function implements which command, which test covers which scenario, local conventions) belong in the corresponding `AGENTS.md`. `README.md` documents user-facing inputs, commands, and consumer usage; `.github/workflows/code-review.yml` is a consumer example, not runtime logic.
+No ADR or `DESIGN.md` exists today; that absence does not limit the
+architecture model.
