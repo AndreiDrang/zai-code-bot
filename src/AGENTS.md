@@ -59,6 +59,12 @@ Deploy, dev, and dry-run scripts: `deploy:main[:dry-run]`, `deploy:heavy[:dry-ru
 wrangler 4.x releases need Node >= 22), so `npm ci` is the only setup step.
 The per-worker `node_modules` installs CI used to perform are gone.
 
+Each worker keeps its own `package.json` and `package-lock.json`: git-connected
+Cloudflare Workers Builds runs `npm clean-install` inside the worker build
+root (not the repo root). After changing a worker `package.json`, regenerate
+its lockfile with `npm install --package-lock-only` in that directory — do not
+delete these lockfiles.
+
 ## Nearby docs
 
 - Bindings, command flow, R2 `v2/prs/` layout → `../README.md` (repo root)

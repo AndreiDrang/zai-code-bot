@@ -122,8 +122,10 @@ GitHub webhooks ─▶ zai-main-worker ─{schemaVersion, jobId}─▶ bot-jobs 
 
 - Responsibility: single script source at the root `package.json`
   (per-Worker manifests serve Wrangler only; wrangler itself is a root
-  devDependency); vitest suites in the plain node environment (bindings
-  mocked); deploy dry-run and audit gates; prompt codegen.
+  devDependency; each worker keeps a minimal `package.json` +
+  `package-lock.json` because Cloudflare Workers Builds installs inside
+  the worker build root); vitest suites in the plain node environment
+  (bindings mocked); deploy dry-run and audit gates; prompt codegen.
 - Code locations: `vitest.config.js` (root), `src/tests/`,
   `.github/workflows/ci.yml`, `Makefile`.
 - Entry points: `npm test`; `npm run deploy:*:dry-run`; `make deploy`
