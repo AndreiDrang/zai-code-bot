@@ -228,7 +228,9 @@ describe('requeueStrandedJobs', () => {
 
   it('keeps processing the batch when one send fails', async () => {
     const env = makeEnv();
-    env.BOT_JOBS.send.mockRejectedValueOnce(new Error('transient')).mockResolvedValueOnce(undefined);
+    env.BOT_JOBS.send
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValueOnce(undefined);
     listDueStrandedJobs.mockResolvedValue([{ job_id: 'job-a' }, { job_id: 'job-b' }]);
 
     const result = await requeueStrandedJobs(env, 25);

@@ -120,9 +120,14 @@ export async function runLlmCommand(
     ? Array.isArray(files) && files.length > 0
     : typeof diff === 'string' && Boolean(diff.trim());
   if (!hasReviewableContext) {
-    const publication = await publishNotice(identity, metadata, {
-      message: `No diff could be loaded for this PR, so there is nothing to ${command}.`,
-    }, logger);
+    const publication = await publishNotice(
+      identity,
+      metadata,
+      {
+        message: `No diff could be loaded for this PR, so there is nothing to ${command}.`,
+      },
+      logger,
+    );
     return baseReturn('no_diff', {
       repository: repoFullName,
       issue: prNumber,
@@ -140,11 +145,16 @@ export async function runLlmCommand(
       repo: repoFullName,
       issue: prNumber,
     });
-    await publishNotice(identity, metadata, {
-      message:
-        `LLM ${command} is not configured on this deployment (\`ZAI_API_KEY\` is unset). ` +
-        'The gathered PR context is ready and will be used once the key is configured.',
-    }, logger);
+    await publishNotice(
+      identity,
+      metadata,
+      {
+        message:
+          `LLM ${command} is not configured on this deployment (\`ZAI_API_KEY\` is unset). ` +
+          'The gathered PR context is ready and will be used once the key is configured.',
+      },
+      logger,
+    );
     return baseReturn('no_api_key', {
       repository: repoFullName,
       issue: prNumber,
@@ -199,15 +209,20 @@ export async function runLlmCommand(
     const attempt = Number(job.attempt_count);
     const finalAttempt = !retryable || !Number.isInteger(attempt) || attempt >= MAX_JOB_ATTEMPTS;
     if (finalAttempt) {
-      await publishNotice(identity, metadata, {
-        message: buildFailureNotice({
-          command,
-          category,
-          error: result.error,
-          agent: result.agent,
-          agentLimits,
-        }),
-      }, logger);
+      await publishNotice(
+        identity,
+        metadata,
+        {
+          message: buildFailureNotice({
+            command,
+            category,
+            error: result.error,
+            agent: result.agent,
+            agentLimits,
+          }),
+        },
+        logger,
+      );
     }
     throw llmCommandError(category, retryable && !finalAttempt);
   }
@@ -486,11 +501,7 @@ function formatMarkdownCode(value) {
 /** Publishes the LLM result as a marker-idempotent comment. */
 async function publishResult(identity, markdown, logger) {
   const body = `## ${identity.emoji} /zai ${identity.command}\n\n${markdown}\n\n---\n${BOT_FOOTER}\n\n${identity.commentMarker}`;
-  return finishPublication(
-    identity,
-    logger,
-    body,
-  );
+  return finishPublication(identity, logger, body);
 }
 
 /** Publishes a short, marker-wrapped notice (no-diff / no-key / failure). */
@@ -500,11 +511,7 @@ async function publishNotice(identity, metadata, { message }, logger) {
   const lines = [`## ${identity.emoji} /zai ${identity.command}${head}`, '', message];
   if (summary) lines.push('', summary);
   const body = `${lines.join('\n')}\n\n---\n${BOT_FOOTER}\n\n${identity.commentMarker}`;
-  return finishPublication(
-    identity,
-    logger,
-    body,
-  );
+  return finishPublication(identity, logger, body);
 }
 
 /** Shared upsert + structured skip warning so a lost lease is never silent. */

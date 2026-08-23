@@ -510,7 +510,12 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
     expect(res.publicationSkipped).toBe(true);
     expect(mocks.logger.warn).toHaveBeenCalledWith(
       'Comment publication skipped: lease held by concurrent job',
-      expect.objectContaining({ command: 'review', jobId: 'job-1', keptCommentId: 42, attempts: 4 }),
+      expect.objectContaining({
+        command: 'review',
+        jobId: 'job-1',
+        keptCommentId: 42,
+        attempts: 4,
+      }),
     );
   });
 

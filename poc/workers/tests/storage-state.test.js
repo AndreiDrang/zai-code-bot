@@ -568,10 +568,14 @@ describe('comment publication edge paths', () => {
       })),
     };
     const github = {
-      getIssueComments: vi.fn().mockResolvedValue([
-        { id: 55, body: '<!-- marker -->', user: { login: 'bot[bot]', type: 'Bot' } },
-      ]),
-      updateComment: vi.fn().mockImplementation((_o, _r, commentId) => Promise.resolve({ id: commentId })),
+      getIssueComments: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 55, body: '<!-- marker -->', user: { login: 'bot[bot]', type: 'Bot' } },
+        ]),
+      updateComment: vi
+        .fn()
+        .mockImplementation((_o, _r, commentId) => Promise.resolve({ id: commentId })),
     };
 
     const out = await upsertComment({
