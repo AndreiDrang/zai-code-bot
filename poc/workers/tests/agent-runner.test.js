@@ -584,3 +584,343 @@ describe('Agent limits', () => {
     expect(resolveAgentLimits({ unknownLimit: 2 })).not.toHaveProperty('unknownLimit');
   });
 });
+
+// ---------------------------------------------------------------------------
+// supplement: construction, validation, budget, and duplicate-key edges
+// ---------------------------------------------------------------------------
+
+const SUPPLEMENT_LIMITS = {
+  maxToolCalls: 3,
+  maxToolCallsPerIteration: 1,
+  maxRetrievedBytes: 200,
+  maxRunDurationMs: 60000,
+  maxLlmRequestDurationMs: 30000,
+  maxLlmAttempts: 2,
+  finalLlmRequestDurationMs: 10000,
+  finalizationReserveMs: 5000,
+};
+
+const assistantText = (content = 'final answer') => ({ role: 'assistant', content });
+const makeCall = (id, name, args) => ({
+  id,
+  type: 'function',
+  function: { name, arguments: args === undefined ? undefined : JSON.stringify(args) },
+});
+const assistantWithCalls = (...calls) => ({
+  role: 'assistant',
+  content: null,
+  tool_calls: calls,
+});
+
+function makeSupplementRunner({
+  chat,
+  execute = vi.fn().mockResolvedValue({ value: 'data' }),
+  logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  limits = SUPPLEMENT_LIMITS,
+  now = () => 0,
+}) {
+  const toolRegistry = { execute, getDefinitions: () => [] };
+  return {
+    runner: createAgentRunner({ llmClient: { chat }, toolRegistry, logger, limits, now }),
+    logger,
+    execute,
+  };
+}
+
+/** Resolves a scripted sequence of chat outcomes, one per request. */
+function scriptedChat(outcomes) {
+  const calls = [];
+  const mock = vi.fn(async (params) => {
+    calls.push(params);
+    const outcome = outcomes[Math.min(calls.length - 1, outcomes.length - 1)];
+    if (typeof outcome === 'function') return outcome(params);
+    return outcome;
+  });
+  mock.calls = calls;
+  return mock;
+}
+describe('createAgentRunner — construction', () => {
+  it('requires an llmClient with chat()', () => {
+    expect(() => createAgentRunner({ toolRegistry: { execute: vi.fn() } })).toThrow(TypeError);
+  });
+
+  it('requires a toolRegistry with execute()', () => {
+    expect(() => createAgentRunner({ llmClient: { chat: vi.fn() } })).toThrow(TypeError);
+  });
+});
+
+describe('agent runner — request validation', () => {
+  it('coerces non-array messages to an empty conversation', async () => {
+    const chat = scriptedChat([{ success: true, data: { message: assistantText() } }]);
+    const { runner } = makeSupplementRunner({ chat, messages: 'not-an-array' });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: 'not-an-array', tools: [] });
+    expect(result.status).toBe('completed');
+    expect(chat.calls[0].messages).toEqual([]);
+  });
+
+  it('fails with a protocol error for non-object responses', async () => {
+    for (const bad of [null, 'string']) {
+      const chat = scriptedChat([bad]);
+      const { runner } = makeSupplementRunner({ chat });
+      const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+      expect(result).toMatchObject({
+        status: 'failed',
+        error: { category: 'protocol', code: 'AGENT_PROTOCOL_ERROR' },
+      });
+    }
+  });
+
+  it('defaults to provider when a failed response carries no error', async () => {
+    const chat = scriptedChat([{ success: false }]);
+    const { runner } = makeSupplementRunner({ chat });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+    expect(result).toMatchObject({ status: 'failed', error: { category: 'provider' } });
+  });
+});
+
+describe('agent runner — attempt accounting', () => {
+  it('counts attempts and timeouts via onAttempt', async () => {
+    const chat = vi.fn(async ({ onAttempt }) => {
+      onAttempt?.({ category: 'timeout', success: false });
+      return { success: true, data: { message: assistantText() } };
+    });
+    const { runner, logger } = makeSupplementRunner({ chat });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    expect(result).toMatchObject({ status: 'completed', llmRequests: 1, llmAttempts: 1, llmTimeouts: 1 });
+    expect(logger.info).toHaveBeenCalledWith(
+      'Agent LLM attempt completed',
+      expect.objectContaining({ category: 'timeout', phase: 'gathering' }),
+    );
+  });
+});
+
+describe('agent runner — assistant message validation', () => {
+  const cases = [
+    ['wrong role', { role: 'user', content: 'hi' }],
+    ['non-array tool calls', { role: 'assistant', content: 'x', tool_calls: 'nope' }],
+    ['no content and no calls', { role: 'assistant', content: null }],
+  ];
+
+  it('rejects malformed assistant messages', async () => {
+    for (const [, message] of cases) {
+      const chat = scriptedChat([{ success: true, data: { message } }]);
+      const { runner } = makeSupplementRunner({ chat });
+      const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+      expect(result).toMatchObject({ status: 'failed', error: { category: 'protocol' } });
+    }
+  });
+
+  it('rejects malformed tool calls', async () => {
+    const badCalls = [
+      makeCall(undefined, 'get_diff', { path: 'a' }),
+      makeCall('id-1', undefined, { path: 'a' }),
+      { id: 'id-2', type: 'function', function: { name: 'get_diff', arguments: 42 } },
+    ];
+    for (const call of badCalls) {
+      const chat = scriptedChat([{ success: true, data: { message: assistantWithCalls(call) } }]);
+      const { runner } = makeSupplementRunner({ chat });
+      const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+      expect(result).toMatchObject({ status: 'failed', error: { category: 'protocol' } });
+    }
+  });
+});
+
+describe('agent runner — tool budget handling', () => {
+  it('answers beyond-limit calls with a turn-budget result', async () => {
+    const execute = vi.fn().mockResolvedValue({ value: 1 });
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' }), makeCall('b', 'get_diff', { path: 'y' })) } },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    expect(result.status).toBe('completed');
+    expect(result).toMatchObject({
+      toolCalls: 1,
+      requestedToolCalls: 2,
+      limitReasons: ['max_tool_calls_per_iteration'],
+    });
+    const turnMessage = result.messages.find((m) =>
+      m.content?.includes('TURN_TOOL_CALL_LIMIT_REACHED'),
+    );
+    expect(turnMessage).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults tool arguments to an empty object', async () => {
+    const execute = vi.fn().mockResolvedValue({ value: 1 });
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_manifest')) } },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute });
+    await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+    expect(execute).toHaveBeenCalledWith('get_manifest', {});
+  });
+
+  it('maps non-protocol tool failures to safe errors', async () => {
+    const execute = vi.fn().mockRejectedValue(new Error('boom'));
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' })) } },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    expect(result).toMatchObject({ status: 'completed', failedToolCalls: 1, successfulToolCalls: 0 });
+    const toolMessage = result.messages.find((m) => m.role === 'tool');
+    expect(JSON.parse(toolMessage.content)).toMatchObject({
+      ok: false,
+      error: { code: 'TOOL_EXECUTION_FAILED' },
+    });
+  });
+
+  it('skips duplicate requests using normalized argument keys', async () => {
+    const execute = vi.fn().mockResolvedValue({ value: 1 });
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' })) } },
+      // Same call with argument keys in a different order → normalized duplicate.
+      { success: true, data: { message: assistantWithCalls(makeCall('b', 'get_diff', { path: 'x' })) } },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    // Identical {path:'x'} arguments normalize to the same key: the second
+    // request is skipped as a duplicate and never reaches the registry.
+    expect(result.duplicateToolCalls).toBe(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    // Now with genuinely different key order:
+    const execute2 = vi.fn().mockResolvedValue({ value: 1 });
+    const chat2 = scriptedChat([
+      {
+        success: true,
+        data: {
+          message: assistantWithCalls({
+            id: 'a',
+            type: 'function',
+            function: { name: 'get_diff', arguments: JSON.stringify({ b: 1, a: 2 }) },
+          }),
+        },
+      },
+      {
+        success: true,
+        data: {
+          message: assistantWithCalls({
+            id: 'b',
+            type: 'function',
+            function: { name: 'get_diff', arguments: JSON.stringify({ a: 2, b: 1 }) },
+          }),
+        },
+      },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const runner2 = createAgentRunner({
+      llmClient: { chat: chat2 },
+      toolRegistry: { execute: execute2, getDefinitions: () => [] },
+      limits: SUPPLEMENT_LIMITS,
+      now: () => 0,
+    });
+    const result2 = await runner2.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+    expect(result2.duplicateToolCalls).toBe(1);
+    expect(execute2).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats non-object arguments as raw duplicate keys', async () => {
+    const execute = vi.fn().mockResolvedValue({ value: 1 });
+    // '5' parses but is not an object, so the key falls back to the raw string.
+    // A successful execution keeps the key, making the repeat a duplicate.
+    // (Unparseable arguments always fail execution, and failed calls delete
+    // their key so they can be retried — they never accumulate duplicates.)
+    const rawArg = (id) => ({
+      id,
+      type: 'function',
+      function: { name: 'get_diff', arguments: '5' },
+    });
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(rawArg('a')) } },
+      { success: true, data: { message: assistantWithCalls(rawArg('b')) } },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    expect(result.duplicateToolCalls).toBe(1);
+    expect(result.failedToolCalls).toBe(0);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('agent runner — finalization', () => {
+  it('finalizes with retrieved evidence when the retrieval budget is exceeded', async () => {
+    const execute = vi.fn().mockResolvedValue({ blob: 'x'.repeat(300) });
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'src/a.ts' })) } },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute, limits: { ...SUPPLEMENT_LIMITS, maxToolCalls: 5, maxToolCallsPerIteration: 5 } });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    expect(result.status).toBe('completed');
+    expect(result).toMatchObject({
+      retrievalBudgetExceeded: true,
+      finalizedWithAvailableEvidence: true,
+      finalizationReason: 'retrieval_budget',
+      limitReasons: ['max_retrieved_bytes'],
+      // The oversized diff is never delivered, so it is not counted as reviewed.
+      reviewedDiffPaths: [],
+    });
+    const systemNote = result.messages.find((m) => m.role === 'system');
+    expect(systemNote.content).toContain('context retrieval budget has been reached');
+  });
+
+  it('finalizes after a gathering-timeout once evidence exists', async () => {
+    const execute = vi.fn().mockResolvedValue({ value: 1 });
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_manifest')) } },
+      { success: false, error: { category: 'timeout' } },
+      { success: true, data: { message: assistantText() } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute, limits: { ...SUPPLEMENT_LIMITS, maxToolCallsPerIteration: 5 } });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    expect(result.status).toBe('completed');
+    expect(result).toMatchObject({
+      finalizedWithAvailableEvidence: true,
+      finalizationReason: 'llm_timeout',
+    });
+    const systemNote = result.messages.find((m) => m.role === 'system');
+    expect(systemNote.content).toContain('timed out');
+  });
+
+  it('rejects tool calls made during finalization', async () => {
+    const execute = vi.fn().mockResolvedValue({ value: 1 });
+    const chat = scriptedChat([
+      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_manifest')) } },
+      { success: false, error: { category: 'timeout' } },
+      { success: true, data: { message: assistantWithCalls(makeCall('b', 'get_manifest')) } },
+    ]);
+    const { runner } = makeSupplementRunner({ chat, execute, limits: { ...SUPPLEMENT_LIMITS, maxToolCallsPerIteration: 5 } });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      finalizedWithAvailableEvidence: true,
+      error: { category: 'protocol', code: 'AGENT_FINALIZATION_REQUIRED' },
+    });
+    const finalizationResult = result.messages.find((m) =>
+      m.content?.includes('FINALIZATION_REQUIRED'),
+    );
+    expect(finalizationResult).toBeTruthy();
+  });
+
+  it('stops at the hard deadline', async () => {
+    let tick = 0;
+    const chat = scriptedChat([{ success: true, data: { message: assistantText() } }]);
+    const { runner } = makeSupplementRunner({ chat, now: () => (tick += 70000) });
+    const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
+    expect(result.status).toBe('timed_out');
+  });
+});

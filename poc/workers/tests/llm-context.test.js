@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildContextBlock } from '../shared/llm-context.js';
+import { buildContextBlock, LAYOUTS } from '../shared/llm-context.js';
 
 describe('buildContextBlock (review layout)', () => {
   const slices = {
@@ -235,5 +235,106 @@ describe('PR summary rendering (defensive shapes)', () => {
     expect(block).toContain('**Conversation:** API shape');
     expect(block).not.toContain('**Summary:**');
     expect(block).not.toContain('Key changes');
+  });
+});
+
+describe('buildContextBlock (defensive edges)', () => {
+  it('tolerates missing slices entirely', () => {
+    const block = buildContextBlock({ command: 'review' });
+    expect(block).toBe('');
+  });
+
+  it('omits whitespace-only and non-string diffs', () => {
+    for (const diff of ['   ', 42]) {
+      const block = buildContextBlock({ command: 'review', slices: { diff } });
+      expect(block).toBe('');
+    }
+  });
+
+  it('skips sections disabled by the layout', () => {
+    LAYOUTS['test-minimal'] = {
+      descriptionCap: 500,
+      commitsCap: 500,
+      commentsCap: 500,
+      filesCap: 500,
+    };
+    try {
+      const block = buildContextBlock({
+        command: 'test-minimal',
+        slices: {
+          description: 'D',
+          commits: [{ sha: 'a1b2c3d4', title: 'T' }],
+          comments: { issue: [{ user: 'u', body: 'b' }] },
+          files: [{ path: 'x' }],
+        },
+      });
+      expect(block).toContain('## Description');
+      expect(block).not.toContain('## Commits');
+      expect(block).not.toContain('## Conversation');
+      expect(block).toContain('- x');
+    } finally {
+      delete LAYOUTS['test-minimal'];
+    }
+  });
+
+  it('renders degenerate commits without sha, title, or author', () => {
+    const block = buildContextBlock({
+      command: 'pr-summary',
+      slices: {
+        commits: [
+          {},
+          { sha: 'abcdef123456789', title: 'Same', message: 'Same', author: 'A' },
+          { sha: 'abcdef999', title: 'T', message: 'Long\nmessage' },
+        ],
+      },
+    });
+    expect(block).toContain('`(no-sha)` (no subject)');
+    expect(block).toContain('`abcdef1` Same — A');
+    // message identical to title is not repeated; a differing message keeps
+    // its own newline after the two-space indent.
+    expect(block.match(/Same\n/g)?.length ?? 0).toBeLessThan(2);
+    expect(block).toContain('T\n  Long\nmessage');
+  });
+
+  it('renders anonymous, bodiless, and unlocated comments', () => {
+    const block = buildContextBlock({
+      command: 'review',
+      slices: {
+        diff: 'd',
+        comments: {
+          issue: [{}],
+          review: [{}, { user: 'v', body: 'text', path: 'p.ts', line: 7 }],
+        },
+      },
+    });
+    expect(block).toContain('**(anon)**:');
+    expect(block).toContain('**(anon)**:');
+    expect(block).toContain('**@v** on `p.ts`:7: text');
+  });
+
+  it('defaults a missing file status to changed and drops pathless entries', () => {
+    const block = buildContextBlock({
+      command: 'review',
+      slices: {
+        diff: 'd',
+        files: [{ path: 'a' }, { path: 'b', status: 'added', additions: 1 }, { other: true }],
+      },
+    });
+    // Review layout renders every file with an explicit binary flag.
+    expect(block).toContain('- a (changed, +0/-0, binary: false)');
+    expect(block).toContain('- b (added, +1/-0, binary: false)');
+    expect(block).toContain('## Changed files (2)');
+  });
+
+  it('renders a conversation fallback topic and unresolved questions', () => {
+    const block = buildContextBlock({
+      command: 'review',
+      slices: { diff: 'd' },
+      summary: {
+        conversationSummary: { unresolvedQuestions: ['Who owns the cache?'] },
+      },
+    });
+    expect(block).toContain('**Conversation:** No meaningful discussion recorded.');
+    expect(block).toContain('**Unresolved questions:**\n- Who owns the cache?');
   });
 });
