@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z.ai Code Bot — AI pull-request reviews from GitHub comments</title>
+    <meta
+      name="description"
+      content="Open-source Cloudflare Workers bot that turns /zai comments on GitHub pull requests into Z.ai-powered code reviews and PR descriptions."
+    />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="container head-row">
+        <a class="wordmark" href="index.html">
+          <svg
+            width="22"
+            height="22"
+            viewBox="0 0 64 64"
+            aria-hidden="true"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <rect width="64" height="64" rx="14" fill="#2f6e6a" />
+            <path
+              d="M20 22h24L20 42h24"
+              fill="none"
+              stroke="#fafaf8"
+              stroke-width="6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          Z.ai Code Bot
+        </a>
+        <nav class="site-nav" aria-label="Main">
+          <a href="index.html" aria-current="page">Abilities</a>
+          <a href="install.html">Install</a>
+          <a href="contacts.html">Contacts</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="container hero">
+        <p class="eyebrow">Open source · Cloudflare Workers</p>
+        <h1>AI code review,<br />one comment away.</h1>
+        <p class="lede">
+          Z.ai Code Bot listens for <code>/zai</code> comments on your GitHub
+          pull requests and answers with a full-context review written by Z.ai
+          models — or writes the PR description for you. Durable jobs,
+          marker-idempotent comments, zero servers to babysit.
+        </p>
+        <div class="actions">
+          <a class="btn" href="install.html">Installation guide</a>
+          <a
+            class="btn btn-ghost"
+            href="https://github.com/AndreiDrang/zai-code-bot"
+            >Source on GitHub&nbsp;↗</a
+          >
+        </div>
+      </section>
+
+      <section class="container section" id="commands">
+        <p class="eyebrow">01 — Commands</p>
+        <h2>Three commands, no ceremony</h2>
+        <p class="lede">
+          Type them as a plain comment on any pull request. Only repository
+          collaborators may run them.
+        </p>
+        <div class="grid cards-3">
+          <article class="card">
+            <p class="cmd"><code>/zai review</code></p>
+            <p>
+              Runs a full-context review of the pull request — files, commits,
+              and discussion — and posts one consolidated review comment,
+              updated in place on every rerun.
+            </p>
+          </article>
+          <article class="card">
+            <p class="cmd"><code>/zai describe</code></p>
+            <p>
+              Synthesizes a clean pull-request description from the commit
+              history and rewrites only its own marked section of the PR body —
+              never touching what you wrote.
+            </p>
+          </article>
+          <article class="card">
+            <p class="cmd"><code>/zai help</code></p>
+            <p>
+              Lists the available commands. Answered instantly by the webhook
+              worker — no queue, no waiting, no job created.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="container section" id="how-it-works">
+        <p class="eyebrow">02 — Under the hood</p>
+        <h2>A pipeline built for reliability</h2>
+        <ol class="flow">
+          <li>
+            <strong>GitHub sends a webhook</strong>
+            <p>
+              Pull-request events and comments hit the main worker's URL. The
+              HMAC-SHA256 signature is verified with Web Crypto before anything
+              else happens.
+            </p>
+          </li>
+          <li>
+            <strong>Authorization, then a durable job</strong>
+            <p>
+              Commenters must be collaborators of the repository. The command
+              becomes a job in D1 — the single source of truth for all state.
+            </p>
+          </li>
+          <li>
+            <strong>An opaque queue message</strong>
+            <p>
+              Only <code>{ schemaVersion, jobId }</code> travels through the
+              Queue. No secrets, no patches, nothing sensitive in transit.
+            </p>
+          </li>
+          <li>
+            <strong>The heavy worker claims the job</strong>
+            <p>
+              A private Queue consumer — with no public route and no service
+              binding endpoint — leases the job and starts the real work.
+            </p>
+          </li>
+          <li>
+            <strong>Bounded context goes to Z.ai</strong>
+            <p>
+              Gathered PR context (files, commits, comments — stored in R2) is
+              assembled into strictly size-capped prompts before it reaches the
+              model.
+            </p>
+          </li>
+          <li>
+            <strong>Results are published idempotently</strong>
+            <p>
+              One marker-owned review comment per PR; <code>describe</code>
+              updates only its own section of the PR body. Reruns never
+              duplicate output.
+            </p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="container section" id="qualities">
+        <p class="eyebrow">03 — Built for production</p>
+        <h2>Small bot, serious engineering</h2>
+        <div class="grid cards-6">
+          <article class="card">
+            <h3>Durable by default</h3>
+            <p>
+              D1 is authoritative. A scheduled sweep recovers expired leases and
+              replays unpublished results after failures.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Idempotent output</h3>
+            <p>
+              Marker-owned comments and PR-body sections mean safe reruns and no
+              duplicated review noise.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Security first</h3>
+            <p>
+              Webhook signature verification, collaborator authorization, and
+              sanitized user-facing errors. Secrets never leave Cloudflare.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Bounded context</h3>
+            <p>
+              Prompts are built from per-file patches with strict size limits —
+              the model sees what matters, not everything.
+            </p>
+          </article>
+          <article class="card">
+            <h3>No public AI endpoint</h3>
+            <p>
+              The worker that talks to Z.ai is reachable only through the Queue.
+              There is nothing to probe or abuse.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Configurable model</h3>
+            <p>
+              Pick any Z.ai model for reviews and descriptions with a single
+              <code>ZAI_MODEL</code> variable.
+            </p>
+          </article>
+        </div>
+        <aside class="note">
+          <strong>Note.</strong> Z.ai Code Bot is a personal, open-source
+          project. It is not affiliated with, endorsed by, or related to Z.ai /
+          Zhipu AI in any way — it simply uses the publicly available Z.ai model
+          API. Released under the MIT license.
+        </aside>
+      </section>
+    </main>
+
+    <footer class="site-foot">
+      <div class="container">
+        <p>
+          Z.ai Code Bot · MIT license ·
+          <a href="https://github.com/AndreiDrang/zai-code-bot">GitHub</a> ·
+          <a href="install.html">Install</a> ·
+          <a href="contacts.html">Contacts</a>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

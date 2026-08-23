@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Install &amp; run — Z.ai Code Bot</title>
+    <meta
+      name="description"
+      content="Step-by-step guide: clone, provision D1/R2/KV/Queue on Cloudflare, set secrets, deploy both Workers, wire the GitHub webhook, and run your first /zai command."
+    />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="container head-row">
+        <a class="wordmark" href="index.html">
+          <svg
+            width="22"
+            height="22"
+            viewBox="0 0 64 64"
+            aria-hidden="true"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <rect width="64" height="64" rx="14" fill="#2f6e6a" />
+            <path
+              d="M20 22h24L20 42h24"
+              fill="none"
+              stroke="#fafaf8"
+              stroke-width="6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          Z.ai Code Bot
+        </a>
+        <nav class="site-nav" aria-label="Main">
+          <a href="index.html">Abilities</a>
+          <a href="install.html" aria-current="page">Install</a>
+          <a href="contacts.html">Contacts</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="hero">
+        <p class="eyebrow">Guide</p>
+        <h1>Install &amp; run</h1>
+        <p class="lede">
+          The bot is two Cloudflare Workers, a handful of storage bindings, and
+          one GitHub webhook. Expect about 20 minutes end to end.
+        </p>
+      </section>
+
+      <section class="section" id="prerequisites">
+        <p class="eyebrow">Before you start</p>
+        <h2>Prerequisites</h2>
+        <ul>
+          <li>
+            <strong>Node.js 20+</strong> and npm (wrangler comes with
+            <code>npm install</code>).
+          </li>
+          <li>
+            A <strong>Cloudflare account</strong> with Workers enabled. Queues
+            require the Workers Paid plan.
+          </li>
+          <li>
+            <strong>Admin access</strong> to the GitHub repository (or org) that
+            will use the bot.
+          </li>
+          <li>
+            A <strong>GitHub personal access token</strong> with
+            <code>repo</code> and <code>read:org</code> scopes — the bot reads
+            PR context and writes comments with it.
+          </li>
+          <li>
+            A <strong>Z.ai API key</strong> from
+            <a href="https://z.ai">z.ai</a> /
+            <a href="https://open.bigmodel.cn">open.bigmodel.cn</a>.
+          </li>
+          <li>
+            A random webhook secret:
+            <code>openssl rand -hex 20</code>
+          </li>
+        </ul>
+
+        <div class="table-wrap">
+          <table>
+            <caption
+              class="eyebrow"
+              style="text-align: left; caption-side: top"
+            >
+              Resources you will create
+            </caption>
+            <thead>
+              <tr>
+                <th>Binding</th>
+                <th>Resource</th>
+                <th>Purpose</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>BOT_DB</code></td>
+                <td>D1 database <code>bot-db</code></td>
+                <td>Durable jobs, leases, publication state</td>
+              </tr>
+              <tr>
+                <td><code>BOT_ARTIFACTS</code></td>
+                <td>R2 bucket <code>bot-storage</code></td>
+                <td>Gathered PR context and command results</td>
+              </tr>
+              <tr>
+                <td><code>BOT_CACHE</code></td>
+                <td>KV namespace</td>
+                <td>Repo configuration and PR card cache</td>
+              </tr>
+              <tr>
+                <td><code>BOT_JOBS</code></td>
+                <td>Queue <code>bot-jobs</code></td>
+                <td>Carries job IDs from main to heavy worker</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" id="steps">
+        <p class="eyebrow">Step by step</p>
+
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h2>Get the code</h2>
+            <pre><code>git clone https://github.com/AndreiDrang/zai-code-bot.git
+cd zai-code-bot
+npm install</code></pre>
+            <p>
+              Install resolves wrangler locally, so every command below works
+              through <code>npx</code> or the npm scripts.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h2>Create the Cloudflare resources</h2>
+            <pre><code>npx wrangler login
+
+npx wrangler d1 create bot-db
+npx wrangler r2 bucket create bot-storage
+npx wrangler kv namespace create BOT_CACHE
+npx wrangler queues create bot-jobs</code></pre>
+            <p>
+              Note the IDs the commands print — you will paste them into
+              <code>wrangler.toml</code> in the next step.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h2>Apply the D1 migrations</h2>
+            <pre><code>cd src/zai-main-worker
+npx wrangler d1 migrations apply bot-db --remote
+cd ../..</code></pre>
+            <p>
+              This creates the job, lease, and publication tables the bot's
+              state machine relies on.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <h2>Configure both workers</h2>
+            <p>
+              Edit <code>src/zai-main-worker/wrangler.toml</code> and
+              <code>src/zai-heavy-worker/wrangler.toml</code>: fill in the
+              <code>database_id</code>, KV namespace <code>id</code>, and any
+              route or custom domain for the main worker's webhook URL.
+            </p>
+            <p>
+              Optionally set the model with a plain var (defaults to a GLM model
+              if unset):
+            </p>
+            <pre><code>[vars]
+ZAI_MODEL = "glm-4.7"</code></pre>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-body">
+            <h2>Add the secrets</h2>
+            <p>
+              The bot reads all credentials from
+              <strong>Cloudflare Secrets Store</strong> — nothing belongs in
+              <code>wrangler.toml</code> or source. Create a store, add three
+              secrets, then reference them from both workers:
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Secret in store</th>
+                    <th>Binding(s)</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>ZAI_GITHUB_WEBHOOK_KEY</code></td>
+                    <td><code>GITHUB_WEBHOOK_SECRET</code> (main)</td>
+                    <td>The webhook secret you generated</td>
+                  </tr>
+                  <tr>
+                    <td><code>ZAI_GITHUB_TOKEN</code></td>
+                    <td><code>GITHUB_TOKEN</code> (both)</td>
+                    <td>
+                      GitHub PAT with <code>repo</code> + <code>read:org</code>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><code>ZAI_API_KEY</code></td>
+                    <td><code>ZAI_API_KEY</code> (heavy)</td>
+                    <td>Your Z.ai API key</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <pre><code>[[secrets_store_secrets]]
+binding = "ZAI_API_KEY"
+store_id = "&lt;your-store-id&gt;"
+secret_name = "ZAI_API_KEY"</code></pre>
+            <p>
+              You can manage stores in the Cloudflare dashboard (Workers →
+              Secrets Store) or with <code>wrangler secret-store</code>.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">6</div>
+          <div class="step-body">
+            <h2>Deploy — heavy first, then main</h2>
+            <pre><code>npm run deploy:heavy   # queue consumer: must be listening first
+npm run deploy:main    # webhook ingress
+
+# or simply
+make deploy</code></pre>
+            <p>
+              Validate without touching production first with
+              <code>npm run build</code> (dry-run bundles of both workers).
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">7</div>
+          <div class="step-body">
+            <h2>Wire up the GitHub webhook</h2>
+            <p>
+              In your repository: <em>Settings → Webhooks → Add webhook</em>.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Field</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Payload URL</td>
+                    <td>Your main worker URL (route or custom domain)</td>
+                  </tr>
+                  <tr>
+                    <td>Content type</td>
+                    <td><code>application/json</code></td>
+                  </tr>
+                  <tr>
+                    <td>Secret</td>
+                    <td>Same value as <code>ZAI_GITHUB_WEBHOOK_KEY</code></td>
+                  </tr>
+                  <tr>
+                    <td>Events</td>
+                    <td>
+                      <code>pull_request</code>, <code>issue_comment</code>,
+                      <code>pull_request_review_comment</code>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">8</div>
+          <div class="step-body">
+            <h2>Run it</h2>
+            <p>Open any pull request and comment:</p>
+            <pre><code>/zai help      # instant command list from the webhook worker
+/zai review    # full-context AI review, one updated comment
+/zai describe  # PR description written into its own body section</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="local-dev">
+        <p class="eyebrow">Development</p>
+        <h2>Local development &amp; tests</h2>
+        <pre><code>npm run dev:main    # main worker with wrangler dev
+npm run dev:heavy   # heavy worker with wrangler dev
+npm test            # vitest suite with coverage</code></pre>
+        <p>
+          Tail live logs from either worker with
+          <code>npm run tail:main</code> / <code>npm run tail:heavy</code>.
+        </p>
+        <p>
+          Optional housekeeping — expire the gathered PR-context tier in R2:
+        </p>
+        <pre><code>npx wrangler r2 bucket lifecycle add bot-storage \
+  --id pr-context-retention --prefix "v2/prs/" --expire-days 30</code></pre>
+        <aside class="note">
+          <strong>Safety.</strong> Never commit secrets. All three credentials
+          live in Cloudflare Secrets Store and are referenced by binding —
+          <code>wrangler.toml</code> and the repository stay clean.
+        </aside>
+      </section>
+    </main>
+
+    <footer class="site-foot">
+      <div class="container">
+        <p>
+          Z.ai Code Bot · MIT license ·
+          <a href="https://github.com/AndreiDrang/zai-code-bot">GitHub</a> ·
+          <a href="index.html">Abilities</a> ·
+          <a href="contacts.html">Contacts</a>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
