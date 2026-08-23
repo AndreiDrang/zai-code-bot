@@ -653,7 +653,12 @@ describe('agent runner — request validation', () => {
   it('coerces non-array messages to an empty conversation', async () => {
     const chat = scriptedChat([{ success: true, data: { message: assistantText() } }]);
     const { runner } = makeSupplementRunner({ chat, messages: 'not-an-array' });
-    const result = await runner.run({ apiKey: 'k', model: 'm', messages: 'not-an-array', tools: [] });
+    const result = await runner.run({
+      apiKey: 'k',
+      model: 'm',
+      messages: 'not-an-array',
+      tools: [],
+    });
     expect(result.status).toBe('completed');
     expect(chat.calls[0].messages).toEqual([]);
   });
@@ -687,7 +692,12 @@ describe('agent runner — attempt accounting', () => {
     const { runner, logger } = makeSupplementRunner({ chat });
     const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
 
-    expect(result).toMatchObject({ status: 'completed', llmRequests: 1, llmAttempts: 1, llmTimeouts: 1 });
+    expect(result).toMatchObject({
+      status: 'completed',
+      llmRequests: 1,
+      llmAttempts: 1,
+      llmTimeouts: 1,
+    });
     expect(logger.info).toHaveBeenCalledWith(
       'Agent LLM attempt completed',
       expect.objectContaining({ category: 'timeout', phase: 'gathering' }),
@@ -730,7 +740,15 @@ describe('agent runner — tool budget handling', () => {
   it('answers beyond-limit calls with a turn-budget result', async () => {
     const execute = vi.fn().mockResolvedValue({ value: 1 });
     const chat = scriptedChat([
-      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' }), makeCall('b', 'get_diff', { path: 'y' })) } },
+      {
+        success: true,
+        data: {
+          message: assistantWithCalls(
+            makeCall('a', 'get_diff', { path: 'x' }),
+            makeCall('b', 'get_diff', { path: 'y' }),
+          ),
+        },
+      },
       { success: true, data: { message: assistantText() } },
     ]);
     const { runner } = makeSupplementRunner({ chat, execute });
@@ -763,13 +781,20 @@ describe('agent runner — tool budget handling', () => {
   it('maps non-protocol tool failures to safe errors', async () => {
     const execute = vi.fn().mockRejectedValue(new Error('boom'));
     const chat = scriptedChat([
-      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' })) } },
+      {
+        success: true,
+        data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' })) },
+      },
       { success: true, data: { message: assistantText() } },
     ]);
     const { runner } = makeSupplementRunner({ chat, execute });
     const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
 
-    expect(result).toMatchObject({ status: 'completed', failedToolCalls: 1, successfulToolCalls: 0 });
+    expect(result).toMatchObject({
+      status: 'completed',
+      failedToolCalls: 1,
+      successfulToolCalls: 0,
+    });
     const toolMessage = result.messages.find((m) => m.role === 'tool');
     expect(JSON.parse(toolMessage.content)).toMatchObject({
       ok: false,
@@ -780,9 +805,15 @@ describe('agent runner — tool budget handling', () => {
   it('skips duplicate requests using normalized argument keys', async () => {
     const execute = vi.fn().mockResolvedValue({ value: 1 });
     const chat = scriptedChat([
-      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' })) } },
+      {
+        success: true,
+        data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'x' })) },
+      },
       // Same call with argument keys in a different order → normalized duplicate.
-      { success: true, data: { message: assistantWithCalls(makeCall('b', 'get_diff', { path: 'x' })) } },
+      {
+        success: true,
+        data: { message: assistantWithCalls(makeCall('b', 'get_diff', { path: 'x' })) },
+      },
       { success: true, data: { message: assistantText() } },
     ]);
     const { runner } = makeSupplementRunner({ chat, execute });
@@ -857,10 +888,17 @@ describe('agent runner — finalization', () => {
   it('finalizes with retrieved evidence when the retrieval budget is exceeded', async () => {
     const execute = vi.fn().mockResolvedValue({ blob: 'x'.repeat(300) });
     const chat = scriptedChat([
-      { success: true, data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'src/a.ts' })) } },
+      {
+        success: true,
+        data: { message: assistantWithCalls(makeCall('a', 'get_diff', { path: 'src/a.ts' })) },
+      },
       { success: true, data: { message: assistantText() } },
     ]);
-    const { runner } = makeSupplementRunner({ chat, execute, limits: { ...SUPPLEMENT_LIMITS, maxToolCalls: 5, maxToolCallsPerIteration: 5 } });
+    const { runner } = makeSupplementRunner({
+      chat,
+      execute,
+      limits: { ...SUPPLEMENT_LIMITS, maxToolCalls: 5, maxToolCallsPerIteration: 5 },
+    });
     const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
 
     expect(result.status).toBe('completed');
@@ -883,7 +921,11 @@ describe('agent runner — finalization', () => {
       { success: false, error: { category: 'timeout' } },
       { success: true, data: { message: assistantText() } },
     ]);
-    const { runner } = makeSupplementRunner({ chat, execute, limits: { ...SUPPLEMENT_LIMITS, maxToolCallsPerIteration: 5 } });
+    const { runner } = makeSupplementRunner({
+      chat,
+      execute,
+      limits: { ...SUPPLEMENT_LIMITS, maxToolCallsPerIteration: 5 },
+    });
     const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
 
     expect(result.status).toBe('completed');
@@ -902,7 +944,11 @@ describe('agent runner — finalization', () => {
       { success: false, error: { category: 'timeout' } },
       { success: true, data: { message: assistantWithCalls(makeCall('b', 'get_manifest')) } },
     ]);
-    const { runner } = makeSupplementRunner({ chat, execute, limits: { ...SUPPLEMENT_LIMITS, maxToolCallsPerIteration: 5 } });
+    const { runner } = makeSupplementRunner({
+      chat,
+      execute,
+      limits: { ...SUPPLEMENT_LIMITS, maxToolCallsPerIteration: 5 },
+    });
     const result = await runner.run({ apiKey: 'k', model: 'm', messages: [], tools: [] });
 
     expect(result).toMatchObject({

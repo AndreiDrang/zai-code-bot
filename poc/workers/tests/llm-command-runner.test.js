@@ -110,7 +110,13 @@ beforeEach(() => {
   mocks.getSnapshotSlices.mockResolvedValue({
     status: 'available',
     metadata: null,
-    slices: { diff: 'diff-body', description: 'A feature', files: [{ path: 'a/f' }], commits: [], comments: { issue: [], review: [] } },
+    slices: {
+      diff: 'diff-body',
+      description: 'A feature',
+      files: [{ path: 'a/f' }],
+      commits: [],
+      comments: { issue: [], review: [] },
+    },
   });
   mocks.upsertComment.mockResolvedValue({ id: 42, created: true, skipped: false, attempts: 1 });
   mocks.call.mockResolvedValue({ success: true, data: 'RESULT', usedFallback: false });
@@ -226,7 +232,11 @@ describe('runLlmCommand — stored PR summary', () => {
       new Map([
         [
           prSummaryKey(REPO_ID, PR),
-          JSON.stringify({ schemaVersion: 1, headSha: HEAD, summary: { prSummary: 'Adds caching.' } }),
+          JSON.stringify({
+            schemaVersion: 1,
+            headSha: HEAD,
+            summary: { prSummary: 'Adds caching.' },
+          }),
         ],
       ]),
     );
@@ -256,7 +266,9 @@ describe('runLlmCommand — stored PR summary', () => {
       slices: { diff: 'diff-body' },
     });
     await runLlmCommand(makeCtx({ env: makeEnv({ bucket }) }), makeOpts());
-    expect(mocks.buildUserPrompt).toHaveBeenCalledWith(expect.objectContaining({ prSummary: null }));
+    expect(mocks.buildUserPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ prSummary: null }),
+    );
   });
 });
 
@@ -266,7 +278,10 @@ describe('runLlmCommand — failure paths', () => {
     const promise = runLlmCommand(makeCtx(), makeOpts());
     await expect(promise).rejects.toMatchObject({ code: 'llm_internal', retryable: true });
     expect(mocks.upsertComment).not.toHaveBeenCalled();
-    expect(mocks.logger.error).toHaveBeenCalledWith('Z.ai call failed', expect.objectContaining({ category: 'internal' }));
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      'Z.ai call failed',
+      expect.objectContaining({ category: 'internal' }),
+    );
   });
 
   it('finalizes an unknown attempt count as the final attempt', async () => {
@@ -294,7 +309,9 @@ describe('runLlmCommand — failure paths', () => {
   it('falls back to provider for a failed agent run without error details', async () => {
     mocks.agentRun.mockResolvedValue({ status: 'failed' });
     const job = { ...baseJob, attempt_count: MAX_JOB_ATTEMPTS };
-    await expect(runLlmCommand(makeCtx({ job }), makeOpts({ agentTools: true }))).rejects.toMatchObject({
+    await expect(
+      runLlmCommand(makeCtx({ job }), makeOpts({ agentTools: true })),
+    ).rejects.toMatchObject({
       code: 'llm_provider',
       retryable: false,
     });
@@ -313,7 +330,9 @@ describe('runLlmCommand — failure paths', () => {
   it('wraps a throwing agent run as agent_internal on the final attempt', async () => {
     mocks.agentRun.mockRejectedValue(new Error('runner exploded'));
     const job = { ...baseJob, attempt_count: MAX_JOB_ATTEMPTS };
-    await expect(runLlmCommand(makeCtx({ job }), makeOpts({ agentTools: true }))).rejects.toMatchObject({
+    await expect(
+      runLlmCommand(makeCtx({ job }), makeOpts({ agentTools: true })),
+    ).rejects.toMatchObject({
       code: 'llm_agent_internal',
       retryable: false,
     });
@@ -348,7 +367,11 @@ describe('runLlmCommand — agent success metadata', () => {
   };
 
   it('renders rich review metadata from agent stats', async () => {
-    mocks.agentRun.mockResolvedValue({ status: 'completed', response: { content: '## Review' }, ...richAgent });
+    mocks.agentRun.mockResolvedValue({
+      status: 'completed',
+      response: { content: '## Review' },
+      ...richAgent,
+    });
     const res = await runLlmCommand(
       makeCtx(),
       makeOpts({ command: 'review', doneStatus: 'reviewed', agentTools: true }),

@@ -51,7 +51,8 @@ const job = {
   author_login: 'author',
 };
 
-function fakeDb({ firstValue = job, allValue = [{ job_id: 'job-1' }] } = {}) {  const statements = [];
+function fakeDb({ firstValue = job, allValue = [{ job_id: 'job-1' }] } = {}) {
+  const statements = [];
   const db = {
     statements,
     prepare(sql) {
@@ -717,7 +718,9 @@ describe('storage sweep edges', () => {
           bindings,
           first: vi
             .fn()
-            .mockResolvedValue(sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : job) : null),
+            .mockResolvedValue(
+              sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : job) : null,
+            ),
           run: vi.fn(),
           all: vi.fn(),
         };
@@ -757,7 +760,9 @@ describe('storage sweep edges', () => {
           bindings,
           first: vi
             .fn()
-            .mockResolvedValue(sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : job) : null),
+            .mockResolvedValue(
+              sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : job) : null,
+            ),
           run: vi.fn(),
           all: vi.fn(),
         };

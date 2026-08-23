@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildReviewInitialContext,
-  buildReviewSystemPrompt,
-} from '../shared/prompts/review.js';
+import { buildReviewInitialContext, buildReviewSystemPrompt } from '../shared/prompts/review.js';
 import { buildDescribeInitialContext } from '../shared/prompts/describe.js';
 import { buildPrSummaryInitialContext } from '../shared/prompts/pr-summary.js';
 

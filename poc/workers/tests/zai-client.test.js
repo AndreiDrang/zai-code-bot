@@ -532,9 +532,7 @@ describe('zai-client — chat deadlines and retries', () => {
       onAttempt,
     });
     expect(result.success).toBe(true);
-    expect(onAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({ attempt: 1, success: true }),
-    );
+    expect(onAttempt).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, success: true }));
   });
 
   it('returns a timeout result when the deadline is already past', async () => {
@@ -643,7 +641,11 @@ describe('zai-client — header and usage parsing', () => {
     );
     const client = createZaiClient({ fetch: fetchImpl, sleep: noSleep });
     const result = await client.chat({ apiKey: 'k', model: 'm', messages: [] });
-    expect(result.data.usage).toEqual({ promptTokens: null, completionTokens: null, totalTokens: 7 });
+    expect(result.data.usage).toEqual({
+      promptTokens: null,
+      completionTokens: null,
+      totalTokens: 7,
+    });
   });
 
   it('parses numeric and HTTP-date retry-after values', async () => {

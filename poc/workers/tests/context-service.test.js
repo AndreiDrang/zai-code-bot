@@ -46,21 +46,25 @@ function makeObjects({ withManifest = true, withFiles = true, withDiff = true } 
     [prContextKey(REPO_ID, PR, 'manifest'), withManifest ? JSON.stringify(manifest) : null],
     [
       prContextKey(REPO_ID, PR, 'files'),
-      withFiles
-        ? JSON.stringify(files)
-        : JSON.stringify('not-an-array'),
+      withFiles ? JSON.stringify(files) : JSON.stringify('not-an-array'),
     ],
     [prContextDiffKey(REPO_ID, PR, 'a/f'), withDiff ? '@@ -1 +1 @@\n+line' : null],
     [prContextKey(REPO_ID, PR, 'description'), 'A feature'],
     [
       prContextKey(REPO_ID, PR, 'commits'),
-      JSON.stringify([{ sha: 'c1', title: 'One' }, { sha: 'c2', title: 'Two' }]),
+      JSON.stringify([
+        { sha: 'c1', title: 'One' },
+        { sha: 'c2', title: 'Two' },
+      ]),
     ],
     [
       prContextKey(REPO_ID, PR, 'comments'),
       JSON.stringify({
         issue: [{ body: 'issue', user: 'u' }],
-        review: [{ body: 'review', user: 'v', path: 'a/f' }, { body: 'other', user: 'w', path: 'z/y' }],
+        review: [
+          { body: 'review', user: 'v', path: 'a/f' },
+          { body: 'other', user: 'w', path: 'z/y' },
+        ],
       }),
     ],
     [prSummaryKey(REPO_ID, PR), null],
@@ -106,7 +110,10 @@ describe('context-service — manifest states', () => {
 
   it('reports a stale snapshot when the head moved', async () => {
     const service = makeService({ expectedHeadSha: 'other-head' });
-    await expect(service.getSnapshotState()).resolves.toMatchObject({ status: 'stale', headSha: HEAD });
+    await expect(service.getSnapshotState()).resolves.toMatchObject({
+      status: 'stale',
+      headSha: HEAD,
+    });
   });
 
   it('omits PR metadata when the manifest is missing', async () => {
@@ -211,7 +218,13 @@ describe('context-service — getDiff', () => {
     objects.set(
       prContextKey(REPO_ID, PR, 'files'),
       JSON.stringify([
-        { path: 'a/f', status: 'modified', additions: 1, deletions: 0, diff: { state: 'unavailable' } },
+        {
+          path: 'a/f',
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+          diff: { state: 'unavailable' },
+        },
       ]),
     );
     const service = makeService({ objects });
@@ -273,7 +286,9 @@ describe('context-service — getFile', () => {
   });
 
   it('maps source load failures to FILE_NOT_FOUND', async () => {
-    const service = makeService({ github: githubWithContent(() => Promise.reject(new Error('404'))) });
+    const service = makeService({
+      github: githubWithContent(() => Promise.reject(new Error('404'))),
+    });
     await expect(service.getFile('a/f')).rejects.toMatchObject({ code: 'FILE_NOT_FOUND' });
   });
 
@@ -326,24 +341,26 @@ describe('context-service — getFileRange', () => {
     const service = makeService({
       github: githubWithContent(() => Promise.resolve('one\ntwo\nthree')),
     });
-    await expect(service.getFileRange('a/f', { startLine: 2, endLine: 10 })).resolves.toMatchObject({
-      startLine: 2,
-      endLine: 3,
-      content: '2 | two\n3 | three',
-      returnedLines: 2,
-      totalLines: 3,
-      truncated: false,
-    });
+    await expect(service.getFileRange('a/f', { startLine: 2, endLine: 10 })).resolves.toMatchObject(
+      {
+        startLine: 2,
+        endLine: 3,
+        content: '2 | two\n3 | three',
+        returnedLines: 2,
+        totalLines: 3,
+        truncated: false,
+      },
+    );
   });
 
   it('truncates when the rendered range exceeds maxBytes', async () => {
     const service = makeService({ github: githubWithContent(() => Promise.resolve('one\ntwo')) });
-    await expect(service.getFileRange('a/f', { startLine: 1, endLine: 2, maxBytes: 3 })).resolves.toMatchObject(
-      {
-        content: null,
-        truncated: true,
-      },
-    );
+    await expect(
+      service.getFileRange('a/f', { startLine: 1, endLine: 2, maxBytes: 3 }),
+    ).resolves.toMatchObject({
+      content: null,
+      truncated: true,
+    });
   });
 });
 
@@ -420,7 +437,9 @@ describe('context-service — getDescription / getCommits / getComments', () => 
 
   it('rejects an invalid comment path', async () => {
     const service = makeService();
-    await expect(service.getComments({ path: '..' })).rejects.toMatchObject({ code: 'INVALID_PATH' });
+    await expect(service.getComments({ path: '..' })).rejects.toMatchObject({
+      code: 'INVALID_PATH',
+    });
   });
 
   it('drops non-array comment groups and clamps the limit', async () => {
