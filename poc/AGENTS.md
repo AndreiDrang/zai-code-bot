@@ -36,7 +36,7 @@ workers/
   (entrypoint included — `index.js` is tested via
   `workers/tests/index-fetch.test.js` with mocked bindings; `job-enqueuer.js`
   via `workers/tests/job-enqueuer.test.js`). Per-glob thresholds in
-  `vitest.config.js`: shared 90% lines/functions/statements + 83% branches;
+  `vitest.config.js`: shared 95% lines/functions/statements + 93% branches;
   main worker 90% across all metrics.
 
 ## Validation

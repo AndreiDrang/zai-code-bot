@@ -42,11 +42,12 @@ export default defineConfig({
       include: ['workers/shared/**/*.js', 'workers/zai-main-worker/src/**/*.js'],
       exclude: ['workers/tests/**', '**/*.d.ts'],
       // Per-glob thresholds: a ratcheting floor (branches included) tracks
-      // the test-coverage paydown. Actuals after Phase 3: shared ~90.5%
-      // branches / ~97% lines, main-worker ~94% branches / ~99% lines.
-      // Final ratchet: 93 branches for shared after Phase 5.
+      // the test-coverage paydown. Actuals after the coverage paydown:
+      // shared ~94.7% branches / ~98% lines, main-worker ~94% branches / ~98%
+      // lines. Defensive-only tails (agent/runner, zai-client safe tails) hold
+      // the last few branches; raise further only alongside refactors.
       thresholds: {
-        'workers/shared/**': { lines: 90, functions: 90, branches: 90, statements: 90 },
+        'workers/shared/**': { lines: 95, functions: 95, branches: 93, statements: 95 },
         'workers/zai-main-worker/src/**': {
           lines: 90,
           functions: 90,

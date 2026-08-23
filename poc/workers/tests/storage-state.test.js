@@ -8,7 +8,14 @@ import {
   run,
   safeErrorCode,
 } from '../shared/storage/database.js';
-import { createPrContextJob, createPrSummaryJob, getJob } from '../shared/storage/deliveries.js';
+import {
+  createCommandJob,
+  createPrContextJob,
+  createPrSummaryJob,
+  getCurrentPullRequestHead,
+  getJob,
+  getJobByDelivery,
+} from '../shared/storage/deliveries.js';
 import { getRepositoryConfig, saveRepositoryConfig } from '../shared/storage/config.js';
 import {
   claimJob,
@@ -44,8 +51,7 @@ const job = {
   author_login: 'author',
 };
 
-function fakeDb({ firstValue = job, allValue = [{ job_id: 'job-1' }] } = {}) {
-  const statements = [];
+function fakeDb({ firstValue = job, allValue = [{ job_id: 'job-1' }] } = {}) {  const statements = [];
   const db = {
     statements,
     prepare(sql) {
@@ -68,6 +74,22 @@ function fakeDb({ firstValue = job, allValue = [{ job_id: 'job-1' }] } = {}) {
     batch: vi.fn().mockResolvedValue([]),
   };
   return db;
+}
+
+/** A structurally valid PR event for the delivery-race tests. */
+function validEvent(deliveryId = 'd-race') {
+  return {
+    deliveryId,
+    action: 'opened',
+    repositoryId: 10,
+    repository: { owner: 'owner', name: 'repo', fullName: 'owner/repo' },
+    prNumber: 7,
+    headSha: 'abc',
+    baseSha: 'def',
+    title: 'Title',
+    authorLogin: 'author',
+    state: 'open',
+  };
 }
 
 describe('D1 storage adapters', () => {
@@ -648,5 +670,137 @@ describe('comment publication edge paths', () => {
     const input = args({ db: publicationDb({ finalizeChanges: 0 }) });
     await expect(upsertComment(input)).rejects.toThrow('lease was lost');
     expect(input.github.postComment).toHaveBeenCalledOnce();
+  });
+});
+
+describe('storage sweep edges', () => {
+  it('clamps invalid list limits to one and tolerates missing results', async () => {
+    const empty = fakeDb({ allValue: null });
+    await expect(listExpiredRunningJobs(empty, 'x')).resolves.toEqual([]);
+    await expect(listDueOutbox(empty, 0)).resolves.toEqual([]);
+    await expect(listDueStrandedJobs(empty, NaN)).resolves.toEqual([]);
+
+    const db = fakeDb({ allValue: [{ job_id: 'job-1' }] });
+    await listExpiredRunningJobs(db, 'x');
+    expect(db.statements[0].bindings[1]).toBe(1);
+  });
+
+  it('skips outbox publishing without a producer binding', async () => {
+    const db = fakeDb();
+    await expect(publishOutboxJob({}, db, 'job-1')).resolves.toBe(false);
+    await expect(publishOutboxJob(null, db, 'job-1')).resolves.toBe(false);
+  });
+
+  it('rejects non-positive repository and PR identifiers', async () => {
+    const db = fakeDb();
+    const base = {
+      deliveryId: 'd-1',
+      kind: 'pr_context',
+      repository: { owner: 'owner', name: 'repo', fullName: 'owner/repo' },
+    };
+    for (const bad of [
+      { ...base, repositoryId: 'x', prNumber: 7 },
+      { ...base, repositoryId: 0, prNumber: 7 },
+      { ...base, repositoryId: 10, prNumber: -1 },
+    ]) {
+      await expect(createPrContextJob(db, bad)).rejects.toThrow(TypeError);
+    }
+  });
+
+  it('returns the concurrent winner when the insert loses a UNIQUE race', async () => {
+    let selectCount = 0;
+    const db = fakeDb({ firstValue: null });
+    db.prepare = (sql) => ({
+      bind: (...bindings) => {
+        const statement = {
+          sql,
+          bindings,
+          first: vi
+            .fn()
+            .mockResolvedValue(sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : job) : null),
+          run: vi.fn(),
+          all: vi.fn(),
+        };
+        return statement;
+      },
+    });
+    db.batch = vi.fn().mockRejectedValue(new Error('UNIQUE constraint failed'));
+    const event = validEvent();
+    await expect(createPrContextJob(db, event)).resolves.toMatchObject({
+      job: expect.objectContaining({ job_id: 'job-1' }),
+      created: false,
+    });
+  });
+
+  it('rethrows when a lost UNIQUE race has no winner to read', async () => {
+    const db = fakeDb({ firstValue: null });
+    db.batch.mockRejectedValue(new Error('UNIQUE constraint failed'));
+    await expect(createPrContextJob(db, validEvent('d-race'))).rejects.toThrow(
+      'UNIQUE constraint failed',
+    );
+  });
+
+  it('fails loudly when a created job cannot be read back', async () => {
+    const db = fakeDb({ firstValue: null });
+    await expect(createPrContextJob(db, validEvent('d-load'))).rejects.toThrow(
+      'could not be loaded',
+    );
+  });
+
+  it('creates command jobs owning their delivery row', async () => {
+    let selectCount = 0;
+    const db = fakeDb({ firstValue: null });
+    db.prepare = (sql) => ({
+      bind: (...bindings) => {
+        const statement = {
+          sql,
+          bindings,
+          first: vi
+            .fn()
+            .mockResolvedValue(sql.includes('FROM jobs') ? (selectCount++ === 0 ? null : job) : null),
+          run: vi.fn(),
+          all: vi.fn(),
+        };
+        return statement;
+      },
+    });
+    await expect(createCommandJob(db, validEvent('d-cmd'), 'review')).resolves.toMatchObject({
+      job: expect.objectContaining({ job_id: 'job-1' }),
+      created: true,
+    });
+  });
+
+  it('looks up deliveries with and without a kind', async () => {
+    const db = fakeDb();
+    await getJobByDelivery(db, 'd-1', 'review');
+    expect(db.statements[0].sql).toContain('WHERE j.delivery_id = ? AND j.kind = ?');
+    await getJobByDelivery(db, 'd-1');
+    // The kind filter lives in the WHERE clause; the shared SELECT list always
+    // mentions j.kind as a column.
+    expect(db.statements[1].sql).toContain('WHERE j.delivery_id = ?');
+    expect(db.statements[1].sql.match(/WHERE j\.delivery_id = \? AND/g)?.length ?? 0).toBe(0);
+  });
+
+  it('rejects non-string PR heads and unconfigured databases', async () => {
+    const db = fakeDb({ firstValue: { head_sha: 42 } });
+    await expect(getCurrentPullRequestHead(db, 10, 7)).resolves.toBeNull();
+    await expect(getCurrentPullRequestHead({}, 10, 7)).resolves.toBeNull();
+  });
+
+  it('reads changed rows and bindings defensively', () => {
+    expect(changedRows({ changes: 3 })).toBe(3);
+    expect(changedRows(null)).toBe(0);
+    expect(requireBinding('binding', 'BOT_DB')).toBe('binding');
+    expect(() => requireBinding(null, 'BOT_DB')).toThrow('BOT_DB binding is not configured');
+  });
+
+  it('returns the raw result object when no meta wrapper exists', async () => {
+    const stmt = {
+      run: vi.fn().mockResolvedValueOnce({ foo: 1 }).mockResolvedValueOnce(null),
+      all: vi.fn(),
+      first: vi.fn(),
+    };
+    await expect(run(stmt)).resolves.toEqual({ foo: 1 });
+    await expect(run(stmt)).resolves.toEqual({});
   });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewInitialContext, buildReviewSystemPrompt } from '../shared/prompts/review.js';
+import {
+  buildReviewInitialContext,
+  buildReviewSystemPrompt,
+} from '../shared/prompts/review.js';
+import { buildDescribeInitialContext } from '../shared/prompts/describe.js';
+import { buildPrSummaryInitialContext } from '../shared/prompts/pr-summary.js';
 
 describe('review prompts', () => {
   it('keeps retrieval policy and untrusted-content rules in the system prompt', () => {
@@ -84,5 +89,18 @@ describe('review prompts', () => {
     expect(context).toContain('src/generated/file-549.ts (added, +549/-0, binary: false)');
     expect(context).not.toContain('SENSITIVE-LARGE-DIFF-CONTENT');
     expect(context.length).toBeLessThan(200000);
+  });
+});
+
+describe('describe and pr-summary initial context', () => {
+  it('falls back to the no-context note when nothing can be rendered', () => {
+    const out = buildDescribeInitialContext({ slices: {}, metadata: null, maxBytes: 1000 });
+    expect(out).toContain('(No source context was available.)');
+  });
+
+  it('falls back for the pr-summary layout too', () => {
+    const out = buildPrSummaryInitialContext({ metadata: null, maxBytes: 1000 });
+    expect(out).toContain('(No source context was available.)');
+    expect(out).toContain('Return exactly this JSON structure:');
   });
 });

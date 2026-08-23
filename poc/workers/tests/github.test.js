@@ -269,4 +269,61 @@ describe('shared/github (GitHubClient)', () => {
       );
     });
   });
+
+  describe('defensive response shapes', () => {
+    it('treats a non-array page as empty in getAllPrFiles', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ odd: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      await expect(client.getAllPrFiles('o', 'r', 7)).resolves.toEqual([]);
+    });
+
+    it('returns an empty description when the PR body is null', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ body: null }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      await expect(client.getPrDescription('o', 'r', 7)).resolves.toBe('');
+    });
+
+    it('clamps invalid maxComments values to 100', async () => {
+      for (let i = 0; i < 2; i += 1) {
+        fetchSpy.mockResolvedValueOnce(
+          new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+      await client.getPrComments('o', 'r', 7, { maxComments: 'x' });
+      expect(fetchSpy.mock.calls[0][0]).toContain('per_page=100');
+      expect(fetchSpy.mock.calls[1][0]).toContain('per_page=100');
+    });
+
+    it('degrades non-array comment slices to empty lists', async () => {
+      for (let i = 0; i < 2; i += 1) {
+        fetchSpy.mockResolvedValueOnce(
+          new Response(JSON.stringify({ not: 'an array' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+      await expect(client.getPrComments('o', 'r', 7)).resolves.toEqual({
+        issue: [],
+        review: [],
+      });
+    });
+
+    it('omits the ref query when getFileContent has no ref', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('content', { status: 200 }));
+      await client.getFileContent('o', 'r', 'a/f');
+      expect(fetchSpy.mock.calls[0][0]).not.toContain('?ref=');
+    });
+  });
 });
