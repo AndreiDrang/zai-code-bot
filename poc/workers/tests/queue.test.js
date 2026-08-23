@@ -68,6 +68,55 @@ describe('heavy worker queue protocol', () => {
     expect(msg.ack).toHaveBeenCalledOnce();
   });
 
+  it('re-delays a claim-null redelivery that arrived before available_at', async () => {
+    const availableAt = new Date(Date.now() + 45_000).toISOString();
+    getJob.mockResolvedValue({ ...claimed(), status: 'retryable', available_at: availableAt });
+    claimJob.mockResolvedValue(null);
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
+
+    expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: expect.any(Number) });
+    const { delaySeconds } = msg.retry.mock.calls[0][0];
+    expect(delaySeconds).toBeGreaterThanOrEqual(1);
+    expect(delaySeconds).toBeLessThanOrEqual(45);
+    expect(msg.ack).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Redelivery preceded available_at; re-delayed',
+      expect.objectContaining({ jobId: 'job-1', status: 'retryable' }),
+    );
+  });
+
+  it('acks a claim-null redelivery for a job that is already due', async () => {
+    getJob.mockResolvedValue({
+      ...claimed(),
+      status: 'retryable',
+      available_at: '2020-01-01T00:00:00.000Z',
+    });
+    claimJob.mockResolvedValue(null);
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
+
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(msg.retry).not.toHaveBeenCalled();
+  });
+
+  it('acks a claim-null redelivery for running or completed jobs', async () => {
+    for (const status of ['running', 'succeeded', 'failed']) {
+      const msg = message();
+      getJob.mockResolvedValue({
+        ...claimed(),
+        status,
+        available_at: new Date(Date.now() + 60_000).toISOString(),
+      });
+      claimJob.mockResolvedValue(null);
+      await processQueueMessage(msg, { BOT_DB: {} }, logger);
+      expect(msg.ack).toHaveBeenCalledOnce();
+      expect(msg.retry).not.toHaveBeenCalled();
+    }
+  });
+
   it('retries the first transient failure and emits a warning', async () => {
     getJob.mockResolvedValue(claimed());
     claimJob.mockResolvedValue(claimed(1));

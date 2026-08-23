@@ -14,6 +14,7 @@ import {
   claimJob,
   linkRunResultArtifact,
   listDueOutbox,
+  listDueStrandedJobs,
   listExpiredRunningJobs,
   recoverExpiredJob,
   markJobFailed,
@@ -271,6 +272,22 @@ describe('D1 storage adapters', () => {
     ]);
   });
 
+  it('lists stranded due jobs behind the grace cutoff', async () => {
+    const row = {
+      job_id: 'job-1',
+      kind: 'review',
+      status: 'retryable',
+      available_at: '2026-01-01T00:00:00.000Z',
+    };
+    const db = fakeDb({ allValue: [row] });
+    await expect(listDueStrandedJobs(db, 25, '2026-01-01T00:03:00.000Z')).resolves.toEqual([row]);
+
+    const statement = db.statements.find((s) => s.sql.includes('available_at IS NOT NULL'));
+    expect(statement.sql).toContain("status IN ('queued', 'retryable')");
+    // The first binding is the cutoff: `now` minus the 120s grace window.
+    expect(new Date(statement.bindings[0]).toISOString()).toBe('2026-01-01T00:01:00.000Z');
+  });
+
   it('uses defaults when no repository configuration exists', async () => {
     const cache = { put: vi.fn().mockRejectedValue(new Error('cache down')) };
     await expect(
@@ -467,7 +484,7 @@ describe('comment publication edge paths', () => {
   });
 
   it('requires a job id so every publication is lease-tracked', async () => {
-    const { jobId, ...rest } = args();
+    const { jobId: _omitted, ...rest } = args();
     await expect(upsertComment(rest)).rejects.toThrow('job ID is required');
   });
 

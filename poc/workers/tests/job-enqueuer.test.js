@@ -11,6 +11,7 @@ vi.mock('../shared/storage/jobs.js', () => ({
   markOutboxPublished: vi.fn(),
   recordOutboxFailure: vi.fn(),
   listDueOutbox: vi.fn(),
+  listDueStrandedJobs: vi.fn(),
   listExpiredRunningJobs: vi.fn(),
   recoverExpiredJob: vi.fn(),
 }));
@@ -28,6 +29,7 @@ import {
   enqueueJob,
   recoverExpiredJobs,
   replayDueOutbox,
+  requeueStrandedJobs,
   sweepExpiredStorage,
 } from '../zai-main-worker/src/job-enqueuer.js';
 import {
@@ -35,6 +37,7 @@ import {
   markOutboxPublished,
   recordOutboxFailure,
   listDueOutbox,
+  listDueStrandedJobs,
   listExpiredRunningJobs,
   recoverExpiredJob,
 } from '../shared/storage/jobs.js';
@@ -185,6 +188,52 @@ describe('replayDueOutbox', () => {
     expect(result).toEqual({ found: 3, published: 2 });
     expect(recordOutboxFailure).toHaveBeenCalledWith(db, 'job-b', 'queue_publish_failed', 30);
     expect(markOutboxPublished).not.toHaveBeenCalledWith(db, 'job-b');
+  });
+});
+
+describe('requeueStrandedJobs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queueMessage.mockImplementation((jobId) => ({ schemaVersion: 1, jobId }));
+  });
+
+  it('skips without counting when bindings are missing', async () => {
+    const result = await requeueStrandedJobs(makeEnv({ BOT_JOBS: undefined }));
+
+    expect(result).toEqual({ found: 0, requeued: 0, skipped: true });
+    expect(listDueStrandedJobs).not.toHaveBeenCalled();
+  });
+
+  it('re-sends a message for each stranded row without touching the outbox', async () => {
+    const env = makeEnv();
+    env.BOT_JOBS.send.mockResolvedValue(undefined);
+    listDueStrandedJobs.mockResolvedValue([
+      { job_id: 'job-a', kind: 'review', status: 'retryable', available_at: 'x' },
+      { job_id: 'job-b', kind: 'describe', status: 'queued', available_at: 'y' },
+    ]);
+
+    const result = await requeueStrandedJobs(env, 25);
+
+    expect(result).toEqual({ found: 2, requeued: 2 });
+    expect(env.BOT_JOBS.send).toHaveBeenCalledWith({ schemaVersion: 1, jobId: 'job-a' });
+    expect(env.BOT_JOBS.send).toHaveBeenCalledWith({ schemaVersion: 1, jobId: 'job-b' });
+    // The outbox row tracks FIRST publication only — already published, so
+    // the sweep must not re-mark it or double-count publish attempts.
+    expect(markOutboxPublished).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Stranded due job re-enqueued',
+      expect.objectContaining({ jobId: 'job-a', errorCode: 'stranded_job_requeued' }),
+    );
+  });
+
+  it('keeps processing the batch when one send fails', async () => {
+    const env = makeEnv();
+    env.BOT_JOBS.send.mockRejectedValueOnce(new Error('transient')).mockResolvedValueOnce(undefined);
+    listDueStrandedJobs.mockResolvedValue([{ job_id: 'job-a' }, { job_id: 'job-b' }]);
+
+    const result = await requeueStrandedJobs(env, 25);
+
+    expect(result).toEqual({ found: 2, requeued: 1 });
   });
 });
 

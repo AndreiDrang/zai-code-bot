@@ -32,6 +32,7 @@ import {
   enqueueJob,
   recoverExpiredJobs,
   replayDueOutbox,
+  requeueStrandedJobs,
   sweepExpiredStorage,
 } from './job-enqueuer.js';
 import { createPrContextJob, createCommandJob } from '../../shared/storage/deliveries.js';
@@ -236,8 +237,9 @@ export default {
   async scheduled(_controller, env) {
     const leases = await recoverExpiredJobs(env, 100);
     const outbox = await replayDueOutbox(env, 25);
+    const stranded = await requeueStrandedJobs(env, 25);
     const artifacts = await sweepExpiredStorage(env, 100);
-    return { leases, outbox, artifacts };
+    return { leases, outbox, stranded, artifacts };
   },
 };
 

@@ -44,6 +44,29 @@ export async function processQueueMessage(
 
   const claimed = await claimJob(env.BOT_DB, jobId);
   if (!claimed) {
+    // claimJob also rejects a redelivery that arrives BEFORE the D1 row is
+    // due (clock/scheduling skew between the queue and the worker, or a crash
+    // between markJobRetryable and message.retry). Acking here would strand
+    // the job forever — re-delay it so the queue redelivers once it is due.
+    const availableAtMs = job.available_at ? Date.parse(job.available_at) : null;
+    if (
+      (job.status === 'retryable' || job.status === 'queued') &&
+      availableAtMs !== null &&
+      availableAtMs > Date.now()
+    ) {
+      const delaySeconds = Math.min(
+        300,
+        Math.max(1, Math.ceil((availableAtMs - Date.now()) / 1000)),
+      );
+      message.retry({ delaySeconds });
+      logger.warn('Redelivery preceded available_at; re-delayed', {
+        jobId,
+        status: job.status,
+        available_at: job.available_at,
+        delaySeconds,
+      });
+      return;
+    }
     // Another delivery is already running, the lease has not expired, or the
     // job is complete. The owner of the active lease will finish it.
     message.ack();

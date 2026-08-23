@@ -22,6 +22,7 @@ vi.mock('../zai-main-worker/src/job-enqueuer.js', () => ({
   enqueueJob: vi.fn(),
   recoverExpiredJobs: vi.fn(),
   replayDueOutbox: vi.fn(),
+  requeueStrandedJobs: vi.fn(),
   sweepExpiredStorage: vi.fn(),
 }));
 vi.mock('../shared/pr-comments.js', () => ({ refreshCommentsSlice: vi.fn() }));
@@ -34,6 +35,7 @@ import {
   enqueueJob,
   recoverExpiredJobs,
   replayDueOutbox,
+  requeueStrandedJobs,
   sweepExpiredStorage,
 } from '../zai-main-worker/src/job-enqueuer.js';
 import { refreshCommentsSlice } from '../shared/pr-comments.js';
@@ -688,20 +690,23 @@ describe('description slice mirror', () => {
 // ---------------------------------------------------------------------------
 
 describe('scheduled handler', () => {
-  it('runs lease recovery, outbox replay, and the storage sweep with bounded limits', async () => {
+  it('runs lease recovery, outbox replay, stranded sweep, and the storage sweep with bounded limits', async () => {
     const leases = { found: 1, requeued: 1, failed: 0 };
     const outbox = { found: 2, published: 1 };
+    const stranded = { found: 1, requeued: 1 };
     const artifacts = { found: 3, deleted: 2 };
     recoverExpiredJobs.mockResolvedValue(leases);
     replayDueOutbox.mockResolvedValue(outbox);
+    requeueStrandedJobs.mockResolvedValue(stranded);
     sweepExpiredStorage.mockResolvedValue(artifacts);
 
     const env = makeEnv();
     const result = await worker.scheduled({}, env);
 
-    expect(result).toEqual({ leases, outbox, artifacts });
+    expect(result).toEqual({ leases, outbox, stranded, artifacts });
     expect(recoverExpiredJobs).toHaveBeenCalledWith(env, 100);
     expect(replayDueOutbox).toHaveBeenCalledWith(env, 25);
+    expect(requeueStrandedJobs).toHaveBeenCalledWith(env, 25);
     expect(sweepExpiredStorage).toHaveBeenCalledWith(env, 100);
   });
 });

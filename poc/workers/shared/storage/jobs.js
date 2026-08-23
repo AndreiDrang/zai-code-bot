@@ -314,6 +314,32 @@ export async function listDueOutbox(db, limit = 25, now = new Date().toISOString
   return result?.results || [];
 }
 
+/**
+ * `queued`/`retryable` jobs that are already past `available_at` (plus a grace
+ * window) and so should not be waiting on anything — if one shows up here, its
+ * queue message was likely lost (early redelivery acked before its time, or a
+ * crash between the retryable transition and message.retry). The cron sweep
+ * re-sends a message; claimJob keeps a duplicate delivery harmless.
+ */
+export async function listDueStrandedJobs(
+  db,
+  limit = 25,
+  now = new Date().toISOString(),
+  graceSeconds = 120,
+) {
+  const cutoff = new Date(Date.parse(now) - graceSeconds * 1000).toISOString();
+  const result = await prepare(
+    db,
+    `SELECT job_id, kind, status, available_at FROM jobs
+     WHERE status IN ('queued', 'retryable')
+       AND available_at IS NOT NULL AND available_at <= ?
+     ORDER BY available_at LIMIT ?`,
+    cutoff,
+    Math.min(Math.max(Number(limit) || 1, 1), 100),
+  ).all();
+  return result?.results || [];
+}
+
 export function queueMessage(jobId) {
   return { schemaVersion: STORAGE_SCHEMA_VERSION, jobId };
 }

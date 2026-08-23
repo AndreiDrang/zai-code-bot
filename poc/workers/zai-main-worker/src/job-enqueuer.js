@@ -3,6 +3,7 @@ import {
   markOutboxPublished,
   queueMessage,
   listDueOutbox,
+  listDueStrandedJobs,
   listExpiredRunningJobs,
   recoverExpiredJob,
 } from '../../shared/storage/jobs.js';
@@ -75,4 +76,34 @@ export async function replayDueOutbox(env, limit = 25) {
     }
   }
   return { found: rows.length, published };
+}
+
+/**
+ * Safety net for jobs whose queue message was lost after the outbox row was
+ * already published (early redelivery acked before `available_at`, or a crash
+ * between the retryable transition and `message.retry()`). Re-sends a plain
+ * message; `claimJob` on the consumer side makes duplicates harmless. The
+ * outbox row is deliberately untouched — it tracks first publication only.
+ */
+export async function requeueStrandedJobs(env, limit = 25) {
+  if (!env?.BOT_JOBS?.send || !env?.BOT_DB) return { found: 0, requeued: 0, skipped: true };
+  const logger = createLogger(env, 'zai-main-worker:job-recovery');
+  const rows = await listDueStrandedJobs(env.BOT_DB, limit);
+  let requeued = 0;
+  for (const row of rows) {
+    try {
+      await env.BOT_JOBS.send(queueMessage(row.job_id));
+      requeued += 1;
+      logger.warn('Stranded due job re-enqueued', {
+        jobId: row.job_id,
+        kind: row.kind,
+        status: row.status,
+        available_at: row.available_at,
+        errorCode: 'stranded_job_requeued',
+      });
+    } catch {
+      // Keep processing the bounded batch; the next cron invocation retries it.
+    }
+  }
+  return { found: rows.length, requeued };
 }
