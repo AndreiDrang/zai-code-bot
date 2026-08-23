@@ -24,10 +24,10 @@ and wall-time budget, driven by a durable [Queue](/contracts/queue-message.md).
 
 ## Workers
 
-| Worker | Owns | Driven by |
-| --- | --- | --- |
-| `zai-main-worker` | webhook ingress, signature gate, parse, auth, routing, incremental slice refreshes, D1 write + queue publish, 5-min self-healing cron | `fetch` (webhook) + `scheduled` (cron) |
-| `zai-heavy-worker` | queue consumer, job claiming, `pr_context` / `pr_summary` / `review` / `describe` handlers, artifact + context writes, comment publication | `queue` (consumer) |
+| Worker             | Owns                                                                                                                                       | Driven by                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `zai-main-worker`  | webhook ingress, signature gate, parse, auth, routing, incremental slice refreshes, D1 write + queue publish, 5-min self-healing cron      | `fetch` (webhook) + `scheduled` (cron) |
+| `zai-heavy-worker` | queue consumer, job claiming, `pr_context` / `pr_summary` / `review` / `describe` handlers, artifact + context writes, comment publication | `queue` (consumer)                     |
 
 ## Decoupled lifetimes
 

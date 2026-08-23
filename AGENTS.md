@@ -31,17 +31,17 @@ been removed. Do not recreate it.
 
 ## Important files
 
-| Area | Location |
-| --- | --- |
-| Webhook routing | `src/zai-main-worker/src/index.js` |
-| Command allowlist | `src/shared/constants.js` |
-| Command parsing | `src/shared/commands.js` |
-| Review | `src/zai-heavy-worker/src/handlers/review.js` |
-| Describe | `src/zai-heavy-worker/src/handlers/describe.js` |
-| Queue lifecycle | `src/zai-heavy-worker/src/queue.js` |
-| GitHub API | `src/shared/github.js` |
-| Job/publication storage | `src/shared/storage/` |
-| Worker configuration | `src/*/wrangler.toml` |
+| Area                    | Location                                        |
+| ----------------------- | ----------------------------------------------- |
+| Webhook routing         | `src/zai-main-worker/src/index.js`              |
+| Command allowlist       | `src/shared/constants.js`                       |
+| Command parsing         | `src/shared/commands.js`                        |
+| Review                  | `src/zai-heavy-worker/src/handlers/review.js`   |
+| Describe                | `src/zai-heavy-worker/src/handlers/describe.js` |
+| Queue lifecycle         | `src/zai-heavy-worker/src/queue.js`             |
+| GitHub API              | `src/shared/github.js`                          |
+| Job/publication storage | `src/shared/storage/`                           |
+| Worker configuration    | `src/*/wrangler.toml`                           |
 
 ## Invariants
 
@@ -85,6 +85,7 @@ CI additionally runs `npm audit --audit-level=moderate`. Workspace mechanics
 (script inventory, tests, coverage) are in `src/AGENTS.md`.
 
 <!-- okf-knowledge:start -->
+
 ## Open Knowledge Format (OKF)
 
 - OKF knowledge bundles live in an `okf/` directory under their documentation scope.
@@ -93,4 +94,5 @@ CI additionally runs `npm audit --audit-level=moderate`. Workspace mechanics
 - Preserve stable Concept IDs. When moving a concept, update incoming links, directory indexes, and `okf/log.md`.
 - After changes, validate frontmatter, internal links, indexes, duplicate resources, stale source paths, and lifecycle status.
 - Use the `okf-knowledge` skill to initialize, refresh, reconcile, or audit a bundle.
+
 <!-- okf-knowledge:end -->
