@@ -15,6 +15,14 @@
 export const COMMENT_REFRESH_ACTIONS = Object.freeze(['created', 'edited', 'deleted']);
 
 /**
+ * Comment actions that may EXECUTE a /zai command. `edited` and `deleted`
+ * deliveries still carry the full comment body, but re-running the LLM on
+ * them would trigger exactly what the user tried to retract — so only
+ * `created` executes. (Slice mirroring above intentionally keeps all three.)
+ */
+export const COMMAND_TRIGGER_ACTIONS = Object.freeze(['created']);
+
+/**
  * True when an `issue_comment` webhook should trigger a comments-slice refresh.
  *
  * Guards:

@@ -37,7 +37,11 @@ import {
 import { createPrContextJob, createCommandJob } from '../../shared/storage/deliveries.js';
 import { refreshCommentsSlice } from '../../shared/pr-comments.js';
 import { refreshDescriptionSlice } from '../../shared/pr-description.js';
-import { isPrCommentRefreshEvent, planCommentsRefresh } from './comment-events.js';
+import {
+  isPrCommentRefreshEvent,
+  planCommentsRefresh,
+  COMMAND_TRIGGER_ACTIONS,
+} from './comment-events.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -138,9 +142,18 @@ export default {
         });
       }
 
-      // --- Gate 4: only process command-bearing comment events ---
-      if (!isCommandEvent(internalEvent) || !isCommand(webhookData.comment?.body)) {
-        logger.info('Skipping event', { internalEvent });
+      // --- Gate 4: only process command-bearing comment CREATIONS ---
+      // `edited`/`deleted` deliveries carry the full comment body but must not
+      // re-execute the command (deleting `/zai review` means "cancel", not
+      // "run again"). Missing action degrades to `created` (GitHub always
+      // sends one).
+      const commentAction = webhookData.action ?? 'created';
+      if (
+        !isCommandEvent(internalEvent) ||
+        !COMMAND_TRIGGER_ACTIONS.includes(commentAction) ||
+        !isCommand(webhookData.comment?.body)
+      ) {
+        logger.info('Skipping event', { internalEvent, action: commentAction });
         return new Response('OK', { status: 200 });
       }
 

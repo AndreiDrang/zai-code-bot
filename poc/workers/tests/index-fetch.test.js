@@ -262,6 +262,32 @@ describe('command comments', () => {
     expect(authorizeCommenter).not.toHaveBeenCalled();
   });
 
+  it.each(['edited', 'deleted'])(
+    'ignores a /zai command on an %s comment (no re-execution)',
+    async (action) => {
+      const res = await signedRequest({ body: prCommentPayload({ body: '/zai review', action }) });
+
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('OK');
+      expect(authorizeCommenter).not.toHaveBeenCalled();
+      expect(createCommandJob).not.toHaveBeenCalled();
+      expect(enqueueJob).not.toHaveBeenCalled();
+    },
+  );
+
+  it('ignores an edited inline review comment carrying a command (same gate)', async () => {
+    const res = await signedRequest({
+      body: prCommentPayload({ body: '/zai help', action: 'edited' }),
+      event: 'pull_request_review_comment',
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('OK');
+    expect(authorizeCommenter).not.toHaveBeenCalled();
+    expect(github.postComment).not.toHaveBeenCalled(); // not even inline help runs
+    expect(createCommandJob).not.toHaveBeenCalled();
+  });
+
   it('accepts a signed /zai review and enqueues a durable job', async () => {
     const env = makeEnv();
     const res = await signedRequest({ body: prCommentPayload({ body: '/zai review' }) }, env);
@@ -549,6 +575,23 @@ describe('comments slice mirror', () => {
     await flushWaitUntil(ctx);
 
     expect(res.status).toBe(200);
+  });
+
+  it('still refreshes the slice for a deleted command comment while NOT executing it', async () => {
+    const env = makeEnv();
+    const res = await signedRequest(
+      { body: prCommentPayload({ body: '/zai review', action: 'deleted' }) },
+      env,
+    );
+    await flushWaitUntil(ctx);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('OK');
+    expect(refreshCommentsSlice).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 7, repoId: 10 }),
+    );
+    expect(authorizeCommenter).not.toHaveBeenCalled();
+    expect(createCommandJob).not.toHaveBeenCalled();
   });
 
   it('skips the refresh for comments on plain issues', async () => {
