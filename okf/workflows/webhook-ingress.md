@@ -23,14 +23,14 @@ logic, returning early at each gate.
 
 # Gate chain
 
-| # | Gate | Failure response |
-| --- | --- | --- |
-| 0 | Request path is `/github/webhook` | `404 Not Found` |
-| 1 | HTTP method is `POST` | `405 Method Not Allowed` |
-| 2 | Content-Type is `application/json` | `415 Unsupported Media Type` |
-| 3 | Webhook signature valid (HMAC-SHA256 via Web Crypto) | `401 Unauthorized` |
-| 4 | Event is command-bearing `/zai` comment | `200 OK` (skip) |
-| 5 | Commenter is a [collaborator](/rules/authorization.md) | `403 Forbidden` |
+| #   | Gate                                                   | Failure response             |
+| --- | ------------------------------------------------------ | ---------------------------- |
+| 0   | Request path is `/github/webhook`                      | `404 Not Found`              |
+| 1   | HTTP method is `POST`                                  | `405 Method Not Allowed`     |
+| 2   | Content-Type is `application/json`                     | `415 Unsupported Media Type` |
+| 3   | Webhook signature valid (HMAC-SHA256 via Web Crypto)   | `401 Unauthorized`           |
+| 4   | Event is command-bearing `/zai` comment                | `200 OK` (skip)              |
+| 5   | Commenter is a [collaborator](/rules/authorization.md) | `403 Forbidden`              |
 
 # Path scoping
 
