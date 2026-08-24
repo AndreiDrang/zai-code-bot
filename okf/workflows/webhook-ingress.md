@@ -1,7 +1,7 @@
 ---
 type: Workflow
 title: Webhook ingress
-description: The main worker fetch() gate chain — method, content-type, signature verification, parse — then a three-way fork: PR-context jobs, incremental slice refreshes, and command comments.
+description: The main worker fetch() gate chain — path scoping, method, content-type, signature verification, parse — then a three-way fork: PR-context jobs, incremental slice refreshes, and command comments.
 source_paths:
   - src/zai-main-worker/src/index.js
   - src/shared/crypto.js
@@ -25,11 +25,20 @@ logic, returning early at each gate.
 
 | # | Gate | Failure response |
 | --- | --- | --- |
+| 0 | Request path is `/github/webhook` | `404 Not Found` |
 | 1 | HTTP method is `POST` | `405 Method Not Allowed` |
 | 2 | Content-Type is `application/json` | `415 Unsupported Media Type` |
 | 3 | Webhook signature valid (HMAC-SHA256 via Web Crypto) | `401 Unauthorized` |
 | 4 | Event is command-bearing `/zai` comment | `200 OK` (skip) |
 | 5 | Commenter is a [collaborator](/rules/authorization.md) | `403 Forbidden` |
+
+# Path scoping
+
+Gate 0 scopes ingress to `POST /github/webhook` (`GITHUB_WEBHOOK_PATH` in
+`src/index.js`). The GitHub webhook Payload URL must be
+`https://<host>/github/webhook`; one trailing slash is tolerated and the query
+string is ignored. Anything else — scanners probing the domain root, a stale
+pre-path webhook URL — is rejected before any HMAC work or body read.
 
 # Signature verification
 

@@ -129,9 +129,11 @@ npm run deploy:main
 npm run deploy:heavy
 ```
 
-The main worker webhook URL must be configured in the GitHub repository webhook
-settings for `pull_request`, `issue_comment`, and
-`pull_request_review_comment` events.
+The main worker accepts GitHub webhooks only at
+`https://zai-worker.tokenbel.info/github/webhook` — configure that as the
+Payload URL in the GitHub repository webhook settings for `pull_request`,
+`issue_comment`, and `pull_request_review_comment` events. Any other path is
+rejected with `404` before signature verification.
 
 Prompt sources live in `src/zai-heavy-worker/prompts/`; regenerate committed
 prompt modules with `npm run generate:prompts` from that worker directory.

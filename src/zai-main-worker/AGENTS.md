@@ -25,12 +25,15 @@ wrangler.toml          # Public routes, bindings, Secrets Store, cron trigger
 
 - This is the only Worker with public ingress. Any new `fetch` route is a new
   trust-boundary surface: verify the HMAC signature before reading the body,
-  and never add an unauthenticated endpoint.
+  and never add an unauthenticated endpoint. GitHub webhooks are accepted
+  only at `POST /github/webhook` (`GITHUB_WEBHOOK_PATH`, Gate 0 in
+  `src/index.js`); everything else 404s.
 - Route gotchas (see comments in `wrangler.toml`): adding a `[[routes]]` entry
   infers `workers_dev = false` on the next deploy. `zai-worker.tokenbel.info`
   is served by a single `custom_domain` route (Cloudflare auto-creates the DNS
-  record + TLS cert). The GitHub webhook targets that hostname — don't break
-  it.
+  record + TLS cert). The GitHub webhook targets
+  `https://zai-worker.tokenbel.info/github/webhook` on that hostname — don't
+  break it.
 - D1 migrations are sequential (`0001_storage_foundation.sql`, …). Never edit
   an applied migration; add the next numbered file. Both workers share the same
   D1 database, so a migration changes the heavy worker's schema too.

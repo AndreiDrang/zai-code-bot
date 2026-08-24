@@ -1,5 +1,16 @@
 # Knowledge Bundle Update Log
 
+## 2026-08-25
+
+- **Update**: Main-worker ingress is now scoped to a dedicated path — GitHub
+  webhooks are accepted only at `POST /github/webhook` (`GITHUB_WEBHOOK_PATH`,
+  Gate 0 in `src/index.js`); every other path is rejected with `404` before
+  signature verification. The GitHub webhook Payload URL changes from
+  `https://zai-worker.tokenbel.info` to
+  `https://zai-worker.tokenbel.info/github/webhook`. Updated
+  [Webhook ingress](/workflows/webhook-ingress.md) and
+  [Two-worker split](/architecture/two-worker-split.md).
+
 ## 2026-08-24
 
 - **Update**: The workspace migrated from `poc/` to the standard layout — the

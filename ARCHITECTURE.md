@@ -20,8 +20,10 @@ either `src/` tree) — they coordinate only through Queue messages and the
 shared D1/R2/KV bindings declared in both `src/zai-*/wrangler.toml` files.
 
 Public ingress is a custom-domain route on the main Worker
-(`zai-worker.tokenbel.info`, per `src/zai-main-worker/wrangler.toml`); the
-heavy Worker has no HTTP surface at all (`workers_dev = false`, queue consumer
+(`zai-worker.tokenbel.info`, per `src/zai-main-worker/wrangler.toml`);
+GitHub webhooks are accepted only at `POST /github/webhook` — every other
+path is rejected with `404` before signature verification. The heavy Worker
+has no HTTP surface at all (`workers_dev = false`, queue consumer
 only — see `src/zai-heavy-worker/src/index.js`).
 
 Unknowns: none material.
