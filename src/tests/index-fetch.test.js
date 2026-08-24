@@ -64,13 +64,20 @@ function makeEnv(overrides = {}) {
 
 /** POSTs `body` as a correctly signed GitHub webhook. */
 async function signedRequest(
-  { body, event = 'issue_comment', delivery = 'd-1', secret = SECRET, headers = {} } = {},
+  {
+    body,
+    event = 'issue_comment',
+    delivery = 'd-1',
+    secret = SECRET,
+    headers = {},
+    url = 'https://worker.example/github/webhook',
+  } = {},
   env = makeEnv(),
 ) {
   const raw = typeof body === 'string' ? body : JSON.stringify(body);
   const signature = `sha256=${await hmacSha256Hex(secret, raw)}`;
   return worker.fetch(
-    new Request('https://worker.example/webhook', {
+    new Request(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -175,13 +182,50 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// Gate 0: dedicated webhook path
+// ---------------------------------------------------------------------------
+
+describe('webhook path gate', () => {
+  it('rejects a non-webhook path with 404 before signature checks', async () => {
+    const res = await worker.fetch(
+      new Request('https://worker.example/', { method: 'POST', body: '{}' }),
+      makeEnv(),
+      ctx,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a near-miss path with 404 even when correctly signed', async () => {
+    const res = await signedRequest(
+      { body: prCommentPayload(), url: 'https://worker.example/webhook' },
+      makeEnv(),
+    );
+    expect(res.status).toBe(404);
+    expect(authorizeCommenter).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a trailing slash and ignores the query string', async () => {
+    for (const url of [
+      'https://worker.example/github/webhook/',
+      'https://worker.example/github/webhook?probe=1',
+    ]) {
+      const res = await signedRequest(
+        { body: prCommentPayload({ body: 'not a command' }), url },
+        makeEnv(),
+      );
+      expect(res.status).toBe(200);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Gate 1–3: method, content-type, signature
 // ---------------------------------------------------------------------------
 
 describe('request gates', () => {
   it('rejects non-POST methods with 405', async () => {
     const res = await worker.fetch(
-      new Request('https://worker.example/webhook', { method: 'GET' }),
+      new Request('https://worker.example/github/webhook', { method: 'GET' }),
       makeEnv(),
       ctx,
     );
@@ -190,7 +234,7 @@ describe('request gates', () => {
 
   it('rejects a non-JSON content type with 415', async () => {
     const res = await worker.fetch(
-      new Request('https://worker.example/webhook', {
+      new Request('https://worker.example/github/webhook', {
         method: 'POST',
         headers: { 'content-type': 'text/plain' },
         body: 'x',
@@ -203,7 +247,7 @@ describe('request gates', () => {
 
   it('rejects a bad signature with 401 before touching the payload', async () => {
     const res = await worker.fetch(
-      new Request('https://worker.example/webhook', {
+      new Request('https://worker.example/github/webhook', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',

@@ -45,11 +45,40 @@ import {
   COMMAND_TRIGGER_ACTIONS,
 } from './comment-events.js';
 
+/**
+ * The single path GitHub webhooks are accepted on. The GitHub App / repo
+ * webhook Payload URL must be `https://<host>/github/webhook`; every other
+ * path is rejected with 404 before any signature work (see Gate 0).
+ */
+const GITHUB_WEBHOOK_PATH = '/github/webhook';
+
+/** Matches a request URL against GITHUB_WEBHOOK_PATH (query ignored, one
+ * trailing slash tolerated). An unparseable URL is treated as a non-match. */
+function isWebhookPath(request) {
+  let pathname;
+  try {
+    ({ pathname } = new URL(request.url));
+  } catch {
+    return false;
+  }
+  const normalized =
+    pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  return normalized === GITHUB_WEBHOOK_PATH;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const logger = createLogger(env, 'zai-main-worker');
     const correlationId = generateCorrelationId();
     try {
+      // --- Gate 0: dedicated webhook path ---
+      // Ingress is scoped to GITHUB_WEBHOOK_PATH so scanners probing the
+      // domain root (or any stale webhook URL) are turned away cheaply,
+      // without HMAC work or body reads.
+      if (!isWebhookPath(request)) {
+        return new Response('Not Found', { status: 404 });
+      }
+
       // --- Gate 1: method ---
       if (request.method !== 'POST') {
         return new Response('Method Not Allowed', { status: 405 });

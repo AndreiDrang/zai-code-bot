@@ -43,7 +43,9 @@ queue = "bot-jobs"
 #     domain; no pre-existing proxied DNS record or zone route is needed.
 #   • Adding any route INFERS workers_dev=false on the next deploy → the
 #     *.workers.dev URL disappears. Point the GitHub webhook at
-#     https://zai-worker.tokenbel.info (Payload URL).
+#     https://zai-worker.tokenbel.info/github/webhook (Payload URL) — the
+#     fetch handler accepts ONLY that path (Gate 0 in src/index.js); every
+#     other path 404s.
 [[routes]]
 pattern = "zai-worker.tokenbel.info"
 custom_domain = true
