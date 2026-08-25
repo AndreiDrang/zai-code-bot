@@ -84,21 +84,23 @@ This document outlines the implementation plan for switching zai-code-bot from P
 # Add new secrets to existing Secrets Store
 # Store ID: 629e5dd6594845a889e6ddabb26cc009
 
-# 1. Add GITHUB_APP_ID
-npx wrangler secrets:store create ZAI_GITHUB_APP_ID --store-id 629e5dd6594845a889e6ddabb26cc009
-echo "123456" | npx wrangler secrets:store write ZAI_GITHUB_APP_ID --store-id 629e5dd6594845a889e6ddabb26cc009
+# 1. Add ZAI_GITHUB_APP_ID (numeric App ID from the GitHub App settings page)
+npx wrangler secrets-store secret create 629e5dd6594845a889e6ddabb26cc009 \
+  --name ZAI_GITHUB_APP_ID --scopes workers --comment "zai-code-bot GitHub App ID" --remote
+# paste the numeric App ID at the value prompt
 
-# 2. Add GITHUB_APP_PRIVATE_KEY
-npx wrangler secrets:store create ZAI_GITHUB_APP_PRIVATE_KEY --store-id 629e5dd6594845a889e6ddabb26cc009
-# Paste the contents of .pem file (including -----BEGIN PRIVATE KEY-----)
-cat zai-code-bot.pem | npx wrangler secrets:store write ZAI_GITHUB_APP_PRIVATE_KEY --store-id 629e5dd6594845a889e6ddabb26cc009
+# 2. Add ZAI_GITHUB_APP_PRIVATE_KEY (full PEM from the App's .pem file, real newlines)
+cat zai-code-bot.pem | npx wrangler secrets-store secret create 629e5dd6594845a889e6ddabb26cc009 \
+  --name ZAI_GITHUB_APP_PRIVATE_KEY --scopes workers --comment "zai-code-bot GitHub App private key" --remote
+# if the .pem was lost: GitHub App settings -> "Generate a new private key"
+# to rotate later: wrangler secrets-store secret update <store-id> --name ... --remote
 ```
 
 #### Verification
 
 ```bash
-# Verify secrets were added
-npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
+# Verify secrets were added (note: --remote is required; default is local mode)
+npx wrangler secrets-store secret list 629e5dd6594845a889e6ddabb26cc009 --remote
 ```
 
 #### Artifacts
