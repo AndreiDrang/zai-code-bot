@@ -4,6 +4,8 @@
 # are injected from the Cloudflare Secrets Store (store 629e5dd...).
 # Auth is GitHub App only (PAT support removed — see PAT_REMOVAL_PLAN.md).
 GITHUB_APP_ID=123456
-# Full PEM, newlines escaped as \n on a single line.
+# Full PKCS#8 PEM (header "BEGIN PRIVATE KEY", NOT "BEGIN RSA PRIVATE KEY"),
+# newlines escaped as \n on a single line. GitHub downloads PKCS#1 — convert
+# first: openssl pkcs8 -topk8 -nocrypt -in key.pem -out key-pkcs8.pem
 GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 ZAI_API_KEY=local-zai-key
