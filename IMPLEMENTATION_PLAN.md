@@ -6,25 +6,27 @@ This document outlines the implementation plan for switching zai-code-bot from P
 
 ## 📅 Timeline
 
-| Phase | Duration | Priority |
-|-------|----------|----------|
-| Phase 1: Infrastructure Preparation | 1-2 days | ⭐⭐⭐ |
-| Phase 2: Core Development | 2-3 days | ⭐⭐⭐ |
-| Phase 3: Integration | 2-3 days | ⭐⭐⭐ |
-| Phase 4: Testing | 2-3 days | ⭐⭐⭐ |
-| Phase 5: Deployment | 1 day | ⭐⭐⭐ |
-| **Total** | **8-12 days** | |
+| Phase                               | Duration      | Priority |
+| ----------------------------------- | ------------- | -------- |
+| Phase 1: Infrastructure Preparation | 1-2 days      | ⭐⭐⭐   |
+| Phase 2: Core Development           | 2-3 days      | ⭐⭐⭐   |
+| Phase 3: Integration                | 2-3 days      | ⭐⭐⭐   |
+| Phase 4: Testing                    | 2-3 days      | ⭐⭐⭐   |
+| Phase 5: Deployment                 | 1 day         | ⭐⭐⭐   |
+| **Total**                           | **8-12 days** |          |
 
 ---
 
 ## 🏗️ Phase 1: Infrastructure Preparation
 
 ### Task 1.1: Create GitHub App
+
 **Assignee:** DevOps / Backend Engineer  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. Navigate to [GitHub → Settings → Developer settings → GitHub Apps](https://github.com/settings/apps)
 2. Click **"New GitHub App"**
 3. Fill in:
@@ -34,14 +36,15 @@ This document outlines the implementation plan for switching zai-code-bot from P
    - **Description:** `AI-powered code review assistant for pull requests`
 
 4. **Configure Permissions:**
-   | Section | Permission | Reason |
-   |---------|------------|--------|
-   | Repository contents | Read-only | Read files for context |
-   | Pull requests | Read & Write | Read PR, post comments |
-   | Issues | Read & Write | Read issue, post comments |
-   | Comments | Read & Write | Manage comments |
-   | Repository metadata | Read-only | Get repository info |
-   | **Collaborators** | **Read-only** | **`GET /repos/{o}/{r}/collaborators/{user}` — the `/zai` authorization gate. Without it GitHub returns 403 "Resource not accessible by integration" and every command fails.** |
+
+   | Section             | Permission    | Reason                                                                                                                                                                         |
+   | ------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+   | Repository contents | Read-only     | Read files for context                                                                                                                                                         |
+   | Pull requests       | Read & Write  | Read PR, post comments                                                                                                                                                         |
+   | Issues              | Read & Write  | Read issue, post comments                                                                                                                                                      |
+   | Comments            | Read & Write  | Manage comments                                                                                                                                                                |
+   | Repository metadata | Read-only     | Get repository info                                                                                                                                                            |
+   | **Collaborators**   | **Read-only** | **`GET /repos/{o}/{r}/collaborators/{user}` — the `/zai` authorization gate. Without it GitHub returns 403 "Resource not accessible by integration" and every command fails.** |
 
 5. **Subscribe to Events:**
    - ✅ `Issue comment`
@@ -61,7 +64,8 @@ This document outlines the implementation plan for switching zai-code-bot from P
    - Select organizations/accounts for testing
    - Note the **Installation ID** for testing
 
-#### Artifacts:
+#### Artifacts
+
 - `GITHUB_APP_ID` (e.g., `123456`)
 - `GITHUB_APP_PRIVATE_KEY` (contents of `.pem` file)
 - `TEST_INSTALLATION_ID` (for testing)
@@ -69,11 +73,13 @@ This document outlines the implementation plan for switching zai-code-bot from P
 ---
 
 ### Task 1.2: Configure Cloudflare Secrets
+
 **Assignee:** DevOps  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 ```bash
 # Add new secrets to existing Secrets Store
 # Store ID: 629e5dd6594845a889e6ddabb26cc009
@@ -88,24 +94,29 @@ npx wrangler secrets:store create ZAI_GITHUB_APP_PRIVATE_KEY --store-id 629e5dd6
 cat zai-code-bot.pem | npx wrangler secrets:store write ZAI_GITHUB_APP_PRIVATE_KEY --store-id 629e5dd6594845a889e6ddabb26cc009
 ```
 
-#### Verification:
+#### Verification
+
 ```bash
 # Verify secrets were added
 npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 ```
 
-#### Artifacts:
+#### Artifacts
+
 - Secrets `ZAI_GITHUB_APP_ID` and `ZAI_GITHUB_APP_PRIVATE_KEY` in Cloudflare Secrets Store
 
 ---
 
 ### Task 1.3: Update Wrangler Configuration
+
 **Assignee:** Backend Engineer  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Update `src/zai-main-worker/wrangler.toml`**
+
    ```toml
    # Add new bindings for GitHub App
    [[secrets_store_secrets]]
@@ -120,6 +131,7 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    ```
 
 2. **Update `src/zai-heavy-worker/wrangler.toml`**
+
    ```toml
    # Add the same bindings
    [[secrets_store_secrets]]
@@ -133,35 +145,40 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    secret_name = "ZAI_GITHUB_APP_PRIVATE_KEY"
    ```
 
-#### Artifacts:
+#### Artifacts
+
 - Updated `wrangler.toml` files
 
 ---
 
 ### Task 1.4: Create Database Migration
+
 **Assignee:** Backend Engineer  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Create migration file:** `src/zai-main-worker/migrations/0004_add_installation_id.sql`
+
    ```sql
    -- Migration: Add installation_id to jobs table for GitHub App authentication
    -- Up: Add installation_id column to jobs table
-   
+
    ALTER TABLE jobs ADD COLUMN installation_id INTEGER;
-   
+
    -- Create index for installation_id to speed up queries
    CREATE INDEX IF NOT EXISTS idx_jobs_installation_id ON jobs(installation_id);
-   
+
    -- Add installation_id to webhook_deliveries table for tracking
    ALTER TABLE webhook_deliveries ADD COLUMN installation_id INTEGER;
-   
+
    -- Add installation_id to repositories table for reference
    ALTER TABLE repositories ADD COLUMN github_app_installation_id INTEGER;
    ```
 
-#### Artifacts:
+#### Artifacts
+
 - New migration `0004_add_installation_id.sql`
 
 ---
@@ -169,15 +186,17 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 ## 💻 Phase 2: Core Development
 
 ### Task 2.1: Create GitHub App Authentication Module
+
 **Assignee:** Backend Engineer  
 **Duration:** 2 days  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Create file:** `src/shared/github-app-auth.js`
 
    This module should include:
-   
+
    - **`generateAppJwt(appId, privateKey)`**: Generates a JWT token signed with the app's private key
    - **`getInstallationToken(jwt, installationId)`**: Fetches an installation access token from GitHub
    - **`AppTokenCache`**: Class for caching installation tokens using KV namespace
@@ -190,30 +209,34 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    - Cache tokens for 5 minutes to avoid generating JWT for every request
 
 3. **Error Handling:**
+
    > **⚠ SUPERSEDED by [`PAT_REMOVAL_PLAN.md`](./PAT_REMOVAL_PLAN.md):** PAT
    > fallback has been removed — GitHub App auth is the only auth path. Auth
    > failures are loud (503 in the main worker, classified fail/retry in the
    > queue), never silent fallbacks.
-
    - Classified `appAuthError` codes: `app_token_fetch_failed` (retryable),
      `app_jwt_rejected`, `app_suspended`, `installation_not_found`,
      `app_auth_unconfigured`, `missing_installation_id` (all permanent)
 
-#### Artifacts:
+#### Artifacts
+
 - `src/shared/github-app-auth.js`
 - `src/tests/github-app-auth.test.js` (tests for the module)
 
 ---
 
 ### Task 2.2: Update GitHubClient
+
 **Assignee:** Backend Engineer  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Update `src/shared/github.js`**
 
    Modify the constructor to accept an `isApp` option:
+
    ```javascript
    constructor(token, opts = {}) {
      this.token = token;
@@ -224,13 +247,12 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    ```
 
 2. **Update the `request` method** to use `Bearer` for App tokens:
+
    ```javascript
    const options = {
      method,
      headers: {
-       Authorization: this.isApp 
-         ? `Bearer ${this.token}` 
-         : `token ${this.token}`,
+       Authorization: this.isApp ? `Bearer ${this.token}` : `token ${this.token}`,
        Accept: 'application/vnd.github+json',
        'X-GitHub-Api-Version': '2022-11-28',
        'User-Agent': this.userAgent,
@@ -240,7 +262,8 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 
 3. **Update JSDoc comments** to reflect support for both PAT and Installation Tokens
 
-#### Artifacts:
+#### Artifacts
+
 - Updated `src/shared/github.js`
 
 ---
@@ -248,21 +271,26 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 ## 🔧 Phase 3: Integration
 
 ### Task 3.1: Update Main Worker
+
 **Assignee:** Backend Engineer  
 **Duration:** 2 days  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Add import for token provider:**
+
    ```javascript
    import { createTokenProvider } from '../../shared/github-app-auth.js';
    ```
 
 2. **Create helper function for GitHub client creation:**
+
    > **⚠ SUPERSEDED by [`PAT_REMOVAL_PLAN.md`](./PAT_REMOVAL_PLAN.md):** the
    > PAT fallback below was removed. `createAppGitHubClient` is App-only,
    > built lazily on the command path (PR events mint no tokens), and throws
    > `status: 503` errors so GitHub redelivers on auth/config failures.
+
    ```javascript
    async function createGitHubClient(env, installationId, logger) {
      // Try GitHub App authentication first
@@ -279,7 +307,7 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
          });
        }
      }
-     
+
      // Fallback to PAT
      const token = await resolveSecretValue(env.GITHUB_TOKEN);
      logger.info('Using PAT authentication');
@@ -293,8 +321,16 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    - Pass `installationId` to job creation functions
 
 4. **Update `createCommandDurableJob`** to include `installationId`:
+
    ```javascript
-   async function createCommandDurableJob(env, github, webhookData, kind, deliveryId, installationId) {
+   async function createCommandDurableJob(
+     env,
+     github,
+     webhookData,
+     kind,
+     deliveryId,
+     installationId,
+   ) {
      // ... existing code ...
      const event = {
        // ... existing fields ...
@@ -306,38 +342,44 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 
 5. **Update `createPrContextJob` calls** to pass `installationId`
 
-#### Artifacts:
+#### Artifacts
+
 - Updated `src/zai-main-worker/src/index.js`
 
 ---
 
 ### Task 3.2: Update Heavy Worker
+
 **Assignee:** Backend Engineer  
 **Duration:** 2 days  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Add import for token provider:**
+
    ```javascript
    import { createTokenProvider } from '../../shared/github-app-auth.js';
    ```
 
 2. **Create helper function for queue GitHub client:**
+
    > **⚠ SUPERSEDED by [`PAT_REMOVAL_PLAN.md`](./PAT_REMOVAL_PLAN.md):** no
    > PAT fallback — the strict version fails the job for permanent auth
    > errors (`missing_installation_id`, `app_auth_unconfigured`,
    > `app_jwt_rejected`) and retries only transient mint failures.
+
    ```javascript
    async function createQueueGitHubClient(env, job, logger) {
      const installationId = job.installation_id;
-     
+
      if (installationId && env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY) {
        try {
          const tokenProvider = createTokenProvider(env);
          const token = await tokenProvider.getInstallationToken(installationId);
-         logger.info('Using GitHub App authentication for queue job', { 
-           installationId, 
-           jobId: job.job_id 
+         logger.info('Using GitHub App authentication for queue job', {
+           installationId,
+           jobId: job.job_id,
          });
          return new GitHubClient(token, { isApp: true });
        } catch (appAuthError) {
@@ -348,7 +390,7 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
          });
        }
      }
-     
+
      // Fallback to PAT
      const token = await resolveSecretValue(env.GITHUB_TOKEN);
      logger.info('Using PAT authentication for queue job', { jobId: job.job_id });
@@ -358,17 +400,20 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 
 3. **Update `processQueueMessage`** to use the new client creation function
 
-#### Artifacts:
+#### Artifacts
+
 - Updated `src/zai-heavy-worker/src/queue.js`
 
 ---
 
 ### Task 3.3: Update Storage Layer
+
 **Assignee:** Backend Engineer  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Update `src/shared/storage/deliveries.js`**
 
    - Add `installation_id` to the JOB_BASE query
@@ -377,6 +422,7 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    - Update `createCommandJob` to pass `installationId` to `createPrJob`
 
 2. **Example changes:**
+
    ```javascript
    const JOB_BASE = `
      SELECT j.job_id, j.delivery_id, j.kind, j.repository_id, j.pr_number,
@@ -393,15 +439,16 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 
    // In createPrJob function:
    const installationId = event.installationId || null;
-   
+
    // In SQL INSERT:
    `INSERT INTO jobs
     (job_id, delivery_id, kind, repository_id, pr_number, head_sha, installation_id, status,
      attempt_count, available_at, config_version, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, 1, ?, ?)`
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, 1, ?, ?)`;
    ```
 
-#### Artifacts:
+#### Artifacts
+
 - Updated `src/shared/storage/deliveries.js`
 
 ---
@@ -409,11 +456,13 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 ## 🧪 Phase 4: Testing
 
 ### Task 4.1: Unit Tests
+
 **Assignee:** QA Engineer / Backend Engineer  
 **Duration:** 2 days  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Create tests for `github-app-auth.js`:**
    - Test JWT generation
    - Test Installation Token fetching (mock fetch)
@@ -429,18 +478,21 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    - 100% coverage for new `github-app-auth.js` module
    - Maintain existing coverage levels
 
-#### Artifacts:
+#### Artifacts
+
 - `src/tests/github-app-auth.test.js`
 - Updated existing test files
 
 ---
 
 ### Task 4.2: Integration Testing
+
 **Assignee:** QA Engineer  
 **Duration:** 2 days  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Local Testing:**
    - Run workers locally with test secrets
    - Verify JWT generation
@@ -458,18 +510,21 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    - Verify that comments belong to the bot (`isBotOwnedComment`)
    - Test updating existing comments
 
-#### Artifacts:
+#### Artifacts
+
 - Test report
 - Error logs (if any)
 
 ---
 
 ### Task 4.3: Load Testing
+
 **Assignee:** DevOps  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Token Caching Tests:**
    - Verify tokens are not generated for every request
    - Check performance with caching enabled
@@ -478,7 +533,8 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    - Verify multiple requests don't break authentication
    - Check for race conditions
 
-#### Artifacts:
+#### Artifacts
+
 - Load test results
 
 ---
@@ -486,12 +542,15 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 ## 🚀 Phase 5: Deployment
 
 ### Task 5.1: Deployment Preparation
+
 **Assignee:** DevOps  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Create release branch:**
+
    ```bash
    git checkout -b feature/github-app-auth
    git merge main
@@ -508,24 +567,29 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 ---
 
 ### Task 5.2: Deploy to Production
+
 **Assignee:** DevOps  
 **Duration:** 1 day  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Deploy main-worker:**
+
    ```bash
    cd src/zai-main-worker
    npx wrangler deploy
    ```
 
 2. **Deploy heavy-worker:**
+
    ```bash
    cd src/zai-heavy-worker
    npx wrangler deploy
    ```
 
 3. **Apply database migrations:**
+
    ```bash
    npx wrangler d1 execute bot-db --file=../migrations/0004_add_installation_id.sql
    ```
@@ -541,11 +605,13 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 ---
 
 ### Task 5.3: Monitoring and Rollback
+
 **Assignee:** DevOps  
 **Duration:** 3 days  
 **Status:** ⬜ Pending
 
-#### Steps:
+#### Steps
+
 1. **Post-deployment monitoring:**
    - Check Cloudflare Workers logs
    - Verify comments are posted as the app
@@ -565,31 +631,32 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 
 ## 📊 Success Metrics
 
-| Metric | Target Value | Current Value |
-|--------|--------------|---------------|
-| Comments from app | 100% | 0% |
-| Authentication success rate | 99.9% | 99% (PAT) |
-| Token generation time | < 100ms (with cache) | N/A |
-| API response time | No change | Baseline |
-| Error count | 0 | Current |
+| Metric                      | Target Value         | Current Value |
+| --------------------------- | -------------------- | ------------- |
+| Comments from app           | 100%                 | 0%            |
+| Authentication success rate | 99.9%                | 99% (PAT)     |
+| Token generation time       | < 100ms (with cache) | N/A           |
+| API response time           | No change            | Baseline      |
+| Error count                 | 0                    | Current       |
 
 ---
 
 ## 🎯 Risks and Mitigations
 
-| Risk | Probability | Impact | Mitigation |
-|------|-------------|--------|-----------|
-| JWT generation errors | Low | High | Test locally, use proven libraries |
-| Installation Token issues | Medium | High | Fallback to PAT, monitor errors |
-| Incompatibility with existing jobs | Medium | Medium | Update database schema, data migration |
-| Webhook issues | Low | High | Test in staging, monitor logs |
-| Secret leakage | Very Low | Critical | Use Cloudflare Secrets, restrict access |
+| Risk                               | Probability | Impact   | Mitigation                              |
+| ---------------------------------- | ----------- | -------- | --------------------------------------- |
+| JWT generation errors              | Low         | High     | Test locally, use proven libraries      |
+| Installation Token issues          | Medium      | High     | Fallback to PAT, monitor errors         |
+| Incompatibility with existing jobs | Medium      | Medium   | Update database schema, data migration  |
+| Webhook issues                     | Low         | High     | Test in staging, monitor logs           |
+| Secret leakage                     | Very Low    | Critical | Use Cloudflare Secrets, restrict access |
 
 ---
 
 ## 📚 Documentation Updates
 
-### Files to Update:
+### Files to Update
+
 1. **README.md**
    - Add section on GitHub App setup
    - Update deployment instructions
@@ -623,24 +690,26 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
 
 ## 📞 Contacts
 
-| Role | Responsible | Contact |
-|------|-------------|---------|
-| Project Lead | [Your Name] | @your-github |
-| Backend Engineer | [Name] | @backend-dev |
-| DevOps | [Name] | @devops-engineer |
-| QA Engineer | [Name] | @qa-engineer |
+| Role             | Responsible | Contact          |
+| ---------------- | ----------- | ---------------- |
+| Project Lead     | [Your Name] | @your-github     |
+| Backend Engineer | [Name]      | @backend-dev     |
+| DevOps           | [Name]      | @devops-engineer |
+| QA Engineer      | [Name]      | @qa-engineer     |
 
 ---
 
 ## 🎉 Conclusion
 
 This plan provides a **smooth transition** from PAT to GitHub App Authentication with:
+
 - ✅ Minimal downtime (fallback to PAT)
 - ✅ Full backward compatibility
 - ✅ Improved security
 - ✅ Scalability
 
 **Next Steps:**
+
 1. Start with **Phase 1: Infrastructure Preparation**
 2. Create GitHub App and obtain App ID + Private Key
 3. Add secrets to Cloudflare
