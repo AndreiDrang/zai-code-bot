@@ -1,6 +1,6 @@
 import { GitHubClient } from '../../shared/github.js';
 import { createLogger, generateCorrelationId } from '../../shared/logging.js';
-import { resolveSecretValue } from '../../shared/secrets.js';
+import { createTokenProvider } from '../../shared/github-app-auth.js';
 import { getJob } from '../../shared/storage/deliveries.js';
 import { safeErrorCode } from '../../shared/storage/database.js';
 import {
@@ -20,6 +20,44 @@ export async function processQueueBatch(batch, env) {
   for (const message of batch.messages || []) {
     await processQueueMessage(message, env, logger);
   }
+}
+
+/**
+ * Creates a GitHub client for queue processing. GitHub App auth is the ONLY
+ * path (PAT support removed). Config/permanent failures throw with
+ * `retryable: false` so the queue fails the job instead of burning attempts;
+ * transient mint failures (network, 5xx) retry with backoff via the
+ * provider's classified appAuthError.
+ * @param {Object} env - Environment bindings
+ * @param {Object} job - Claimed job row (carries installation_id)
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<GitHubClient>}
+ */
+async function createQueueGitHubClient(env, job, logger) {
+  if (!job.installation_id) {
+    // Pre-migration job (created before installation_id was recorded): it
+    // can never authenticate post-PAT-removal — fail fast, do not retry.
+    const legacy = new Error('missing_installation_id');
+    legacy.code = 'missing_installation_id';
+    legacy.retryable = false;
+    throw legacy;
+  }
+
+  const provider = await createTokenProvider(env);
+  if (!provider.available) {
+    const unconfigured = new Error('app_auth_unconfigured');
+    unconfigured.code = 'app_auth_unconfigured';
+    unconfigured.retryable = false;
+    throw unconfigured;
+  }
+
+  // Throws a classified appAuthError on failure (code + retryable).
+  const token = await provider.getInstallationToken(job.installation_id);
+  logger.info('Using GitHub App authentication for queue job', {
+    installationId: job.installation_id,
+    jobId: job.job_id,
+  });
+  return new GitHubClient(token);
 }
 
 export async function processQueueMessage(
@@ -83,7 +121,10 @@ export async function processQueueMessage(
       throw unsupported;
     }
     runId = await startAnalysisRun(env.BOT_DB, jobId, claimed.attempt_count);
-    const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
+
+    // Create GitHub client with App auth if installation_id is available
+    const github = await createQueueGitHubClient(env, claimed, logger);
+
     await handler({ github, env, db: env.BOT_DB, job: claimed, runId });
     await markJobSucceeded(env.BOT_DB, jobId, runId);
     message.ack();

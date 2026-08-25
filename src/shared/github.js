@@ -3,13 +3,15 @@
  *
  * NOTE: webhook signature verification was extracted to `./crypto.js`
  * (Web Crypto API). This module is pure REST I/O and is shared by both workers.
+ * Authentication is GitHub App only: every token in the system is an
+ * installation access token, sent as a Bearer credential.
  */
 
 const GITHUB_API_BASE = 'https://api.github.com';
 
 export class GitHubClient {
   /**
-   * @param {string} token - GitHub Personal Access Token
+   * @param {string} token - GitHub App installation access token
    * @param {Object} [opts]
    * @param {string} [opts.userAgent='zai-code-bot-workers']
    */
@@ -33,7 +35,7 @@ export class GitHubClient {
     const options = {
       method,
       headers: {
-        Authorization: `token ${this.token}`,
+        Authorization: `Bearer ${this.token}`,
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         'User-Agent': this.userAgent,

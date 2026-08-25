@@ -6,6 +6,7 @@ const JOB_BASE = `
          j.head_sha, p.base_sha,
          j.status, j.attempt_count, j.available_at, j.claimed_at, j.lease_expires_at,
          j.completed_at, j.last_error_code, j.last_failure_at, j.config_version,
+         j.installation_id,
          r.owner AS repository_owner, r.name AS repository_name, r.full_name AS repository_full_name,
          p.title, p.author_login, p.state, p.closed_by
   FROM jobs j
@@ -49,6 +50,7 @@ async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().t
   const jobId = crypto.randomUUID();
   const repositoryId = Number(event.repositoryId);
   const prNumber = Number(event.prNumber);
+  const installationId = event.installationId || null;
   const statements = [
     prepare(
       db,
@@ -107,15 +109,16 @@ async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().t
     prepare(
       db,
       `INSERT INTO jobs
-       (job_id, delivery_id, kind, repository_id, pr_number, head_sha, status,
+       (job_id, delivery_id, kind, repository_id, pr_number, head_sha, installation_id, status,
         attempt_count, available_at, config_version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, 1, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, 1, ?, ?)`,
       jobId,
       event.deliveryId,
       kind,
       repositoryId,
       prNumber,
       event.headSha,
+      installationId,
       now,
       now,
       now,
@@ -152,8 +155,14 @@ async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().t
  * Owns the delivery row and is idempotent on (delivery_id, 'pr_context').
  * Only created for headSha-producing actions.
  */
-export function createPrContextJob(db, event, now) {
-  return createPrJob(db, event, PR_CONTEXT_JOB_KIND, { ownsDelivery: true }, now);
+export function createPrContextJob(db, event, installationId, now) {
+  return createPrJob(
+    db,
+    { ...event, installationId },
+    PR_CONTEXT_JOB_KIND,
+    { ownsDelivery: true },
+    now,
+  );
 }
 
 /**
@@ -182,6 +191,7 @@ export function createPrSummaryJob(db, contextJob, now) {
       title: contextJob.title,
       authorLogin: contextJob.author_login,
       state: contextJob.state,
+      installationId: contextJob.installation_id,
     },
     PR_SUMMARY_JOB_KIND,
     { ownsDelivery: false },
