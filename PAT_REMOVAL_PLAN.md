@@ -360,14 +360,14 @@ Secrets entry is retained (until step 6), so rollback = `git revert` this branch
 
 ### 9.4 Acceptance checklist
 
-- [ ] `npm test` green; coverage thresholds hold (shared ≥95/93, main ≥90)
-- [ ] No occurrence of `GITHUB_TOKEN` in `src/` outside tests' mock envs (grep gate: `grep -rn "GITHUB_TOKEN" src | grep -v tests` → empty)
-- [ ] No `token` Authorization scheme anywhere (`grep -rn "token \${" src` → empty)
-- [ ] PR `synchronize` webhook mints **zero** tokens (test-asserted)
-- [ ] All `appAuthError` codes classified and test-covered
-- [ ] Collaborators permission set on the App; staging 204/404 checks pass
-- [ ] Migration applied before deploy; queue drained at cutover
-- [ ] `ZAI_GITHUB_TOKEN` deleted after stability window
+- [x] `npm test` green; coverage thresholds hold (shared ≥95/93, main ≥90) — 552/552 tests, exit 0
+- [x] No occurrence of `GITHUB_TOKEN` in `src/` outside tests' mock envs (grep gate → empty)
+- [x] No `token` Authorization scheme anywhere (`grep -rn "token \${" src` → empty)
+- [x] PR `synchronize` webhook mints **zero** tokens (test-asserted; plain-issue and ignored-action events too)
+- [x] All `appAuthError` codes classified and test-covered
+- [ ] Collaborators permission set on the App; staging 204/404 checks pass (manual — WS8.1/8.3)
+- [ ] Migration applied before deploy; queue drained at cutover (manual — WS9.2 steps 1–4)
+- [ ] `ZAI_GITHUB_TOKEN` deleted after stability window (manual — WS9.2 step 6)
 
 ---
 
