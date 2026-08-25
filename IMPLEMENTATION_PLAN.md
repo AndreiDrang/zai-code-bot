@@ -41,6 +41,7 @@ This document outlines the implementation plan for switching zai-code-bot from P
    | Issues | Read & Write | Read issue, post comments |
    | Comments | Read & Write | Manage comments |
    | Repository metadata | Read-only | Get repository info |
+   | **Collaborators** | **Read-only** | **`GET /repos/{o}/{r}/collaborators/{user}` — the `/zai` authorization gate. Without it GitHub returns 403 "Resource not accessible by integration" and every command fails.** |
 
 5. **Subscribe to Events:**
    - ✅ `Issue comment`
@@ -189,9 +190,14 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    - Cache tokens for 5 minutes to avoid generating JWT for every request
 
 3. **Error Handling:**
-   - Gracefully handle API failures
-   - Fall back to PAT when GitHub App auth fails
-   - Log warnings for authentication issues
+   > **⚠ SUPERSEDED by [`PAT_REMOVAL_PLAN.md`](./PAT_REMOVAL_PLAN.md):** PAT
+   > fallback has been removed — GitHub App auth is the only auth path. Auth
+   > failures are loud (503 in the main worker, classified fail/retry in the
+   > queue), never silent fallbacks.
+
+   - Classified `appAuthError` codes: `app_token_fetch_failed` (retryable),
+     `app_jwt_rejected`, `app_suspended`, `installation_not_found`,
+     `app_auth_unconfigured`, `missing_installation_id` (all permanent)
 
 #### Artifacts:
 - `src/shared/github-app-auth.js`
@@ -253,6 +259,10 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    ```
 
 2. **Create helper function for GitHub client creation:**
+   > **⚠ SUPERSEDED by [`PAT_REMOVAL_PLAN.md`](./PAT_REMOVAL_PLAN.md):** the
+   > PAT fallback below was removed. `createAppGitHubClient` is App-only,
+   > built lazily on the command path (PR events mint no tokens), and throws
+   > `status: 503` errors so GitHub redelivers on auth/config failures.
    ```javascript
    async function createGitHubClient(env, installationId, logger) {
      // Try GitHub App authentication first
@@ -313,6 +323,10 @@ npx wrangler secrets:store list --store-id 629e5dd6594845a889e6ddabb26cc009
    ```
 
 2. **Create helper function for queue GitHub client:**
+   > **⚠ SUPERSEDED by [`PAT_REMOVAL_PLAN.md`](./PAT_REMOVAL_PLAN.md):** no
+   > PAT fallback — the strict version fails the job for permanent auth
+   > errors (`missing_installation_id`, `app_auth_unconfigured`,
+   > `app_jwt_rejected`) and retries only transient mint failures.
    ```javascript
    async function createQueueGitHubClient(env, job, logger) {
      const installationId = job.installation_id;
