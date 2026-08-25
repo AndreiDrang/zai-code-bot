@@ -198,7 +198,7 @@ export async function handleDescribeCommand({ github, env, db, job, runId }) {
       await env.BOT_ARTIFACTS.put(prCommandResultKey(repoId, prNumber, 'describe'), generated);
       resultStored = true;
     } catch (error) {
-      logger.error('Failed to persist describe result', { message: error?.message, runId });
+      logger.error('Failed to persist describe result', { errorMessage: error?.message, runId });
     }
   }
 

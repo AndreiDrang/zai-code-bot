@@ -9,6 +9,12 @@
 
 /**
  * Creates a logger instance.
+ *
+ * Reserved envelope keys — `timestamp`, `level`, `context`, `env`,
+ * `message` — are always written after the data spread, so a colliding data
+ * key (e.g. a stray `message`) is silently overridden. Error detail should
+ * ride in `errorMessage` / `errorCode` data keys (see queue.js conventions).
+ *
  * @param {Object} env - Environment variables
  * @param {string} [context='default'] - Logging context
  * @returns {Object} logger with { log, info, warn, error, debug }
@@ -18,12 +24,12 @@ export function createLogger(env, context = 'default') {
 
   const log = (level, message, data = {}) => {
     const logEntry = {
+      ...data,
       timestamp: new Date().toISOString(),
       level,
       context,
       env: envName,
       message,
-      ...data,
     };
     console.log(JSON.stringify(logEntry));
   };

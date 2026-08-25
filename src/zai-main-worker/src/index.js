@@ -218,7 +218,7 @@ export default {
         try {
           await enqueueJob(env, context.job.job_id);
         } catch (error) {
-          logger.error('PR job enqueue failed', { message: error?.message, correlationId });
+          logger.error('PR job enqueue failed', { errorMessage: error?.message, correlationId });
           return new Response('Service Unavailable', { status: 503 });
         }
         return json(202, {
@@ -308,7 +308,7 @@ export default {
         } catch (error) {
           logger.error('Durable command job failed', {
             command: parsed.type,
-            message: error?.message,
+            errorMessage: error?.message,
             correlationId,
           });
           return new Response('Service Unavailable', { status: 503 });
@@ -320,7 +320,7 @@ export default {
       return json(200, { status: 'unsupported', command: parsed.type });
     } catch (error) {
       logger.error('Error processing request', {
-        message: error.message,
+        errorMessage: error.message,
         code: error.code,
         correlationId,
       });

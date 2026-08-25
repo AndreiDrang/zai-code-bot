@@ -255,7 +255,7 @@ async function ensureSummaryJob(db, bucket, job, env, logger) {
       // The outbox remains unpublished and the main-worker cron will replay it.
       logger.warn('PR summary enqueue deferred to outbox replay', {
         jobId: summaryJob.job.job_id,
-        message: error?.message,
+        errorMessage: error?.message,
       });
     }
   }

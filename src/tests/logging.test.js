@@ -41,6 +41,32 @@ describe('shared/logging', () => {
       expect(logSpy).toHaveBeenCalledOnce();
     });
 
+    it('lets no data key overwrite the reserved envelope keys', () => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      createLogger({}, 'ctx').info('label', {
+        message: 'collision',
+        level: 'FAKE',
+        timestamp: 'not-a-time',
+        context: 'fake',
+        env: 'fake',
+      });
+      const entry = JSON.parse(logSpy.mock.calls[0][0]);
+      expect(entry.message).toBe('label');
+      expect(entry.level).toBe('INFO');
+      expect(entry.context).toBe('ctx');
+      expect(entry.env).toBe('production');
+      expect(entry.timestamp).not.toBe('not-a-time');
+    });
+
+    it('still spreads ordinary data keys through, including error detail keys', () => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      createLogger({}, 'ctx').error('boom', { errorMessage: 'raw detail', errorCode: 'x1' });
+      const entry = JSON.parse(logSpy.mock.calls[0][0]);
+      expect(entry.message).toBe('boom');
+      expect(entry.errorMessage).toBe('raw detail');
+      expect(entry.errorCode).toBe('x1');
+    });
+
     it('defaults context to "default" when omitted', () => {
       logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       createLogger({}).info('m');
