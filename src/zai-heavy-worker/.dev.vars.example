@@ -2,5 +2,8 @@
 # Copy to .dev.vars and fill in real values. NEVER commit .dev.vars.
 # Keys are the `binding` names (= env vars the code reads); in production these
 # are injected from the Cloudflare Secrets Store (store 629e5dd...).
-GITHUB_TOKEN=ghp_local_replace_me
+# Auth is GitHub App only (PAT support removed — see PAT_REMOVAL_PLAN.md).
+GITHUB_APP_ID=123456
+# Full PEM, newlines escaped as \n on a single line.
+GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 ZAI_API_KEY=local-zai-key

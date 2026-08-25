@@ -156,7 +156,13 @@ async function createPrJob(db, event, kind, { ownsDelivery }, now = new Date().t
  * Only created for headSha-producing actions.
  */
 export function createPrContextJob(db, event, installationId, now) {
-  return createPrJob(db, { ...event, installationId }, PR_CONTEXT_JOB_KIND, { ownsDelivery: true }, now);
+  return createPrJob(
+    db,
+    { ...event, installationId },
+    PR_CONTEXT_JOB_KIND,
+    { ownsDelivery: true },
+    now,
+  );
 }
 
 /**

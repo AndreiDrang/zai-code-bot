@@ -55,19 +55,16 @@ custom_domain = true
 # reads (env.<binding>) and `secret_name` is the key inside the store.
 # Store id: 629e5dd6594845a889e6ddabb26cc009
 #   GITHUB_WEBHOOK_SECRET  <- secret ZAI_GITHUB_WEBHOOK_KEY  (HMAC-SHA256 webhook secret)
-#   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT: repo + read:org)
-#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once LLM calls land)
-#   GITHUB_APP_ID          <- secret ZAI_GITHUB_APP_ID       (GitHub App ID)
+#   GITHUB_APP_ID          <- secret ZAI_GITHUB_APP_ID       (GitHub App ID; App-only auth)
 #   GITHUB_APP_PRIVATE_KEY <- secret ZAI_GITHUB_APP_PRIVATE_KEY (GitHub App private key)
+#   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key; used once LLM calls land)
+# NOTE: the legacy ZAI_GITHUB_TOKEN (PAT) entry is intentionally NOT bound;
+# it is kept in the store only for a rollback window and can be deleted once
+# the App-only rollout is confirmed stable.
 [[secrets_store_secrets]]
 binding = "GITHUB_WEBHOOK_SECRET"
 store_id = "629e5dd6594845a889e6ddabb26cc009"
 secret_name = "ZAI_GITHUB_WEBHOOK_KEY"
-
-[[secrets_store_secrets]]
-binding = "GITHUB_TOKEN"
-store_id = "629e5dd6594845a889e6ddabb26cc009"
-secret_name = "ZAI_GITHUB_TOKEN"
 
 [[secrets_store_secrets]]
 binding = "ZAI_API_KEY"
