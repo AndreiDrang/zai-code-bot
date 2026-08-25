@@ -42,10 +42,64 @@ function encodeBase64UrlBytes(bytes) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/** Non-PKCS#8 PEM header forms (PKCS#1, SEC1, OpenSSH). */
+const NON_PKCS8_HEADER = /-----BEGIN (?:RSA|EC|DSA|OPENSSH) PRIVATE KEY-----/;
+
+/**
+ * Validates and imports the App private key (PKCS#8 PEM) as an RSASSA
+ * signing CryptoKey, failing with classified, non-retryable errors before
+ * `atob`/`importKey` can throw unclassified DOMExceptions (the 2026-08-25
+ * incident produced the legacy numeric `INVALID_CHARACTER_ERR` code 5 for a
+ * PKCS#1 key). Messages carry the remedy, never key bytes (SECURITY.md).
+ * @param {string} privateKey - PEM-encoded PKCS#8 private key
+ * @returns {Promise<CryptoKey>} signing key
+ */
+async function importAppPrivateKey(privateKey) {
+  if (NON_PKCS8_HEADER.test(privateKey)) {
+    throw appAuthError(
+      'app_key_wrong_format',
+      'Private key is not PKCS#8 (GitHub downloads PKCS#1); convert with: openssl pkcs8 -topk8 -nocrypt -in key.pem -out key-pkcs8.pem, then re-store the secret',
+      { retryable: false },
+    );
+  }
+
+  // Normalize private key (remove headers, whitespace)
+  const normalizedKey = privateKey
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/\s+/g, '');
+
+  if (!normalizedKey || /[^A-Za-z0-9+/=]/.test(normalizedKey)) {
+    throw appAuthError(
+      'app_key_invalid',
+      'Private key body is not clean base64 — the stored secret is likely truncated or corrupted; re-store the whole PEM file',
+      { retryable: false },
+    );
+  }
+
+  try {
+    const binaryKey = Uint8Array.from(atob(normalizedKey), (c) => c.charCodeAt(0));
+    return await crypto.subtle.importKey(
+      'pkcs8',
+      binaryKey,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+  } catch {
+    throw appAuthError(
+      'app_key_invalid',
+      'Private key decodes but is not a PKCS#8 RSA key — wrong file or double-encoded value; re-store the whole PEM file',
+      { retryable: false },
+    );
+  }
+}
+
 /**
  * Generates a JWT token signed with the app's private key.
+ * Malformed keys reject with `app_key_wrong_format` / `app_key_invalid`.
  * @param {string} appId - GitHub App ID
- * @param {string} privateKey - PEM-encoded private key
+ * @param {string} privateKey - PEM-encoded PKCS#8 private key
  * @returns {Promise<string>} JWT token
  */
 export async function generateAppJwt(appId, privateKey) {
@@ -62,21 +116,10 @@ export async function generateAppJwt(appId, privateKey) {
   const encodedHeader = encodeBase64UrlBytes(encoder.encode(JSON.stringify(header)));
   const encodedPayload = encodeBase64UrlBytes(encoder.encode(JSON.stringify(payload)));
 
-  // Normalize private key (remove headers, whitespace)
-  const normalizedKey = privateKey
-    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
-    .replace(/-----END PRIVATE KEY-----/g, '')
-    .replace(/\s+/g, '');
-
-  const binaryKey = Uint8Array.from(atob(normalizedKey), (c) => c.charCodeAt(0));
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'pkcs8',
-    binaryKey,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
+  // Validation + import live in importAppPrivateKey so malformed keys fail
+  // classified (app_key_wrong_format / app_key_invalid), never as raw
+  // DOMExceptions from atob/importKey.
+  const cryptoKey = await importAppPrivateKey(privateKey);
 
   const signature = await crypto.subtle.sign(
     'RSASSA-PKCS1-v1_5',

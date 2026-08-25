@@ -40,6 +40,12 @@ function decodePart(part) {
   return Buffer.from(part, 'base64url').toString('utf8');
 }
 
+/** Re-wraps the test key's base64 body in a different PEM header form. */
+function rewrapPem(header) {
+  const body = TEST_PRIVATE_KEY.replace(/-----[^-]+-----/g, '').trim();
+  return `-----BEGIN ${header}-----\n${body}\n-----END ${header}-----`;
+}
+
 /** Builds a mock fetch Response carrying JSON. */
 function jsonResponse(status, body) {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -110,6 +116,55 @@ describe('generateAppJwt', () => {
       new TextEncoder().encode(`${header}.${payload}`),
     );
     expect(valid).toBe(true);
+  });
+
+  it('rejects a PKCS#1 (RSA) key with a classified non-retryable app_key_wrong_format error', async () => {
+    const error = await generateAppJwt(TEST_APP_ID, rewrapPem('RSA PRIVATE KEY')).catch((e) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.code).toBe('app_key_wrong_format');
+    expect(error.retryable).toBe(false);
+    expect(error.message).toMatch(/pkcs8 -topk8/);
+  });
+
+  it.each(['EC PRIVATE KEY', 'DSA PRIVATE KEY', 'OPENSSH PRIVATE KEY'])(
+    'rejects every other non-PKCS#8 header form (%s) with app_key_wrong_format',
+    async (header) => {
+      const error = await generateAppJwt(TEST_APP_ID, rewrapPem(header)).catch((e) => e);
+
+      expect(error.code).toBe('app_key_wrong_format');
+      expect(error.retryable).toBe(false);
+    },
+  );
+
+  it('rejects a PKCS#8 key whose body is not clean base64 (truncated/corrupted secret)', async () => {
+    const key = '-----BEGIN PRIVATE KEY-----\nnot!valid!base64!!\n-----END PRIVATE KEY-----';
+
+    const error = await generateAppJwt(TEST_APP_ID, key).catch((e) => e);
+
+    expect(error.code).toBe('app_key_invalid');
+    expect(error.retryable).toBe(false);
+    expect(error.message).toMatch(/base64/);
+  });
+
+  it('rejects an empty key body with app_key_invalid', async () => {
+    const key = '-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----';
+
+    const error = await generateAppJwt(TEST_APP_ID, key).catch((e) => e);
+
+    expect(error.code).toBe('app_key_invalid');
+    expect(error.retryable).toBe(false);
+  });
+
+  it('rejects a key that decodes but is not a PKCS#8 RSA DER (wrong/double-encoded file)', async () => {
+    const body = Buffer.from('definitely not a der key').toString('base64');
+    const key = `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
+
+    const error = await generateAppJwt(TEST_APP_ID, key).catch((e) => e);
+
+    expect(error.code).toBe('app_key_invalid');
+    expect(error.retryable).toBe(false);
+    expect(error.message).toMatch(/not a PKCS#8/);
   });
 });
 
@@ -358,6 +413,23 @@ describe('createTokenProvider', () => {
 
     expect(error.code).toBe('missing_installation_id');
     expect(error.retryable).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a classified app_key_wrong_format from a configured provider with a PKCS#1 key', async () => {
+    const provider = await createTokenProvider({
+      GITHUB_APP_ID: TEST_APP_ID,
+      GITHUB_APP_PRIVATE_KEY: rewrapPem('RSA PRIVATE KEY'),
+    });
+    // `available` is a presence check only — format problems fail loudly at
+    // mint time, consistent with the provider's design.
+    expect(provider.available).toBe(true);
+
+    const error = await provider.getInstallationToken(TEST_INSTALLATION_ID).catch((e) => e);
+
+    expect(error.code).toBe('app_key_wrong_format');
+    expect(error.retryable).toBe(false);
+    expect(error).not.toHaveProperty('status');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
