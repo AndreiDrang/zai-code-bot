@@ -29,17 +29,17 @@ Every code except `app_token_fetch_failed` is non-retryable: the main Worker
 answers 503 so GitHub redelivers the webhook once the secret is fixed, and the
 heavy Worker fails the job without burning retries.
 
-| code                        | retryable | remedy                                                                                                        |
-| --------------------------- | --------- | ------------------------------------------------------------------------------------------------------------- |
-| `app_key_wrong_format`      | no        | Key is PKCS#1 (GitHub's download format) — convert with `openssl pkcs8 -topk8 -nocrypt -in k.pem -out k8.pem`, update the store secret, then redeliver the failed webhook. |
-| `app_key_invalid`           | no        | Stored secret is truncated, corrupted, or the wrong file — re-store the whole PKCS#8 PEM via stdin pipe.      |
-| `app_jwt_rejected`          | no        | App ID is wrong, or the key was regenerated in GitHub after storing — re-store the current key.               |
-| `app_suspended`             | no        | Unsuspend the App (repo/org settings).                                                                        |
-| `installation_not_found`    | no        | Installation removed or App changed — reinstall the App.                                                      |
-| `app_auth_unconfigured`     | no        | `ZAI_GITHUB_APP_ID` / `ZAI_GITHUB_APP_PRIVATE_KEY` missing from the Secrets Store — create both.               |
-| `missing_installation_id`   | no        | Webhook source is not the GitHub App — check the webhook configuration.                                        |
-| `app_permission_missing`    | no        | Add Collaborators: Read-only to the App (authorization gate).                                                 |
-| `app_token_fetch_failed`    | yes       | Transient — GitHub redelivery / queue retry handles it.                                                        |
+| code                      | retryable | remedy                                                                                                                                                                     |
+| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app_key_wrong_format`    | no        | Key is PKCS#1 (GitHub's download format) — convert with `openssl pkcs8 -topk8 -nocrypt -in k.pem -out k8.pem`, update the store secret, then redeliver the failed webhook. |
+| `app_key_invalid`         | no        | Stored secret is truncated, corrupted, or the wrong file — re-store the whole PKCS#8 PEM via stdin pipe.                                                                   |
+| `app_jwt_rejected`        | no        | App ID is wrong, or the key was regenerated in GitHub after storing — re-store the current key.                                                                            |
+| `app_suspended`           | no        | Unsuspend the App (repo/org settings).                                                                                                                                     |
+| `installation_not_found`  | no        | Installation removed or App changed — reinstall the App.                                                                                                                   |
+| `app_auth_unconfigured`   | no        | `ZAI_GITHUB_APP_ID` / `ZAI_GITHUB_APP_PRIVATE_KEY` missing from the Secrets Store — create both.                                                                           |
+| `missing_installation_id` | no        | Webhook source is not the GitHub App — check the webhook configuration.                                                                                                    |
+| `app_permission_missing`  | no        | Add Collaborators: Read-only to the App (authorization gate).                                                                                                              |
+| `app_token_fetch_failed`  | yes       | Transient — GitHub redelivery / queue retry handles it.                                                                                                                    |
 
 ## Recovery
 
