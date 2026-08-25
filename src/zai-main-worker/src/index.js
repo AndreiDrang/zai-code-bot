@@ -68,33 +68,52 @@ function isWebhookPath(request) {
 }
 
 /**
- * Creates a GitHub client using either GitHub App authentication (preferred)
- * or falls back to PAT for backward compatibility.
+ * Creates a GitHub client authenticated as the App installation. GitHub App
+ * auth is the ONLY path (PAT support removed): missing configuration or a
+ * missing installation id throws with `status: 503` so the caller can tell
+ * GitHub to redeliver the webhook instead of failing opaquely.
  * @param {Object} env - Environment bindings
- * @param {string} installationId - GitHub App installation ID from webhook
+ * @param {string|number} installationId - GitHub App installation ID from webhook
  * @param {Object} logger - Logger instance
- * @returns {Promise<{github: GitHubClient, isAppAuth: boolean}>}
+ * @returns {Promise<GitHubClient>}
  */
-async function createGitHubClient(env, installationId, logger) {
-  // Try GitHub App authentication first if installationId is available
-  if (installationId && env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY) {
-    try {
-      const tokenProvider = createTokenProvider(env);
-      const token = await tokenProvider.getInstallationToken(installationId);
-      logger.info('Using GitHub App authentication', { installationId });
-      return { github: new GitHubClient(token, { isApp: true }), isAppAuth: true };
-    } catch (appAuthError) {
-      logger.warn('GitHub App authentication failed, falling back to PAT', {
-        error: appAuthError.message,
-        installationId,
-      });
-    }
+async function createAppGitHubClient(env, installationId, logger) {
+  const provider = await createTokenProvider(env);
+
+  if (!installationId) {
+    logger.error('Webhook carried no installation id; is the webhook source the GitHub App?', {});
+    throw Object.assign(new Error('missing_installation_id'), {
+      code: 'missing_installation_id',
+      status: 503,
+    });
+  }
+  if (!provider.available) {
+    logger.error('GitHub App auth unconfigured (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY)', {});
+    throw Object.assign(new Error('app_auth_unconfigured'), {
+      code: 'app_auth_unconfigured',
+      status: 503,
+    });
   }
 
-  // Fallback to PAT
-  const token = await resolveSecretValue(env.GITHUB_TOKEN);
-  logger.info('Using PAT authentication');
-  return { github: new GitHubClient(token), isAppAuth: false };
+  let token;
+  try {
+    token = await provider.getInstallationToken(installationId);
+  } catch (error) {
+    // Mint failures are server-side auth problems: 503 makes GitHub retry
+    // the delivery. Log the classified code — never the raw provider body.
+    logger.error('GitHub App token mint failed', {
+      code: error?.code,
+      retryable: error?.retryable,
+    });
+    throw Object.assign(new Error(error?.code || 'app_token_fetch_failed'), {
+      code: error?.code,
+      retryable: error?.retryable,
+      status: 503,
+    });
+  }
+
+  logger.info('Using GitHub App authentication', { installationId });
+  return new GitHubClient(token);
 }
 
 export default {
@@ -145,11 +164,11 @@ export default {
         repo: webhookData.repository?.full_name,
       });
 
-      // Extract installation ID from webhook payload for GitHub App auth
+      // Installation id from the webhook payload — required for GitHub App
+      // auth on every path that talks to the GitHub API (command path and the
+      // comment mirror), and stored on jobs for the heavy worker. No client is
+      // built here: PR-context events must not pay a token mint.
       const installationId = webhookData.installation?.id;
-
-      // Create GitHub client (tries App auth first, falls back to PAT)
-      const { github, isAppAuth } = await createGitHubClient(env, installationId, logger);
 
       // --- Mirror PR conversation comments into the comments context slice ---
       // issue_comment created/edited/deleted on a PR trigger a full re-fetch of
@@ -161,7 +180,7 @@ export default {
       if (isPrCommentRefreshEvent(ghEvent, webhookData, env)) {
         const plan = planCommentsRefresh(webhookData);
         if (plan) {
-          ctx.waitUntil(refreshPrComments(env, plan).catch(() => {}));
+          ctx.waitUntil(refreshPrComments(env, plan, installationId, logger).catch(() => {}));
         }
       }
 
@@ -230,6 +249,12 @@ export default {
         return new Response('OK', { status: 200 });
       }
 
+      // --- Gate 4.5: GitHub App client (App-only auth; no PAT fallback) ---
+      // Built only now: everything above (PR-context jobs, mirrors,
+      // non-command comments) must not pay a token mint. Auth/config errors
+      // throw with status 503 so GitHub redelivers the webhook.
+      const github = await createAppGitHubClient(env, installationId, logger);
+
       // --- Gate 5: authorization (collaborator check) ---
       const { owner, name, full_name } = repoCoordinates(webhookData.repository);
       const username = webhookData.comment?.user?.login;
@@ -249,7 +274,7 @@ export default {
       const bucket = classifyCommand(parsed.type);
 
       if (bucket === 'help') {
-        const botLogin = await resolveBotLogin(env, github);
+        const botLogin = resolveBotLogin(env);
         await postHelp(github, owner, name, webhookData.issue.number, botLogin);
         return json(200, { status: 'help', command: parsed.type });
       }
@@ -296,9 +321,15 @@ export default {
     } catch (error) {
       logger.error('Error processing request', {
         message: error.message,
+        code: error.code,
         correlationId,
       });
-      return new Response('Internal Server Error', { status: 500 });
+      // Auth/config failures carry status 503 so GitHub redelivers the
+      // webhook; anything unexpected stays a 500.
+      const status = error.status === 503 ? 503 : 500;
+      return new Response(status === 503 ? 'Service Unavailable' : 'Internal Server Error', {
+        status,
+      });
     }
   },
 
@@ -402,7 +433,7 @@ async function postUnauthorizedComment(github, owner, name, issueNumber, usernam
       owner,
       name,
       issueNumber,
-      `## \u26a0\ufe0f Authorization Required\n\n@${username}, you need collaborator access to run /zai commands here.\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
+      `## ⚠️ Authorization Required\n\n@${username}, you need collaborator access to run /zai commands here.\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
     );
   } catch {
     /* best-effort */
@@ -418,34 +449,29 @@ async function postUnsupported(github, owner, name, issueNumber, commandType) {
 }
 
 /**
- * Resolves the login that owns this deployment's GitHub token, so help-comment
- * updates can recognize PAT-owned (type 'User') bot comments. Prefers an
- * explicit GITHUB_BOT_LOGIN var; otherwise asks the API once (help is rare,
- * no caching warranted). Resolving is best-effort: on failure only comments
- * from GitHub Apps (type 'Bot') match, which at worst posts a fresh help
- * comment instead of updating a PAT-owned one — never rewrites a user's.
+ * Optional login that owned this deployment's PAT-era comments (type 'User'),
+ * so help-comment updates can still recognize them. Installation tokens
+ * cannot call GET /user (403), so this is a pure env read now; when unset,
+ * only GitHub App comments (type 'Bot') match — at worst a legacy help
+ * comment is not recognized and a fresh one is posted once, never a user's.
  */
-async function resolveBotLogin(env, github) {
-  if (env?.GITHUB_BOT_LOGIN) return env.GITHUB_BOT_LOGIN;
-  try {
-    return (await github.getAuthenticatedUser())?.login || null;
-  } catch {
-    return null;
-  }
+function resolveBotLogin(env) {
+  return env?.GITHUB_BOT_LOGIN || null;
 }
 
 async function postHelp(github, owner, name, issueNumber, botLogin = null) {
   try {
     const comments = await github.getIssueComments(owner, name, issueNumber);
     const existing = Array.isArray(comments)
-      ? comments.find((comment) =>
-          typeof comment.body === 'string' &&
-          comment.body.includes(HELP_MARKER) &&
-          isBotOwnedComment(comment, { botLogin })
+      ? comments.find(
+          (comment) =>
+            typeof comment.body === 'string' &&
+            comment.body.includes(HELP_MARKER) &&
+            isBotOwnedComment(comment, { botLogin }),
         )
       : null;
 
-    if (existing) {
+    if (existing?.id) {
       await github.updateComment(owner, name, existing.id, formatHelp());
     } else {
       await github.postComment(owner, name, issueNumber, formatHelp());
@@ -455,8 +481,19 @@ async function postHelp(github, owner, name, issueNumber, botLogin = null) {
   }
 }
 
-/** Refresh PR comments slice (best-effort, non-blocking) */
-async function refreshPrComments(env, plan) {
-  const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
-  return refreshCommentsSlice({ github, bucket: env.BOT_ARTIFACTS, ...plan });
+/**
+ * Full-refresh of the PR `comments` context slice on an issue_comment event.
+ * Builds a throwaway App-authenticated GitHubClient and runs the shared
+ * refreshCommentsSlice. Best-effort: on App-auth failure the mirror is
+ * skipped — the slice is derivative (the next gather re-captures it from
+ * scratch) — and errors never escape into ctx.waitUntil.
+ */
+async function refreshPrComments(env, plan, installationId, logger) {
+  try {
+    const github = await createAppGitHubClient(env, installationId, logger);
+    return await refreshCommentsSlice({ github, bucket: env.BOT_ARTIFACTS, ...plan });
+  } catch (error) {
+    logger?.warn?.('Comment slice refresh skipped: app auth unavailable', { code: error?.code });
+    return null;
+  }
 }

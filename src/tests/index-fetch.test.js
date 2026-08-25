@@ -7,13 +7,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // (shared/commands.js), secret resolution (shared/secrets.js), and the pure
 // event predicates (pr-events.js / comment-events.js).
 //
-// What is MOCKED: GitHubClient, authorizeCommenter, D1 storage (deliveries),
+// What is MOCKED: GitHubClient, authorizeCommenter, the App token provider
+// (github-app-auth.js — provider + token mint), D1 storage (deliveries),
 // the queue producer (job-enqueuer), and the R2 slice refreshers — so these
 // tests pin the routing/gating contract of index.js without network or
 // bindings.
 
 vi.mock('../shared/github.js', () => ({ GitHubClient: vi.fn() }));
 vi.mock('../shared/auth.js', () => ({ authorizeCommenter: vi.fn() }));
+vi.mock('../shared/github-app-auth.js', () => ({ createTokenProvider: vi.fn() }));
 vi.mock('../shared/storage/deliveries.js', () => ({
   createPrContextJob: vi.fn(),
   createCommandJob: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock('../shared/pr-comments.js', () => ({ refreshCommentsSlice: vi.fn() }));
 vi.mock('../shared/pr-description.js', () => ({ refreshDescriptionSlice: vi.fn() }));
 
 import { GitHubClient } from '../shared/github.js';
+import { createTokenProvider } from '../shared/github-app-auth.js';
 import { authorizeCommenter } from '../shared/auth.js';
 import { createPrContextJob, createCommandJob } from '../shared/storage/deliveries.js';
 import {
@@ -54,7 +57,8 @@ const SECRET = 'whsec-test';
 function makeEnv(overrides = {}) {
   return {
     GITHUB_WEBHOOK_SECRET: SECRET,
-    GITHUB_TOKEN: 'gh-token',
+    GITHUB_APP_ID: '123456',
+    GITHUB_APP_PRIVATE_KEY: 'test-app-key',
     BOT_DB: { __db: true },
     BOT_JOBS: { send: vi.fn() },
     BOT_ARTIFACTS: { delete: vi.fn(), put: vi.fn(), get: vi.fn() },
@@ -97,6 +101,7 @@ async function signedRequest(
 function prCommentPayload({ body = '/zai review', action = 'created', onPr = true } = {}) {
   return {
     action,
+    installation: { id: 456 },
     repository: { id: 10, name: 'repo', full_name: 'owner/repo', owner: { login: 'owner' } },
     issue: {
       number: 7,
@@ -111,6 +116,7 @@ function prCommentPayload({ body = '/zai review', action = 'created', onPr = tru
 function prEventPayload(action) {
   return {
     action,
+    installation: { id: 456 },
     repository: {
       id: 10,
       name: 'repo',
@@ -152,6 +158,7 @@ function flushWaitUntil(ctx) {
 
 let github;
 let ctx;
+let mintToken;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -172,6 +179,9 @@ beforeEach(() => {
       }
     },
   );
+  // App token provider: available by default, minting a fixed token.
+  mintToken = vi.fn().mockResolvedValue('ghs_test');
+  createTokenProvider.mockResolvedValue({ available: true, getInstallationToken: mintToken });
   authorizeCommenter.mockResolvedValue(true);
   enqueueJob.mockResolvedValue(true);
   createCommandJob.mockResolvedValue({ job: { job_id: 'cmd-1' }, created: true });
@@ -356,8 +366,9 @@ describe('command comments', () => {
       durable: true,
     });
 
-    // Auth gate ran with a real client for the right user/repo.
-    expect(GitHubClient).toHaveBeenCalledWith('gh-token');
+    // Auth gate ran with an App-authenticated client for the right user/repo.
+    expect(GitHubClient).toHaveBeenCalledWith('ghs_test');
+    expect(mintToken).toHaveBeenCalledWith(456);
     expect(authorizeCommenter).toHaveBeenCalledWith(github, 'owner', 'repo', 'alice');
 
     // The durable event matches the PR-event job shape.
@@ -375,6 +386,7 @@ describe('command comments', () => {
         title: 'Cloudflare migration',
         authorLogin: 'pr-author',
         state: 'open',
+        installationId: 456,
       }),
       'review',
     );
@@ -494,8 +506,25 @@ describe('inline commands', () => {
     expect(github.postComment).toHaveBeenCalledWith('owner', 'repo', 7, formatHelp());
   });
 
-  it('updates a PAT-owned help comment via the resolved bot login', async () => {
-    github.getAuthenticatedUser.mockResolvedValue({ login: 'pat-bot' });
+  it('updates a PAT-era help comment only via the configured GITHUB_BOT_LOGIN var', async () => {
+    github.getIssueComments.mockResolvedValue([
+      { id: 88, body: `help ${HELP_MARKER}`, user: { login: 'pat-bot', type: 'User' } },
+    ]);
+
+    const res = await signedRequest(
+      { body: prCommentPayload({ body: '/zai help' }) },
+      makeEnv({ GITHUB_BOT_LOGIN: 'pat-bot' }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(github.updateComment).toHaveBeenCalledWith('owner', 'repo', 88, formatHelp());
+    expect(github.postComment).not.toHaveBeenCalled();
+    // App-only auth: the worker never probes GET /user (installation tokens
+    // cannot call it); the login comes exclusively from the env var.
+    expect(github.getAuthenticatedUser).not.toHaveBeenCalled();
+  });
+
+  it('posts a fresh help comment when a PAT-era help comment exists but GITHUB_BOT_LOGIN is unset', async () => {
     github.getIssueComments.mockResolvedValue([
       { id: 88, body: `help ${HELP_MARKER}`, user: { login: 'pat-bot', type: 'User' } },
     ]);
@@ -503,8 +532,10 @@ describe('inline commands', () => {
     const res = await signedRequest({ body: prCommentPayload({ body: '/zai help' }) });
 
     expect(res.status).toBe(200);
-    expect(github.updateComment).toHaveBeenCalledWith('owner', 'repo', 88, formatHelp());
-    expect(github.postComment).not.toHaveBeenCalled();
+    // Without the var, a type 'User' comment is not recognized as bot-owned;
+    // a new help comment is posted once instead of rewriting it.
+    expect(github.updateComment).not.toHaveBeenCalled();
+    expect(github.postComment).toHaveBeenCalledWith('owner', 'repo', 7, formatHelp());
   });
 
   it('prefers GITHUB_BOT_LOGIN over the API lookup', async () => {
@@ -575,23 +606,27 @@ describe('pull_request events', () => {
       duplicate: false,
     });
 
-    expect(createPrContextJob).toHaveBeenCalledWith(env.BOT_DB, {
-      deliveryId: 'd-1',
-      action: 'synchronize',
-      repositoryId: 10,
-      repository: {
-        owner: 'owner',
-        name: 'repo',
-        fullName: 'owner/repo',
-        defaultBranch: 'main',
+    expect(createPrContextJob).toHaveBeenCalledWith(
+      env.BOT_DB,
+      {
+        deliveryId: 'd-1',
+        action: 'synchronize',
+        repositoryId: 10,
+        repository: {
+          owner: 'owner',
+          name: 'repo',
+          fullName: 'owner/repo',
+          defaultBranch: 'main',
+        },
+        prNumber: 43,
+        headSha: 'headsha',
+        baseSha: 'basesha',
+        title: 'Cloudflare migration',
+        authorLogin: 'pr-author',
+        state: 'open',
       },
-      prNumber: 43,
-      headSha: 'headsha',
-      baseSha: 'basesha',
-      title: 'Cloudflare migration',
-      authorLogin: 'pr-author',
-      state: 'open',
-    });
+      456,
+    );
     expect(enqueueJob).toHaveBeenCalledWith(env, 'ctx-1');
     expect(authorizeCommenter).not.toHaveBeenCalled(); // PR events bypass the command path
   });
@@ -641,6 +676,93 @@ describe('pull_request events', () => {
       expect(await res.text()).toBe('OK');
     }
     expect(createPrContextJob).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub App authentication (Gate 4.5 — App-only, no PAT fallback)
+// ---------------------------------------------------------------------------
+
+describe('GitHub App authentication', () => {
+  it('never mints a token for a pull_request synchronize event', async () => {
+    // Fix for the eager-mint regression: PR-context events only write D1 and
+    // enqueue; they must not pay a JWT + token-endpoint round trip.
+    const res = await signedRequest(
+      { body: prEventPayload('synchronize'), event: 'pull_request' },
+      makeEnv(),
+    );
+
+    expect(res.status).toBe(202);
+    expect(createTokenProvider).not.toHaveBeenCalled();
+    expect(mintToken).not.toHaveBeenCalled();
+  });
+
+  it('never mints a token for a plain issue comment (no mirror, no command)', async () => {
+    const res = await signedRequest({ body: prCommentPayload({ body: 'hello', onPr: false }) });
+
+    expect(res.status).toBe(200);
+    expect(createTokenProvider).not.toHaveBeenCalled();
+  });
+
+  it('never mints a token for an ignored pull_request action', async () => {
+    const res = await signedRequest(
+      { body: prEventPayload('closed'), event: 'pull_request' },
+      makeEnv(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(createTokenProvider).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 and creates no job when the payload carries no installation id', async () => {
+    const payload = prCommentPayload({ body: '/zai review' });
+    delete payload.installation;
+
+    const res = await signedRequest({ body: payload });
+
+    expect(res.status).toBe(503);
+    expect(authorizeCommenter).not.toHaveBeenCalled();
+    expect(createCommandJob).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 when the App credentials are not configured', async () => {
+    createTokenProvider.mockResolvedValue({ available: false, getInstallationToken: vi.fn() });
+
+    const res = await signedRequest({ body: prCommentPayload({ body: '/zai review' }) });
+
+    expect(res.status).toBe(503);
+    expect(mintToken).not.toHaveBeenCalled();
+    expect(createCommandJob).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 (not 500) when the token mint fails', async () => {
+    // Persistent rejection: a PR comment also feeds the mirror path, which
+    // consumes (and swallows) the first mint attempt before Gate 4.5 runs.
+    mintToken.mockRejectedValue(
+      Object.assign(new Error('GitHub API error: 500'), {
+        code: 'app_token_fetch_failed',
+        retryable: true,
+      }),
+    );
+
+    const res = await signedRequest({ body: prCommentPayload({ body: '/zai review' }) });
+    await flushWaitUntil(ctx);
+
+    expect(res.status).toBe(503);
+    expect(authorizeCommenter).not.toHaveBeenCalled();
+    expect(createCommandJob).not.toHaveBeenCalled();
+  });
+
+  it('skips the comment mirror when App auth fails but still acks 200', async () => {
+    mintToken.mockRejectedValueOnce(
+      Object.assign(new Error('GitHub API error: 500'), { code: 'app_token_fetch_failed' }),
+    );
+
+    const res = await signedRequest({ body: prCommentPayload({ body: 'hello' }) });
+    await flushWaitUntil(ctx);
+
+    expect(res.status).toBe(200);
+    expect(refreshCommentsSlice).not.toHaveBeenCalled();
   });
 });
 
