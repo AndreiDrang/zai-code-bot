@@ -3,23 +3,22 @@
  *
  * NOTE: webhook signature verification was extracted to `./crypto.js`
  * (Web Crypto API). This module is pure REST I/O and is shared by both workers.
- * Supports both PAT (token) and GitHub App Installation Tokens (Bearer).
+ * Authentication is GitHub App only: every token in the system is an
+ * installation access token, sent as a Bearer credential.
  */
 
 const GITHUB_API_BASE = 'https://api.github.com';
 
 export class GitHubClient {
   /**
-   * @param {string} token - GitHub Token (PAT or Installation Token)
+   * @param {string} token - GitHub App installation access token
    * @param {Object} [opts]
    * @param {string} [opts.userAgent='zai-code-bot-workers']
-   * @param {boolean} [opts.isApp=false] - Use Bearer for GitHub App tokens
    */
   constructor(token, opts = {}) {
     this.token = token;
     this.baseUrl = GITHUB_API_BASE;
     this.userAgent = opts.userAgent || 'zai-code-bot-workers';
-    this.isApp = opts.isApp || false;
   }
 
   /**
@@ -36,7 +35,7 @@ export class GitHubClient {
     const options = {
       method,
       headers: {
-        Authorization: this.isApp ? `Bearer ${this.token}` : `token ${this.token}`,
+        Authorization: `Bearer ${this.token}`,
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         'User-Agent': this.userAgent,

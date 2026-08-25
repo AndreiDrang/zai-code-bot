@@ -60,7 +60,7 @@ describe('shared/github (GitHubClient)', () => {
       fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }));
       await client.request('GET', '/x');
       const headers = fetchSpy.mock.calls[0][1].headers;
-      expect(headers.Authorization).toBe('token mock-token');
+      expect(headers.Authorization).toBe('Bearer mock-token');
       expect(headers.Accept).toBe('application/vnd.github+json');
       expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28');
       expect(headers['User-Agent']).toBe('zai-code-bot-workers');

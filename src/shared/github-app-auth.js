@@ -1,20 +1,45 @@
 /**
  * GitHub App Authentication for Cloudflare Workers.
  * Generates JWT and fetches Installation Access Tokens.
+ *
+ * This is the ONLY authentication path in the codebase (PAT support removed).
+ * Secrets must be resolved through `resolveSecretValue` — Secrets Store
+ * bindings can surface as string | {get()} | Promise, and a raw binding
+ * stringifies to "[object Object]", silently breaking every token mint.
  */
+
+import { resolveSecretValue } from './secrets.js';
 
 const GITHUB_API_BASE = 'https://api.github.com';
 
 /**
- * Encodes a string to Base64URL format (for JWT).
- * @param {string} str - String to encode
- * @returns {string} Base64URL encoded string
+ * Creates a classified GitHub App authentication error.
+ * `retryable: false` marks config/permanent failures (queue: fail the job,
+ * webhook: 503 without pointlessly burning attempts).
+ * @param {string} code - Stable error code (e.g. 'app_jwt_rejected')
+ * @param {string} message - Short, log-safe message (no raw provider bodies)
+ * @param {Object} [opts]
+ * @param {boolean} [opts.retryable] - default true
+ * @param {number} [opts.status] - HTTP status from GitHub, when applicable
+ * @returns {Error}
  */
-function encodeBase64Url(str) {
-  return btoa(String.fromCharCode(...new TextEncoder().encode(str)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+function appAuthError(code, message, { retryable = true, status } = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.retryable = retryable;
+  if (status !== undefined) error.status = status;
+  return error;
+}
+
+/**
+ * Encodes bytes to Base64URL format (for JWT parts).
+ * @param {Uint8Array} bytes
+ * @returns {string} Base64URL encoded string (no padding)
+ */
+function encodeBase64UrlBytes(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 /**
@@ -33,8 +58,9 @@ export async function generateAppJwt(appId, privateKey) {
 
   const header = { alg: 'RS256', typ: 'JWT' };
 
-  const encodedHeader = encodeBase64Url(JSON.stringify(header));
-  const encodedPayload = encodeBase64Url(JSON.stringify(payload));
+  const encoder = new TextEncoder();
+  const encodedHeader = encodeBase64UrlBytes(encoder.encode(JSON.stringify(header)));
+  const encodedPayload = encodeBase64UrlBytes(encoder.encode(JSON.stringify(payload)));
 
   // Normalize private key (remove headers, whitespace)
   const normalizedKey = privateKey
@@ -49,32 +75,61 @@ export async function generateAppJwt(appId, privateKey) {
     binaryKey,
     { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
     false,
-    ['sign']
+    ['sign'],
   );
 
   const signature = await crypto.subtle.sign(
     'RSASSA-PKCS1-v1_5',
     cryptoKey,
-    new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`)
+    encoder.encode(`${encodedHeader}.${encodedPayload}`),
   );
 
-  const encodedSignature = encodeBase64Url(
-    String.fromCharCode(...new Uint8Array(signature))
-  );
+  const encodedSignature = encodeBase64UrlBytes(new Uint8Array(signature));
 
   return `${encodedHeader}.${encodedPayload}.${encodedSignature}`;
 }
 
 /**
- * Fetches an installation access token.
+ * Maps an HTTP status from the installation-token endpoint to a classified
+ * appAuthError. Only status + code are kept — raw response bodies must not
+ * leak into logs or GitHub comments (SECURITY.md).
+ */
+function tokenEndpointError(status) {
+  if (status === 401) {
+    return appAuthError('app_jwt_rejected', 'GitHub rejected the app JWT (bad key or app id)', {
+      retryable: false,
+      status,
+    });
+  }
+  if (status === 403) {
+    return appAuthError('app_suspended', 'GitHub App is suspended or blocked', {
+      retryable: false,
+      status,
+    });
+  }
+  if (status === 404) {
+    return appAuthError('installation_not_found', 'Installation was removed or inaccessible', {
+      retryable: false,
+      status,
+    });
+  }
+  // 5xx / 429 / anything else unexpected: worth another attempt later.
+  return appAuthError('app_token_fetch_failed', `GitHub token endpoint returned ${status}`, {
+    retryable: true,
+    status,
+  });
+}
+
+/**
+ * Fetches an installation access token from GitHub.
  * @param {string} jwt - App JWT token
  * @param {string|number} installationId - Installation ID
  * @returns {Promise<string>} Installation access token
  */
-export async function getInstallationToken(jwt, installationId) {
-  const response = await fetch(
-    `${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`,
-    {
+export async function fetchInstallationToken(jwt, installationId) {
+  let response;
+  try {
+    response = await fetch(`${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${jwt}`,
@@ -82,24 +137,29 @@ export async function getInstallationToken(jwt, installationId) {
         'X-GitHub-Api-Version': '2022-11-28',
         'User-Agent': 'zai-code-bot-workers',
       },
-    }
-  );
+    });
+  } catch (error) {
+    // Network-level failure (offline, DNS, timeout): transient.
+    throw appAuthError('app_token_fetch_failed', `Token endpoint unreachable: ${error.message}`);
+  }
 
   if (!response.ok) {
-    const body = await response.text();
-    const err = new Error(`GitHub API error: ${response.status}`);
-    err.status = response.status;
-    err.body = body;
-    throw err;
+    // Drain the body so the connection can be reused, then classify.
+    await response.text().catch(() => {});
+    throw tokenEndpointError(response.status);
   }
 
   const data = await response.json();
+  if (typeof data?.token !== 'string' || data.token === '') {
+    throw appAuthError('app_token_fetch_failed', 'Token endpoint returned no token');
+  }
   return data.token;
 }
 
 /**
  * Caches installation tokens to avoid generating JWT for every request.
- * Uses KV namespace for caching (optional optimization).
+ * Uses KV namespace for caching (optional optimization). Cache errors are
+ * swallowed: a cache miss only costs an extra mint, never a failure.
  */
 export class AppTokenCache {
   constructor(kvNamespace, ttl = 300) {
@@ -122,11 +182,9 @@ export class AppTokenCache {
   async set(installationId, token) {
     if (!this.kv) return;
     try {
-      await this.kv.put(
-        `installation_token:${installationId}`,
-        JSON.stringify({ value: token }),
-        { expirationTtl: this.ttl }
-      );
+      await this.kv.put(`installation_token:${installationId}`, JSON.stringify({ value: token }), {
+        expirationTtl: this.ttl,
+      });
     } catch {
       // Ignore cache errors
     }
@@ -135,31 +193,41 @@ export class AppTokenCache {
 
 /**
  * Creates a token provider that handles JWT generation and caching.
+ * Resolves both Secrets Store bindings through `resolveSecretValue` (the
+ * documented happy path is a plain string, but the same store also surfaces
+ * `{get()}` and Promise shapes depending on the wrangler/workerd version).
+ *
  * @param {Object} env - Environment bindings (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, BOT_CACHE)
- * @returns {Object} Token provider with getInstallationToken method
+ * @returns {Promise<{available: boolean, getInstallationToken: function}>}
  */
-export function createTokenProvider(env) {
-  const appId = env.GITHUB_APP_ID;
-  const privateKey = env.GITHUB_APP_PRIVATE_KEY;
+export async function createTokenProvider(env) {
+  const appId = await resolveSecretValue(env.GITHUB_APP_ID);
+  const privateKey = await resolveSecretValue(env.GITHUB_APP_PRIVATE_KEY);
   const cache = env.BOT_CACHE ? new AppTokenCache(env.BOT_CACHE) : null;
 
   return {
+    available: Boolean(appId && privateKey),
     async getInstallationToken(installationId) {
-      // Try cache first
-      if (cache) {
-        const cached = await cache.get(installationId);
-        if (cached) return cached;
+      if (!appId || !privateKey) {
+        throw appAuthError(
+          'app_auth_unconfigured',
+          'GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY not configured',
+          { retryable: false },
+        );
+      }
+      if (!installationId) {
+        throw appAuthError('missing_installation_id', 'webhook/job carries no installation id', {
+          retryable: false,
+        });
       }
 
-      // Generate new token
+      const cached = cache ? await cache.get(installationId) : null;
+      if (cached) return cached;
+
       const jwt = await generateAppJwt(appId, privateKey);
-      const token = await getInstallationToken(jwt, installationId);
+      const token = await fetchInstallationToken(jwt, installationId);
 
-      // Cache it
-      if (cache) {
-        await cache.set(installationId, token);
-      }
-
+      if (cache) await cache.set(installationId, token);
       return token;
     },
   };

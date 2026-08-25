@@ -22,8 +22,8 @@
  * against the same Secrets Store (629e5dd…).
  *
  * USAGE: resolve at the edge, pass a plain string down.
- *   const token = await resolveSecretValue(env.GITHUB_TOKEN);
- *   new GitHubClient(token);
+ *   const key = await resolveSecretValue(env.GITHUB_APP_PRIVATE_KEY);
+ *   generateAppJwt(appId, key);
  */
 
 /**

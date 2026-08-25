@@ -5,10 +5,11 @@
  * the earlier GitHub Actions bot, which authorized any identifiable user).
  * Centralizing it here lets both workers apply the same policy and makes a
  * future policy change a one-file edit.
+ *
+ * Auth context: all clients authenticate as the GitHub App installation
+ * (PAT support removed), so the collaborator check requires the App to hold
+ * the \"Collaborators: read-only\" repository permission.
  */
-
-import { GitHubClient } from './github.js';
-import { resolveSecretValue } from './secrets.js';
 
 /**
  * Authorizes a commenter as a repository collaborator.
@@ -25,15 +26,18 @@ export async function authorizeCommenter(github, owner, repo, username) {
     return true;
   } catch (error) {
     if (error.status === 404) return false;
+    if (error.status === 403) {
+      // An installation token without the \"Collaborators: read-only\"
+      // permission gets 403 from GitHub. Surface it as a loud config error —
+      // misclassifying it as \"not a collaborator\" would silently lock out
+      // every legitimate /zai command.
+      const error403 = new Error(
+        'app_permission_missing: collaborator check requires Collaborators read-only',
+      );
+      error403.code = 'app_permission_missing';
+      error403.retryable = false;
+      throw error403;
+    }
     throw error;
   }
-}
-
-/**
- * Convenience factory: build a GitHubClient + run the auth check in one call.
- * Useful from the heavy worker, which rebuilds a client per invocation.
- */
-export async function isAuthorized(env, owner, repo, username) {
-  const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
-  return authorizeCommenter(github, owner, repo, username);
 }
