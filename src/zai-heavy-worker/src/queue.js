@@ -1,6 +1,7 @@
 import { GitHubClient } from '../../shared/github.js';
 import { createLogger, generateCorrelationId } from '../../shared/logging.js';
 import { resolveSecretValue } from '../../shared/secrets.js';
+import { createTokenProvider } from '../../shared/github-app-auth.js';
 import { getJob } from '../../shared/storage/deliveries.js';
 import { safeErrorCode } from '../../shared/storage/database.js';
 import {
@@ -20,6 +21,39 @@ export async function processQueueBatch(batch, env) {
   for (const message of batch.messages || []) {
     await processQueueMessage(message, env, logger);
   }
+}
+
+/**
+ * Creates a GitHub client for queue processing using either GitHub App
+ * authentication (preferred) or falls back to PAT.
+ * @param {Object} env - Environment bindings
+ * @param {Object} job - Job data containing installationId
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<GitHubClient>}
+ */
+async function createQueueGitHubClient(env, job, logger) {
+  const installationId = job.installation_id;
+
+  // Try GitHub App authentication first if installationId is available
+  if (installationId && env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY) {
+    try {
+      const tokenProvider = createTokenProvider(env);
+      const token = await tokenProvider.getInstallationToken(installationId);
+      logger.info('Using GitHub App authentication for queue job', { installationId, jobId: job.job_id });
+      return new GitHubClient(token, { isApp: true });
+    } catch (appAuthError) {
+      logger.warn('GitHub App authentication failed in queue, falling back to PAT', {
+        error: appAuthError.message,
+        installationId,
+        jobId: job.job_id,
+      });
+    }
+  }
+
+  // Fallback to PAT
+  const token = await resolveSecretValue(env.GITHUB_TOKEN);
+  logger.info('Using PAT authentication for queue job', { jobId: job.job_id });
+  return new GitHubClient(token);
 }
 
 export async function processQueueMessage(
@@ -83,7 +117,10 @@ export async function processQueueMessage(
       throw unsupported;
     }
     runId = await startAnalysisRun(env.BOT_DB, jobId, claimed.attempt_count);
-    const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
+
+    // Create GitHub client with App auth if installation_id is available
+    const github = await createQueueGitHubClient(env, claimed, logger);
+
     await handler({ github, env, db: env.BOT_DB, job: claimed, runId });
     await markJobSucceeded(env.BOT_DB, jobId, runId);
     message.ack();

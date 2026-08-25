@@ -11,6 +11,7 @@
 import { GitHubClient } from '../../shared/github.js';
 import { verifyWebhookSignature } from '../../shared/crypto.js';
 import { resolveSecretValue } from '../../shared/secrets.js';
+import { createTokenProvider } from '../../shared/github-app-auth.js';
 import {
   parseCommand,
   isCommand,
@@ -66,6 +67,36 @@ function isWebhookPath(request) {
   return normalized === GITHUB_WEBHOOK_PATH;
 }
 
+/**
+ * Creates a GitHub client using either GitHub App authentication (preferred)
+ * or falls back to PAT for backward compatibility.
+ * @param {Object} env - Environment bindings
+ * @param {string} installationId - GitHub App installation ID from webhook
+ * @param {Object} logger - Logger instance
+ * @returns {Promise<{github: GitHubClient, isAppAuth: boolean}>}
+ */
+async function createGitHubClient(env, installationId, logger) {
+  // Try GitHub App authentication first if installationId is available
+  if (installationId && env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY) {
+    try {
+      const tokenProvider = createTokenProvider(env);
+      const token = await tokenProvider.getInstallationToken(installationId);
+      logger.info('Using GitHub App authentication', { installationId });
+      return { github: new GitHubClient(token, { isApp: true }), isAppAuth: true };
+    } catch (appAuthError) {
+      logger.warn('GitHub App authentication failed, falling back to PAT', {
+        error: appAuthError.message,
+        installationId,
+      });
+    }
+  }
+
+  // Fallback to PAT
+  const token = await resolveSecretValue(env.GITHUB_TOKEN);
+  logger.info('Using PAT authentication');
+  return { github: new GitHubClient(token), isAppAuth: false };
+}
+
 export default {
   async fetch(request, env, ctx) {
     const logger = createLogger(env, 'zai-main-worker');
@@ -114,6 +145,12 @@ export default {
         repo: webhookData.repository?.full_name,
       });
 
+      // Extract installation ID from webhook payload for GitHub App auth
+      const installationId = webhookData.installation?.id;
+
+      // Create GitHub client (tries App auth first, falls back to PAT)
+      const { github, isAppAuth } = await createGitHubClient(env, installationId, logger);
+
       // --- Mirror PR conversation comments into the comments context slice ---
       // issue_comment created/edited/deleted on a PR trigger a full re-fetch of
       // the conversation (getPrComments) that overwrites comments.json, so the
@@ -158,7 +195,7 @@ export default {
         if (!CONTEXT_TRIGGER_ACTIONS.includes(prEvent.action)) {
           return json(200, { status: 'ignored', action: prEvent.action });
         }
-        const context = await createPrContextJob(env.BOT_DB, prEvent);
+        const context = await createPrContextJob(env.BOT_DB, prEvent, installationId);
         try {
           await enqueueJob(env, context.job.job_id);
         } catch (error) {
@@ -194,7 +231,6 @@ export default {
       }
 
       // --- Gate 5: authorization (collaborator check) ---
-      const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
       const { owner, name, full_name } = repoCoordinates(webhookData.repository);
       const username = webhookData.comment?.user?.login;
 
@@ -229,6 +265,7 @@ export default {
             webhookData,
             parsed.type,
             request.headers.get('x-github-delivery'),
+            installationId,
           );
           await enqueueJob(env, created.job.job_id);
           logger.info('Enqueued durable command job', {
@@ -330,7 +367,7 @@ function canRouteDurable(webhookData, env) {
  * queue consumer then runs the handler with the full {github, env, db, job,
  * runId} context.
  */
-async function createCommandDurableJob(env, github, webhookData, kind, deliveryId) {
+async function createCommandDurableJob(env, github, webhookData, kind, deliveryId, installationId) {
   const { owner, name, full_name } = repoCoordinates(webhookData.repository);
   const prNumber = webhookData.issue.number;
   const pr = await github.getPullRequest(owner, name, prNumber);
@@ -347,6 +384,7 @@ async function createCommandDurableJob(env, github, webhookData, kind, deliveryI
     title: pr.title || null,
     authorLogin: pr.user?.login || null,
     state: pr.state || 'open',
+    installationId: installationId,
   };
   return createCommandJob(env.BOT_DB, event, kind);
 }
@@ -364,7 +402,7 @@ async function postUnauthorizedComment(github, owner, name, issueNumber, usernam
       owner,
       name,
       issueNumber,
-      `## ⚠️ Authorization Required\n\n@${username}, you need collaborator access to run /zai commands here.\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
+      `## \u26a0\ufe0f Authorization Required\n\n@${username}, you need collaborator access to run /zai commands here.\n\n---\n${BOT_FOOTER}\n\n${COMMENT_MARKER}`,
     );
   } catch {
     /* best-effort */
@@ -400,14 +438,14 @@ async function postHelp(github, owner, name, issueNumber, botLogin = null) {
   try {
     const comments = await github.getIssueComments(owner, name, issueNumber);
     const existing = Array.isArray(comments)
-      ? comments.find(
-          (comment) =>
-            typeof comment.body === 'string' &&
-            comment.body.includes(HELP_MARKER) &&
-            isBotOwnedComment(comment, { botLogin }),
+      ? comments.find((comment) =>
+          typeof comment.body === 'string' &&
+          comment.body.includes(HELP_MARKER) &&
+          isBotOwnedComment(comment, { botLogin })
         )
       : null;
-    if (existing?.id) {
+
+    if (existing) {
       await github.updateComment(owner, name, existing.id, formatHelp());
     } else {
       await github.postComment(owner, name, issueNumber, formatHelp());
@@ -417,12 +455,7 @@ async function postHelp(github, owner, name, issueNumber, botLogin = null) {
   }
 }
 
-/**
- * Full-refresh of the PR `comments` context slice on an issue_comment event.
- * Builds a throwaway GitHubClient (this path runs before the command path
- * constructs one) and runs the shared refreshCommentsSlice. Errors are
- * swallowed by the caller's ctx.waitUntil — the slice is derivative.
- */
+/** Refresh PR comments slice (best-effort, non-blocking) */
 async function refreshPrComments(env, plan) {
   const github = new GitHubClient(await resolveSecretValue(env.GITHUB_TOKEN));
   return refreshCommentsSlice({ github, bucket: env.BOT_ARTIFACTS, ...plan });

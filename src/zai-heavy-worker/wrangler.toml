@@ -64,6 +64,8 @@ mode = "smart"
 # Store id: 629e5dd6594845a889e6ddabb26cc009
 #   GITHUB_TOKEN           <- secret ZAI_GITHUB_TOKEN         (GitHub PAT for result comments)
 #   ZAI_API_KEY            <- secret ZAI_API_KEY              (Z.ai key)
+#   GITHUB_APP_ID          <- secret ZAI_GITHUB_APP_ID       (GitHub App ID)
+#   GITHUB_APP_PRIVATE_KEY <- secret ZAI_GITHUB_APP_PRIVATE_KEY (GitHub App private key)
 [[secrets_store_secrets]]
 binding = "GITHUB_TOKEN"
 store_id = "629e5dd6594845a889e6ddabb26cc009"
@@ -73,3 +75,13 @@ secret_name = "ZAI_GITHUB_TOKEN"
 binding = "ZAI_API_KEY"
 store_id = "629e5dd6594845a889e6ddabb26cc009"
 secret_name = "ZAI_API_KEY"
+
+[[secrets_store_secrets]]
+binding = "GITHUB_APP_ID"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_APP_ID"
+
+[[secrets_store_secrets]]
+binding = "GITHUB_APP_PRIVATE_KEY"
+store_id = "629e5dd6594845a889e6ddabb26cc009"
+secret_name = "ZAI_GITHUB_APP_PRIVATE_KEY"
