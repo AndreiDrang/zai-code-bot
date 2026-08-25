@@ -1,6 +1,5 @@
 import { GitHubClient } from '../../shared/github.js';
 import { createLogger, generateCorrelationId } from '../../shared/logging.js';
-import { resolveSecretValue } from '../../shared/secrets.js';
 import { createTokenProvider } from '../../shared/github-app-auth.js';
 import { getJob } from '../../shared/storage/deliveries.js';
 import { safeErrorCode } from '../../shared/storage/database.js';
@@ -24,35 +23,40 @@ export async function processQueueBatch(batch, env) {
 }
 
 /**
- * Creates a GitHub client for queue processing using either GitHub App
- * authentication (preferred) or falls back to PAT.
+ * Creates a GitHub client for queue processing. GitHub App auth is the ONLY
+ * path (PAT support removed). Config/permanent failures throw with
+ * `retryable: false` so the queue fails the job instead of burning attempts;
+ * transient mint failures (network, 5xx) retry with backoff via the
+ * provider's classified appAuthError.
  * @param {Object} env - Environment bindings
- * @param {Object} job - Job data containing installationId
+ * @param {Object} job - Claimed job row (carries installation_id)
  * @param {Object} logger - Logger instance
  * @returns {Promise<GitHubClient>}
  */
 async function createQueueGitHubClient(env, job, logger) {
-  const installationId = job.installation_id;
-
-  // Try GitHub App authentication first if installationId is available
-  if (installationId && env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY) {
-    try {
-      const tokenProvider = createTokenProvider(env);
-      const token = await tokenProvider.getInstallationToken(installationId);
-      logger.info('Using GitHub App authentication for queue job', { installationId, jobId: job.job_id });
-      return new GitHubClient(token, { isApp: true });
-    } catch (appAuthError) {
-      logger.warn('GitHub App authentication failed in queue, falling back to PAT', {
-        error: appAuthError.message,
-        installationId,
-        jobId: job.job_id,
-      });
-    }
+  if (!job.installation_id) {
+    // Pre-migration job (created before installation_id was recorded): it
+    // can never authenticate post-PAT-removal — fail fast, do not retry.
+    const legacy = new Error('missing_installation_id');
+    legacy.code = 'missing_installation_id';
+    legacy.retryable = false;
+    throw legacy;
   }
 
-  // Fallback to PAT
-  const token = await resolveSecretValue(env.GITHUB_TOKEN);
-  logger.info('Using PAT authentication for queue job', { jobId: job.job_id });
+  const provider = await createTokenProvider(env);
+  if (!provider.available) {
+    const unconfigured = new Error('app_auth_unconfigured');
+    unconfigured.code = 'app_auth_unconfigured';
+    unconfigured.retryable = false;
+    throw unconfigured;
+  }
+
+  // Throws a classified appAuthError on failure (code + retryable).
+  const token = await provider.getInstallationToken(job.installation_id);
+  logger.info('Using GitHub App authentication for queue job', {
+    installationId: job.installation_id,
+    jobId: job.job_id,
+  });
   return new GitHubClient(token);
 }
 

@@ -14,10 +14,14 @@ vi.mock('../shared/storage/jobs.js', () => ({
 vi.mock('../zai-heavy-worker/src/handlers/index.js', () => ({
   getHeavyHandler: vi.fn(),
 }));
+vi.mock('../shared/github.js', () => ({ GitHubClient: vi.fn() }));
+vi.mock('../shared/github-app-auth.js', () => ({ createTokenProvider: vi.fn() }));
 
 import { getHeavyHandler } from '../zai-heavy-worker/src/handlers/index.js';
 import { processQueueMessage } from '../zai-heavy-worker/src/queue.js';
 import { getJob } from '../shared/storage/deliveries.js';
+import { GitHubClient } from '../shared/github.js';
+import { createTokenProvider } from '../shared/github-app-auth.js';
 import {
   claimJob,
   markJobFailed,
@@ -37,6 +41,7 @@ function claimed(attempt_count = 1) {
     job_id: 'job-1',
     kind: 'review',
     attempt_count,
+    installation_id: 456,
     repository_owner: 'owner',
     repository_name: 'repo',
     pr_number: 1,
@@ -44,6 +49,8 @@ function claimed(attempt_count = 1) {
 }
 
 describe('heavy worker queue protocol', () => {
+  let mintToken;
+
   beforeEach(() => {
     vi.clearAllMocks();
     getHeavyHandler.mockReturnValue(vi.fn().mockResolvedValue({ status: 'success' }));
@@ -51,6 +58,16 @@ describe('heavy worker queue protocol', () => {
     markJobRetryable.mockResolvedValue(undefined);
     markJobFailed.mockResolvedValue(undefined);
     markJobSucceeded.mockResolvedValue(undefined);
+    // App token provider: available by default, minting a fixed token.
+    mintToken = vi.fn().mockResolvedValue('ghs_test');
+    createTokenProvider.mockResolvedValue({ available: true, getInstallationToken: mintToken });
+    GitHubClient.mockImplementation(
+      class {
+        constructor(token) {
+          this.token = token;
+        }
+      },
+    );
   });
 
   it('acks malformed messages without touching storage', async () => {
@@ -125,7 +142,7 @@ describe('heavy worker queue protocol', () => {
     );
     const msg = message();
 
-    await processQueueMessage(msg, { BOT_DB: {}, GITHUB_TOKEN: 'token' }, logger);
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
 
     expect(markJobRetryable).toHaveBeenCalledWith({}, 'job-1', 'run-1', 'github_unavailable', 20);
     expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 20 });
@@ -149,7 +166,7 @@ describe('heavy worker queue protocol', () => {
     );
     const msg = message();
 
-    await processQueueMessage(msg, { BOT_DB: {}, GITHUB_TOKEN: 'token' }, logger);
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
 
     expect(markJobRetryable).toHaveBeenCalledWith({}, 'job-1', 'run-1', 'llm_timeout', 20);
     expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 20 });
@@ -161,7 +178,7 @@ describe('heavy worker queue protocol', () => {
     getHeavyHandler.mockReturnValue(vi.fn().mockRejectedValue(new Error('permanent')));
     const msg = message();
 
-    await processQueueMessage(msg, { BOT_DB: {}, GITHUB_TOKEN: 'token' }, logger);
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
 
     expect(markJobFailed).toHaveBeenCalledWith({}, 'job-1', 'run-1', 'operation_failed');
     expect(msg.ack).toHaveBeenCalledOnce();
@@ -178,9 +195,130 @@ describe('heavy worker queue protocol', () => {
     startAnalysisRun.mockRejectedValue(new Error('D1 unavailable'));
     const msg = message();
 
-    await processQueueMessage(msg, { BOT_DB: {}, GITHUB_TOKEN: 'token' }, logger);
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
 
     expect(markJobRetryable).toHaveBeenCalledWith({}, 'job-1', null, 'job_failed', 20);
     expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 20 });
+  });
+});
+
+describe('heavy worker queue GitHub App authentication', () => {
+  let mintToken;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    startAnalysisRun.mockResolvedValue('run-1');
+    markJobRetryable.mockResolvedValue(undefined);
+    markJobFailed.mockResolvedValue(undefined);
+    markJobSucceeded.mockResolvedValue(undefined);
+    mintToken = vi.fn().mockResolvedValue('ghs_test');
+    createTokenProvider.mockResolvedValue({ available: true, getInstallationToken: mintToken });
+    GitHubClient.mockImplementation(
+      class {
+        constructor(token) {
+          this.token = token;
+        }
+      },
+    );
+  });
+
+  it('authenticates the handler client as the App installation', async () => {
+    getJob.mockResolvedValue(claimed());
+    claimJob.mockResolvedValue(claimed(1));
+    const handler = vi.fn().mockResolvedValue({ status: 'success' });
+    getHeavyHandler.mockReturnValue(handler);
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
+
+    expect(mintToken).toHaveBeenCalledWith(456);
+    expect(GitHubClient).toHaveBeenCalledWith('ghs_test');
+    const handlerArg = handler.mock.calls[0][0];
+    expect(handlerArg.github).toBeInstanceOf(Object);
+    expect(handlerArg.github.token).toBe('ghs_test');
+    expect(markJobSucceeded).toHaveBeenCalledWith({}, 'job-1', 'run-1');
+    expect(msg.ack).toHaveBeenCalledOnce();
+  });
+
+  it('fails a legacy job without installation_id instead of retrying it', async () => {
+    const legacy = { ...claimed(), installation_id: null };
+    getJob.mockResolvedValue(legacy);
+    claimJob.mockResolvedValue(legacy);
+    const handler = vi.fn();
+    getHeavyHandler.mockReturnValue(handler);
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(mintToken).not.toHaveBeenCalled();
+    expect(markJobFailed).toHaveBeenCalledWith({}, 'job-1', 'run-1', 'operation_failed');
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(msg.retry).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      'Queue job operation_failed',
+      expect.objectContaining({ causeCode: 'missing_installation_id' }),
+    );
+  });
+
+  it('fails the job when App credentials are not configured', async () => {
+    createTokenProvider.mockResolvedValue({ available: false, getInstallationToken: vi.fn() });
+    getJob.mockResolvedValue(claimed());
+    claimJob.mockResolvedValue(claimed(1));
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
+
+    expect(markJobFailed).toHaveBeenCalledWith({}, 'job-1', 'run-1', 'operation_failed');
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(logger.error).toHaveBeenCalledWith(
+      'Queue job operation_failed',
+      expect.objectContaining({ causeCode: 'app_auth_unconfigured' }),
+    );
+  });
+
+  it('retries a transient mint failure with backoff', async () => {
+    mintToken.mockRejectedValue(
+      Object.assign(new Error('GitHub token endpoint returned 500'), {
+        code: 'app_token_fetch_failed',
+        retryable: true,
+      }),
+    );
+    getJob.mockResolvedValue(claimed());
+    claimJob.mockResolvedValue(claimed(1));
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
+
+    expect(markJobRetryable).toHaveBeenCalledWith(
+      {},
+      'job-1',
+      'run-1',
+      'app_token_fetch_failed',
+      20,
+    );
+    expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 20 });
+    expect(msg.ack).not.toHaveBeenCalled();
+  });
+
+  it('fails the job when the app JWT is rejected (401)', async () => {
+    mintToken.mockRejectedValue(
+      Object.assign(new Error('GitHub rejected the app JWT'), {
+        code: 'app_jwt_rejected',
+        retryable: false,
+      }),
+    );
+    getJob.mockResolvedValue(claimed());
+    claimJob.mockResolvedValue(claimed(1));
+    const msg = message();
+
+    await processQueueMessage(msg, { BOT_DB: {} }, logger);
+
+    expect(markJobFailed).toHaveBeenCalledWith({}, 'job-1', 'run-1', 'operation_failed');
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(logger.error).toHaveBeenCalledWith(
+      'Queue job operation_failed',
+      expect.objectContaining({ causeCode: 'app_jwt_rejected' }),
+    );
   });
 });
