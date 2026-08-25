@@ -8,12 +8,12 @@ The main interface passed to email handlers.
 
 ```typescript
 interface ForwardableEmailMessage {
-  readonly from: string;        // Envelope MAIL FROM (SMTP sender)
-  readonly to: string;          // Envelope RCPT TO (SMTP recipient)
-  readonly headers: Headers;    // Web-standard Headers object
+  readonly from: string; // Envelope MAIL FROM (SMTP sender)
+  readonly to: string; // Envelope RCPT TO (SMTP recipient)
+  readonly headers: Headers; // Web-standard Headers object
   readonly raw: ReadableStream; // Raw MIME message (single-use stream)
-  readonly rawSize: number;     // Total message size in bytes
-  
+  readonly rawSize: number; // Total message size in bytes
+
   setReject(reason: string): void;
   forward(rcptTo: string, headers?: Headers): Promise<void>;
   reply(message: EmailMessage): Promise<void>;
@@ -22,13 +22,13 @@ interface ForwardableEmailMessage {
 
 ### Properties
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `from` | string | Envelope sender (SMTP MAIL FROM) - use for security |
-| `to` | string | Envelope recipient (SMTP RCPT TO) |
-| `headers` | Headers | Message headers (Subject, Message-ID, etc.) |
-| `raw` | ReadableStream | Raw MIME message (**single-use**, buffer first) |
-| `rawSize` | number | Message size in bytes |
+| Property  | Type           | Description                                         |
+| --------- | -------------- | --------------------------------------------------- |
+| `from`    | string         | Envelope sender (SMTP MAIL FROM) - use for security |
+| `to`      | string         | Envelope recipient (SMTP RCPT TO)                   |
+| `headers` | Headers        | Message headers (Subject, Message-ID, etc.)         |
+| `raw`     | ReadableStream | Raw MIME message (**single-use**, buffer first)     |
+| `rawSize` | number         | Message size in bytes                               |
 
 ### Methods
 
@@ -71,17 +71,14 @@ msg.setHeader('In-Reply-To', message.headers.get('Message-ID'));
 msg.setHeader('References', message.headers.get('References') || '');
 msg.addMessage({
   contentType: 'text/plain',
-  data: 'Thank you for your message.'
+  data: 'Thank you for your message.',
 });
 
-await message.reply(new EmailMessage(
-  'support@example.com',
-  message.from,
-  msg.asRaw()
-));
+await message.reply(new EmailMessage('support@example.com', message.from, msg.asRaw()));
 ```
 
 **Requirements**:
+
 - Incoming email needs valid DMARC
 - Reply once per event, recipient = `message.from`
 - Sender domain = receiving domain, with DMARC/SPF/DKIM
@@ -114,11 +111,11 @@ await env.EMAIL.send(new EmailMessage(from, to, mimeContent));
 ```jsonc
 {
   "send_email": [
-    { "name": "EMAIL" },  // Type 1: Any verified address
-    { "name": "LOGS", "destination_address": "logs@example.com" },  // Type 2: Single dest
-    { "name": "TEAM", "allowed_destination_addresses": ["a@ex.com", "b@ex.com"] },  // Type 3: Dest allowlist
-    { "name": "NOREPLY", "allowed_sender_addresses": ["noreply@ex.com"] }  // Type 4: Sender allowlist
-  ]
+    { "name": "EMAIL" }, // Type 1: Any verified address
+    { "name": "LOGS", "destination_address": "logs@example.com" }, // Type 2: Single dest
+    { "name": "TEAM", "allowed_destination_addresses": ["a@ex.com", "b@ex.com"] }, // Type 3: Dest allowlist
+    { "name": "NOREPLY", "allowed_sender_addresses": ["noreply@ex.com"] }, // Type 4: Sender allowlist
+  ],
 }
 ```
 
@@ -192,19 +189,19 @@ msg.setHeader('Message-ID', `<${crypto.randomUUID()}@example.com>`);
 // Content
 msg.addMessage({
   contentType: 'text/plain',
-  data: 'Plain text content'
+  data: 'Plain text content',
 });
 
 msg.addMessage({
   contentType: 'text/html',
-  data: '<p>HTML content</p>'
+  data: '<p>HTML content</p>',
 });
 
 // Attachments
 msg.addAttachment({
   filename: 'report.pdf',
   contentType: 'application/pdf',
-  data: pdfBuffer // Uint8Array or base64 string
+  data: pdfBuffer, // Uint8Array or base64 string
 });
 
 // Generate raw MIME
@@ -214,10 +211,7 @@ const raw = msg.asRaw(); // Returns string
 ## TypeScript Types
 
 ```typescript
-import { 
-  ForwardableEmailMessage,
-  EmailMessage 
-} from 'cloudflare:email';
+import { ForwardableEmailMessage, EmailMessage } from 'cloudflare:email';
 
 interface Env {
   EMAIL: SendEmail;
@@ -226,12 +220,8 @@ interface Env {
 }
 
 export default {
-  async email(
-    message: ForwardableEmailMessage,
-    env: Env,
-    ctx: ExecutionContext
-  ): Promise<void> {
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
     // Fully typed
-  }
+  },
 };
 ```

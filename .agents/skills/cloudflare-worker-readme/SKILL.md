@@ -75,10 +75,10 @@ The generated README follows this comprehensive structure:
 Document all required and optional environment variables:
 
 ```markdown
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `API_DOMAIN` | `https://dashboard.tokenbel.info` | Backend API base URL |
-| `MISTRAL_API_KEY` | (secret) | Mistral AI API key |
+| Variable          | Default                           | Description          |
+| ----------------- | --------------------------------- | -------------------- |
+| `API_DOMAIN`      | `https://dashboard.tokenbel.info` | Backend API base URL |
+| `MISTRAL_API_KEY` | (secret)                          | Mistral AI API key   |
 ```
 
 ### 2. Service Bindings
@@ -88,17 +88,17 @@ Document Cloudflare bindings and external services:
 ```markdown
 ### Cloudflare Infrastructure
 
-| Binding Type | Name | Purpose |
-|-------------|------|---------|
+| Binding Type   | Name                        | Purpose                               |
+| -------------- | --------------------------- | ------------------------------------- |
 | Queue Consumer | `tb-news-raw-article-saved` | Trigger: receives messages to process |
-| Secret Store | `TB_API_TOKEN` | Backend API authentication |
+| Secret Store   | `TB_API_TOKEN`              | Backend API authentication            |
 
 ### External Service Dependencies
 
-| Service | Endpoint | Purpose |
-|---------|----------|---------|
-| TokenBel Backend | `GET /api/internal/news/raw-articles/{id}` | Fetch raw article content |
-| Mistral AI | `POST https://api.mistral.ai/v1/chat/completions` | AI analysis |
+| Service          | Endpoint                                          | Purpose                   |
+| ---------------- | ------------------------------------------------- | ------------------------- |
+| TokenBel Backend | `GET /api/internal/news/raw-articles/{id}`        | Fetch raw article content |
+| Mistral AI       | `POST https://api.mistral.ai/v1/chat/completions` | AI analysis               |
 ```
 
 ### 3. Mermaid Diagrams
@@ -171,6 +171,7 @@ Create the README with all relevant sections. Use the example from `tb-news-ai-a
 ### Step 4: Add Mermaid Diagrams
 
 Create visual representations of:
+
 - Data flow through the Worker
 - Integration with other services
 - Decision trees and gating logic
@@ -183,6 +184,7 @@ Include complete `wrangler.toml` configuration and all environment variables wit
 ### Step 6: Add Related Information
 
 Link to:
+
 - Related Workers (upstream/downstream)
 - Related backend code
 - API endpoints used
@@ -192,7 +194,7 @@ Link to:
 
 For a simple Worker:
 
-```markdown
+````markdown
 # tb-simple-worker
 
 Cloudflare Worker that performs X functionality.
@@ -214,15 +216,16 @@ Cloudflare Worker that performs X functionality.
 
 ```typescript
 interface InputMessage {
-    id: number;
-    data: string;
+  id: number;
+  data: string;
 }
 ```
+````
 
 ## Service Bindings
 
-| Binding Type | Name | Purpose |
-|-------------|------|---------|
+| Binding Type   | Name          | Purpose                      |
+| -------------- | ------------- | ---------------------------- |
 | Queue Consumer | `input-queue` | Receives messages to process |
 
 ## Configuration
@@ -241,7 +244,8 @@ cf_workers/tb-simple-worker/
 ├── wrangler.toml
 └── package.json
 ```
-```
+
+````
 
 ## Example: Complex Worker README
 
@@ -256,15 +260,17 @@ Cloudflare queue consumer that performs AI-powered analysis using X models.
 
 Implements a multi-layer processing pipeline:
 
-```
+````
+
 Layer 0: Cleaner (Text Normalization)
-    ↓
+↓
 Layer 1: Prefilter (Rule-based)
-    ↓
+↓
 Layer 2: AI Analysis (Model-based)
-    ↓
+↓
 Backend Persistence
-```
+
+````
 
 ## Business Logic
 
@@ -326,7 +332,7 @@ secret_name = "AI_API_KEY"
 [vars]
 MODEL = "mistral-small-latest"
 TIMEOUT_MS = "120000"
-```
+````
 
 ## Data Flow Summary
 
@@ -339,7 +345,8 @@ flowchart TD
     L2 --> MAP[Result Mapping]
     MAP --> SAVE[Backend Save]
 ```
-```
+
+````
 
 ## Best Practices
 
@@ -387,7 +394,7 @@ See the `templates/` directory for reusable README sections:
 1. **Navigate to Worker directory**:
    ```bash
    cd /workspace/Red-Panda-Dev__tbel/cf_workers/{worker-name}
-   ```
+````
 
 2. **Gather information**:
    - Read the main Worker file

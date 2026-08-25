@@ -7,7 +7,7 @@ Fetch https://developers.cloudflare.com/agents/api-reference/callable-methods/ f
 `@callable()` exposes agent methods to clients via WebSocket RPC.
 
 ```typescript
-import { Agent, callable } from "agents";
+import { Agent, callable } from 'agents';
 
 export class MyAgent extends Agent<Env, State> {
   @callable()
@@ -27,18 +27,18 @@ export class MyAgent extends Agent<Env, State> {
 
 ```typescript
 // Basic call
-const greeting = await agent.call("greet", ["World"]);
+const greeting = await agent.call('greet', ['World']);
 
 // With timeout
-const result = await agent.call("processData", [data], {
-  timeout: 5000  // 5 second timeout
+const result = await agent.call('processData', [data], {
+  timeout: 5000, // 5 second timeout
 });
 ```
 
 ## Streaming Responses
 
 ```typescript
-import { Agent, callable, StreamingResponse } from "agents";
+import { Agent, callable, StreamingResponse } from 'agents';
 
 export class MyAgent extends Agent<Env, State> {
   @callable({ streaming: true })
@@ -54,7 +54,7 @@ export class MyAgent extends Agent<Env, State> {
     try {
       // ... work
     } catch (error) {
-      stream.error(error.message);  // Signal error to client
+      stream.error(error.message); // Signal error to client
       return;
     }
     stream.close();
@@ -65,12 +65,12 @@ export class MyAgent extends Agent<Env, State> {
 Client with streaming:
 
 ```typescript
-await agent.call("streamResults", ["search term"], {
+await agent.call('streamResults', ['search term'], {
   stream: {
-    onChunk: (data) => console.log("Chunk:", data),
-    onDone: () => console.log("Complete"),
-    onError: (error) => console.error("Error:", error)
-  }
+    onChunk: (data) => console.log('Chunk:', data),
+    onDone: () => console.log('Complete'),
+    onError: (error) => console.error('Error:', error),
+  },
 });
 ```
 
@@ -78,15 +78,15 @@ await agent.call("streamResults", ["search term"], {
 
 ```typescript
 // Get list of callable methods on an agent
-const methods = await agent.call("getCallableMethods", []);
+const methods = await agent.call('getCallableMethods', []);
 // Returns: ["greet", "processData", "streamResults", ...]
 ```
 
 ## When to Use
 
-| Scenario | Use |
-|----------|-----|
-| Browser/mobile calling agent | `@callable()` |
-| External service calling agent | `@callable()` |
-| Worker calling agent (same codebase) | DO RPC directly |
-| Agent calling another agent | `getAgentByName()` + DO RPC |
+| Scenario                             | Use                         |
+| ------------------------------------ | --------------------------- |
+| Browser/mobile calling agent         | `@callable()`               |
+| External service calling agent       | `@callable()`               |
+| Worker calling agent (same codebase) | DO RPC directly             |
+| Agent calling another agent          | `getAgentByName()` + DO RPC |

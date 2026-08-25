@@ -12,6 +12,7 @@ https://dash.cloudflare.com/caching/cache-reserve
 ```
 
 **Prerequisites:**
+
 - Paid Cache Reserve plan or Smart Shield Advanced required
 - Tiered Cache **required** for Cache Reserve to function optimally
 
@@ -109,18 +110,18 @@ resource "cloudflare_tiered_cache" "example" {
 ### Pulumi
 
 ```typescript
-import * as cloudflare from "@pulumi/cloudflare";
+import * as cloudflare from '@pulumi/cloudflare';
 
 // Enable Cache Reserve
-const cacheReserve = new cloudflare.ZoneCacheReserve("example", {
+const cacheReserve = new cloudflare.ZoneCacheReserve('example', {
   zoneId: zoneId,
   enabled: true,
 });
 
 // Enable Tiered Cache (required)
-const tieredCache = new cloudflare.TieredCache("example", {
+const tieredCache = new cloudflare.TieredCache('example', {
   zoneId: zoneId,
-  cacheType: "smart",
+  cacheType: 'smart',
 });
 ```
 

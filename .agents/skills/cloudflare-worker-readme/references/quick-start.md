@@ -13,12 +13,14 @@ cd /workspace/Red-Panda-Dev__tbel/cf_workers/{worker-name}
 Collect the following information about your Worker:
 
 ### Required Information
+
 1. **Worker Name** - from directory name
 2. **Purpose** - what the Worker does
 3. **Worker Type** - queue consumer, scheduled, HTTP, etc.
 4. **Main Functionality** - brief description
 
 ### Configuration Information
+
 5. **Queue Bindings** - from `wrangler.toml`
    - Consumer queues
    - Producer queues
@@ -37,6 +39,7 @@ Collect the following information about your Worker:
    - Required/optional
 
 ### Code Information
+
 8. **Message Contracts** - from main worker file
    - Input message interface
    - Output message interface (if applicable)
@@ -127,7 +130,7 @@ Use the [business-logic-template](../templates/business-logic-template.md):
 
 ### 3. Queue Message Contracts
 
-```markdown
+````markdown
 ## Queue Message Contracts
 
 ### Input Message
@@ -138,12 +141,14 @@ interface {MessageName} {
     {field}: {type};
 }
 ```
+````
 
 ### Output Actions
 
 - **ack**: Message processed successfully
 - **retry**: Transient failure, will be retried
-```
+
+````
 
 ### 4. Service Bindings
 
@@ -163,11 +168,11 @@ Use the [service-bindings template](../templates/service-bindings.md):
 | Service | Endpoint | Purpose |
 |---------|----------|---------|
 | {Service} | `{HTTP_METHOD} {endpoint}` | {purpose} |
-```
+````
 
 ### 5. Configuration
 
-```markdown
+````markdown
 ## Configuration
 
 ### wrangler.toml
@@ -175,13 +180,15 @@ Use the [service-bindings template](../templates/service-bindings.md):
 ```toml
 {wrangler configuration}
 ```
+````
 
 ### Environment Variables
 
-| Variable | Default | Description | Required |
-|----------|---------|-------------|----------|
-| `{VAR}` | `{default}` | {description} | {required} |
-```
+| Variable | Default     | Description   | Required   |
+| -------- | ----------- | ------------- | ---------- |
+| `{VAR}`  | `{default}` | {description} | {required} |
+
+````
 
 ### 6. Mermaid Diagram
 
@@ -195,8 +202,9 @@ flowchart TD
     START[Start] --> STEP1[Step 1]
     STEP1 --> STEP2[Step 2]
     STEP2 --> END[End]
-```
-```
+````
+
+````
 
 ### 7. Additional Sections
 
@@ -235,7 +243,7 @@ flowchart TD
     PROCESS --> SAVE
     SAVE -->|Success| ACK
     SAVE -->|Failure| RETRY
-```
+````
 
 ## Step 6: Validate README
 
@@ -258,6 +266,7 @@ Check your README against this checklist:
 ## Step 7: Test README Rendering
 
 View your README in a Markdown viewer to ensure:
+
 - All tables render correctly
 - Mermaid diagrams display properly
 - Code blocks are syntax-highlighted
@@ -292,17 +301,18 @@ View your README in a Markdown viewer to ensure:
 ## Business Logic
 
 Implements a multi-layer processing pipeline:
-
 ```
+
 Layer 0: Cleaner (Text Normalization)
-    ↓
+↓
 Layer 0.5: Prefilter (Rule-based)
-    ↓
+↓
 Layer 1: Screening (AI, Relevance Assessment)
-    ↓
+↓
 Layer 2: Deep Analysis (AI, Final Extraction)
-    ↓
+↓
 Backend Persistence
+
 ```
 
 ### Layer 0: Cleaner
@@ -334,25 +344,30 @@ Runs every {interval} via Cloudflare Cron Trigger (`{cron-expression}`)
 ## Tips for Good README Files
 
 ### 1. Be Specific
+
 - Use actual variable names, queue names, endpoint URLs
 - Include real examples when helpful
 
 ### 2. Be Complete
+
 - Document all environment variables
 - List all service bindings
 - Describe all processing steps
 
 ### 3. Be Consistent
+
 - Follow the same structure as other TokenBel Workers
 - Use the same formatting and style
 - Use consistent terminology
 
 ### 4. Be Visual
+
 - Use Mermaid diagrams for complex workflows
 - Use tables for structured data
 - Use code blocks for interfaces and configuration
 
 ### 5. Be Maintainable
+
 - Update README when code changes
 - Keep diagrams in sync with code
 - Review README during code reviews
@@ -387,6 +402,7 @@ vim README.md
 ## Need Help?
 
 If you're unsure about any section, refer to:
+
 1. The [SKILL.md](../SKILL.md) for detailed guidance
 2. Existing Worker README files for examples
 3. The TokenBel patterns document for conventions

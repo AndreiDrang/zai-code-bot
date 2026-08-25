@@ -16,16 +16,16 @@ flowchart TD
 ```mermaid
 flowchart TD
     QI[Queue Message In\nfield1, field2, field3] --> VALIDATE
-    
+
     VALIDATE[Validate Message] -->|Valid| FETCH
     VALIDATE -->|Invalid| REJECT1[Record Error\nstage: validation]
-    
+
     FETCH[Fetch Data from Backend] --> PROCESS
     FETCH -->|Not Found| REJECT2[Record Error\nstage: fetch]
-    
+
     PROCESS[Process Data] --> TRANSFORM
     TRANSFORM[Transform Data] --> SAVE
-    
+
     SAVE[Save to Backend] -->|Success| ACK[Message Acked]
     SAVE -->|Failure| RETRY[Retry Message]
 ```
@@ -72,20 +72,20 @@ flowchart TD
 ```mermaid
 flowchart TD
     START[Start Processing] --> CHECK1{Condition 1?}
-    
+
     CHECK1 -->|Yes| ACTION1[Action 1]
     CHECK1 -->|No| CHECK2{Condition 2?}
-    
+
     ACTION1 --> CHECK3{Condition 3?}
     CHECK2 -->|Yes| ACTION2[Action 2]
     CHECK2 -->|No| REJECT[Reject]
-    
+
     CHECK3 -->|Yes| SUCCESS[Success Path]
     CHECK3 -->|No| ACTION3[Action 3]
-    
+
     ACTION2 --> SUCCESS
     ACTION3 --> CHECK4{Final Check?}
-    
+
     CHECK4 -->|Yes| SUCCESS
     CHECK4 -->|No| FAIL[Failure]
 ```
@@ -95,19 +95,19 @@ flowchart TD
 ```mermaid
 flowchart TD
     START[Start] --> PROCESS[Process Message]
-    
+
     PROCESS --> ERROR1{Transient Error?}
     ERROR1 -->|Yes| RETRY[Retry up to 3 times]
     ERROR1 -->|No| ERROR2{Retryable Error?}
-    
+
     RETRY --> PROCESS
     RETRY --> MAXRETRY{Max retries exceeded?}
     MAXRETRY -->|Yes| RECORD[Record Failure]
     MAXRETRY -->|No| PROCESS
-    
+
     ERROR2 -->|Yes| RETRY
     ERROR2 -->|No| RECORD
-    
+
     RECORD --> ACK[Message Acked]
 ```
 
@@ -120,15 +120,15 @@ flowchart TD
         QUEUE[Queue: tb-news-raw-article-saved]
         SECRETS[Secrets Store]
     end
-    
+
     subgraph External Services
         BACKEND[TokenBel Backend\nhttps://dashboard.tokenbel.info]
         MISTRAL[Mistral AI\nhttps://api.mistral.ai]
     end
-    
+
     QUEUE -->|Trigger| WORKER
     SECRETS -->|API_TOKEN\nMISTRAL_API_KEY| WORKER
-    
+
     WORKER -->|GET /api/internal/news/raw-articles/{id}| BACKEND
     WORKER -->|POST https://api.mistral.ai/v1/chat/completions| MISTRAL
     WORKER -->|POST /api/internal/news/raw-articles/{id}/analysis| BACKEND
@@ -142,27 +142,27 @@ flowchart TD
     subgraph Upstream
         EXTRACTOR[tb-news-article-extractor]
     end
-    
+
     subgraph Current Worker
         ANALYZER[tb-news-ai-analyzer]
     end
-    
+
     subgraph Downstream
         BACKEND[TokenBel Backend]
         DATABASE[(Database)]
     end
-    
+
     EXTRACTOR -->|Consumes: tb-news-articles-discovered| EXTRACTOR
     EXTRACTOR -->|Fetches article HTML| EXTRACTOR
     EXTRACTOR -->|Extracts normalized Markdown| EXTRACTOR
     EXTRACTOR -->|Saves to backend| BACKEND
     EXTRACTOR -->|Produces: tb-news-raw-article-saved\n(if should_analyze=true)| ANALYZER
-    
+
     ANALYZER -->|Consumes: tb-news-raw-article-saved| ANALYZER
     ANALYZER -->|GET /api/internal/news/raw-articles/{id}| BACKEND
     ANALYZER -->|POST analysis results| BACKEND
     ANALYZER -->|POST processing failures| BACKEND
-    
+
     BACKEND -->|Saves to| DATABASE
 ```
 
@@ -171,18 +171,18 @@ flowchart TD
 ```mermaid
 flowchart TD
     CRON[Cron Trigger\n0 * * * *] --> WORKER
-    
+
     WORKER --> CHECK_TIME{Within processing window?}
     CHECK_TIME -->|No| EXIT[Exit]
     CHECK_TIME -->|Yes| FETCH_STATS
-    
+
     FETCH_STATS[GET /api/internal/statistics\n?period=last_hour] --> AGGREGATE
     AGGREGATE[Aggregate by category\nand time period] --> ANALYZE
     ANALYZE[Calculate trends\nand anomalies] --> CHECK_ALERTS
-    
+
     CHECK_ALERTS{Alerts needed?} -->|Yes| SEND_ALERT
     CHECK_ALERTS -->|No| SAVE
-    
+
     SEND_ALERT[POST to webhook\nfor critical conditions] --> SAVE
     SAVE[POST /api/internal/statistics/hourly] --> EXIT
 ```
@@ -192,20 +192,20 @@ flowchart TD
 ```mermaid
 flowchart TD
     QUEUE[Queue: max_batch_size=10] --> BATCH[Receive Batch]
-    
+
     BATCH --> ITEM1[Item 1]
     BATCH --> ITEM2[Item 2]
     BATCH --> ITEM3[Item ...]
     BATCH --> ITEM10[Item 10]
-    
+
     ITEM1 --> PROCESS1[Process Item 1]
     ITEM2 --> PROCESS2[Process Item 2]
     ITEM10 --> PROCESS10[Process Item 10]
-    
+
     PROCESS1 --> COLLECT[Collect Results]
     PROCESS2 --> COLLECT
     PROCESS10 --> COLLECT
-    
+
     COLLECT --> AGGREGATE[Aggregate Results]
     AGGREGATE --> SAVE[Batch Save]
     SAVE --> ACK[Batch Acked]
@@ -216,15 +216,15 @@ flowchart TD
 ```mermaid
 flowchart TD
     START[Start] --> IDLE[Idle]
-    
+
     IDLE -->|Message Received| PROCESSING[Processing]
     PROCESSING -->|Success| COMPLETED[Completed]
     PROCESSING -->|Error| ERROR[Error]
-    
+
     COMPLETED -->|Ack| IDLE
     ERROR -->|Retryable| PROCESSING
     ERROR -->|Non-Retryable| FAILED[Failed]
-    
+
     FAILED -->|Record Failure| IDLE
 ```
 
@@ -233,19 +233,19 @@ flowchart TD
 ```mermaid
 flowchart TD
     START[Start] --> SPLIT[Split into parallel tasks]
-    
+
     SPLIT --> TASK1[Task 1]
     SPLIT --> TASK2[Task 2]
     SPLIT --> TASK3[Task 3]
-    
+
     TASK1 --> WAIT1[Wait for Task 1]
     TASK2 --> WAIT2[Wait for Task 2]
     TASK3 --> WAIT3[Wait for Task 3]
-    
+
     WAIT1 --> JOIN[Join Results]
     WAIT2 --> JOIN
     WAIT3 --> JOIN
-    
+
     JOIN --> COMBINE[Combine Results]
     COMBINE --> END[End]
 ```
@@ -258,7 +258,7 @@ flowchart TD
 flowchart TD
     A[Start] --> B[Process]
     B --> C{Decision}
-    
+
     style A fill:#f9f,stroke:#333
     style C fill:#bbf,stroke:#333,stroke-width:2px
 ```
@@ -270,7 +270,7 @@ flowchart TD
     classDef success fill:#9f9,stroke:#333
     classDef error fill:#f99,stroke:#333
     classDef process fill:#f9f,stroke:#333
-    
+
     START[Start] --> PROCESS[Process]:::process
     PROCESS --> SUCCESS[Success]:::success
     PROCESS --> ERROR[Error]:::error
@@ -282,7 +282,7 @@ flowchart TD
 flowchart TD
     A[Step 1] --> B[Step 2]
     B --> C[Step 3]
-    
+
     note right of A
         This is a note about Step 1
         It can span multiple lines
@@ -297,17 +297,17 @@ flowchart TD
         A[Queue]
         B[Secrets]
     end
-    
+
     subgraph Processing
         C[Worker]
         D[Backend API]
     end
-    
+
     subgraph Output
         E[Database]
         F[Cache]
     end
-    
+
     A --> C
     B --> C
     C --> D

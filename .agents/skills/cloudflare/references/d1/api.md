@@ -10,14 +10,18 @@ const result = await env.DB.prepare(`SELECT * FROM users WHERE id = ${userId}`).
 const result = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).all();
 
 // Multiple parameters
-const result = await env.DB.prepare('SELECT * FROM users WHERE email = ? AND active = ?').bind(email, true).all();
+const result = await env.DB.prepare('SELECT * FROM users WHERE email = ? AND active = ?')
+  .bind(email, true)
+  .all();
 ```
 
 ## Query Execution Methods
 
 ```typescript
 // .all() - Returns all rows
-const { results, success, meta } = await env.DB.prepare('SELECT * FROM users WHERE active = ?').bind(true).all();
+const { results, success, meta } = await env.DB.prepare('SELECT * FROM users WHERE active = ?')
+  .bind(true)
+  .all();
 // results: Array of row objects; success: boolean
 // meta: { duration: number, rows_read: number, rows_written: number }
 
@@ -25,11 +29,15 @@ const { results, success, meta } = await env.DB.prepare('SELECT * FROM users WHE
 const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
 
 // .first(columnName) - Returns single column value
-const email = await env.DB.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first('email');
+const email = await env.DB.prepare('SELECT email FROM users WHERE id = ?')
+  .bind(userId)
+  .first('email');
 // Returns string | number | null
 
 // .run() - For INSERT/UPDATE/DELETE (no row data returned)
-const result = await env.DB.prepare('UPDATE users SET last_login = ? WHERE id = ?').bind(Date.now(), userId).run();
+const result = await env.DB.prepare('UPDATE users SET last_login = ? WHERE id = ?')
+  .bind(Date.now(), userId)
+  .run();
 // result.meta: { duration, rows_read, rows_written, last_row_id, changes }
 
 // .raw() - Returns array of arrays (efficient for large datasets)
@@ -44,14 +52,14 @@ const rawResults = await env.DB.prepare('SELECT id, name FROM users').raw();
 const results = await env.DB.batch([
   env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(1),
   env.DB.prepare('SELECT * FROM posts WHERE author_id = ?').bind(1),
-  env.DB.prepare('UPDATE users SET last_access = ? WHERE id = ?').bind(Date.now(), 1)
+  env.DB.prepare('UPDATE users SET last_access = ? WHERE id = ?').bind(Date.now(), 1),
 ]);
 // results is array: [result1, result2, result3]
 
 // Batch with same prepared statement, different params
 const userIds = [1, 2, 3];
 const stmt = env.DB.prepare('SELECT * FROM users WHERE id = ?');
-const results = await env.DB.batch(userIds.map(id => stmt.bind(id)));
+const results = await env.DB.batch(userIds.map((id) => stmt.bind(id)));
 ```
 
 ## Transactions (via batch)
@@ -62,7 +70,7 @@ const results = await env.DB.batch([
   env.DB.prepare('INSERT INTO accounts (id, balance) VALUES (?, ?)').bind(1, 100),
   env.DB.prepare('INSERT INTO accounts (id, balance) VALUES (?, ?)').bind(2, 200),
   env.DB.prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?').bind(50, 1),
-  env.DB.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').bind(50, 2)
+  env.DB.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').bind(50, 2),
 ]);
 ```
 
@@ -88,8 +96,8 @@ Routes queries to nearest replica for lower latency. Writes always go to primary
 
 ```typescript
 interface Env {
-  DB: D1Database;          // Primary (writes)
-  DB_REPLICA: D1Database;  // Replica (reads)
+  DB: D1Database; // Primary (writes)
+  DB_REPLICA: D1Database; // Replica (reads)
 }
 
 // Reads: use replica
@@ -121,7 +129,8 @@ async function getUser(userId: number, env: Env): Promise<Response> {
 try {
   await env.DB.prepare('INSERT INTO users (email, name) VALUES (?, ?)').bind(email, name).run();
 } catch (error) {
-  if (error.message?.includes('UNIQUE constraint failed')) return new Response('Email exists', { status: 409 });
+  if (error.message?.includes('UNIQUE constraint failed'))
+    return new Response('Email exists', { status: 409 });
   throw error;
 }
 ```
@@ -137,14 +146,14 @@ const response = await fetch(
   {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${CLOUDFLARE_API_TOKEN}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`,
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       sql: 'SELECT * FROM users WHERE id = ?',
-      params: [userId]
-    })
-  }
+      params: [userId],
+    }),
+  },
 );
 
 const { result, success, errors } = await response.json();
@@ -156,14 +165,14 @@ const response = await fetch(
   {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${CLOUDFLARE_API_TOKEN}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`,
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify([
       { sql: 'SELECT * FROM users WHERE id = ?', params: [1] },
-      { sql: 'SELECT * FROM posts WHERE author_id = ?', params: [1] }
-    ])
-  }
+      { sql: 'SELECT * FROM posts WHERE author_id = ?', params: [1] },
+    ]),
+  },
 );
 ```
 
@@ -176,9 +185,15 @@ const response = await fetch(
 import { unstable_dev } from 'wrangler';
 describe('D1', () => {
   let worker: Awaited<ReturnType<typeof unstable_dev>>;
-  beforeAll(async () => { worker = await unstable_dev('src/index.ts'); });
-  afterAll(async () => { await worker.stop(); });
-  it('queries users', async () => { expect((await worker.fetch('/users')).status).toBe(200); });
+  beforeAll(async () => {
+    worker = await unstable_dev('src/index.ts');
+  });
+  afterAll(async () => {
+    await worker.stop();
+  });
+  it('queries users', async () => {
+    expect((await worker.fetch('/users')).status).toBe(200);
+  });
 });
 
 // Debug query performance
@@ -186,7 +201,9 @@ const result = await env.DB.prepare('SELECT * FROM users').all();
 console.log('Duration:', result.meta.duration, 'ms');
 
 // Query plan analysis
-const plan = await env.DB.prepare('EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = ?').bind(email).all();
+const plan = await env.DB.prepare('EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = ?')
+  .bind(email)
+  .all();
 ```
 
 ```bash

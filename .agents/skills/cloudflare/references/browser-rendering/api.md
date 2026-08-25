@@ -7,16 +7,16 @@
 
 ### Endpoints
 
-| Endpoint | Description | Key Options |
-|----------|-------------|-------------|
-| `/content` | Get rendered HTML | `url`, `waitUntil` |
-| `/screenshot` | Capture image | `screenshotOptions: {type, fullPage, clip}` |
-| `/pdf` | Generate PDF | `pdfOptions: {format, landscape, margin}` |
-| `/snapshot` | HTML + inlined resources | `url` |
-| `/scrape` | Extract by selectors | `selectors: ["h1", ".price"]` |
-| `/json` | AI-structured extraction | `schema: {name: "string", price: "number"}` |
-| `/links` | Get all links | `url` |
-| `/markdown` | Convert to markdown | `url` |
+| Endpoint      | Description              | Key Options                                 |
+| ------------- | ------------------------ | ------------------------------------------- |
+| `/content`    | Get rendered HTML        | `url`, `waitUntil`                          |
+| `/screenshot` | Capture image            | `screenshotOptions: {type, fullPage, clip}` |
+| `/pdf`        | Generate PDF             | `pdfOptions: {format, landscape, margin}`   |
+| `/snapshot`   | HTML + inlined resources | `url`                                       |
+| `/scrape`     | Extract by selectors     | `selectors: ["h1", ".price"]`               |
+| `/json`       | AI-structured extraction | `schema: {name: "string", price: "number"}` |
+| `/links`      | Get all links            | `url`                                       |
+| `/markdown`   | Convert to markdown      | `url`                                       |
 
 ```bash
 curl -X POST '.../browser-rendering/screenshot' \
@@ -34,7 +34,7 @@ curl -X POST '.../browser-rendering/screenshot' \
 ## Puppeteer
 
 ```typescript
-import puppeteer from "@cloudflare/puppeteer";
+import puppeteer from '@cloudflare/puppeteer';
 
 const browser = await puppeteer.launch(env.MYBROWSER, { keep_alive: 600000 });
 const page = await browser.newPage();
@@ -63,7 +63,7 @@ await browser.close();
 ## Playwright
 
 ```typescript
-import { launch, connect } from "@cloudflare/playwright";
+import { launch, connect } from '@cloudflare/playwright';
 
 const browser = await launch(env.MYBROWSER, { keep_alive: 600000 });
 const page = await browser.newPage();
@@ -78,7 +78,7 @@ await page.getByTestId('search').fill('query');
 // Context for isolation
 const context = await browser.newContext({
   viewport: { width: 1920, height: 1080 },
-  userAgent: 'custom'
+  userAgent: 'custom',
 });
 
 await browser.close();
@@ -100,9 +100,9 @@ await puppeteer.limits(env.MYBROWSER);
 
 ## Key Options
 
-| Option | Values |
-|--------|--------|
-| `waitUntil` | `load`, `domcontentloaded`, `networkidle0`, `networkidle2` |
-| `keep_alive` | Max 600000ms (10 min) |
-| `screenshot.type` | `png`, `jpeg` |
-| `pdf.format` | `A4`, `Letter`, `Legal` |
+| Option            | Values                                                     |
+| ----------------- | ---------------------------------------------------------- |
+| `waitUntil`       | `load`, `domcontentloaded`, `networkidle0`, `networkidle2` |
+| `keep_alive`      | Max 600000ms (10 min)                                      |
+| `screenshot.type` | `png`, `jpeg`                                              |
+| `pdf.format`      | `A4`, `Letter`, `Legal`                                    |

@@ -9,6 +9,7 @@
 {Overview details - explain what the worker does in more detail}
 
 {Optional: Pipeline diagram}
+
 ```
 {pipeline-diagram}
 ```
@@ -45,8 +46,8 @@
 
 {Optional: Field descriptions}
 
-| Field | Type | Description |
-|-------|------|-------------|
+| Field   | Type   | Description   |
+| ------- | ------ | ------------- |
 | {field} | {type} | {description} |
 
 ### Output Actions
@@ -60,14 +61,14 @@
 
 ### Cloudflare Infrastructure
 
-| Binding Type | Name | Purpose |
-|-------------|------|---------|
+| Binding Type   | Name           | Purpose   |
+| -------------- | -------------- | --------- |
 | {binding-type} | {binding-name} | {purpose} |
 
 ### External Service Dependencies
 
-| Service | Endpoint | Purpose |
-|---------|----------|---------|
+| Service        | Endpoint                   | Purpose   |
+| -------------- | -------------------------- | --------- |
 | {service-name} | `{HTTP_METHOD} {endpoint}` | {purpose} |
 
 ## Configuration
@@ -80,8 +81,8 @@
 
 ### Environment Variables
 
-| Variable | Default | Description | Required |
-|----------|---------|-------------|----------|
+| Variable     | Default     | Description   | Required   |
+| ------------ | ----------- | ------------- | ---------- |
 | `{VAR_NAME}` | `{default}` | {description} | {required} |
 
 ## {Optional Sections}
@@ -92,8 +93,8 @@
 
 {If the worker classifies data into types/categories}
 
-| Type | Description |
-|------|-------------|
+| Type     | Description   |
+| -------- | ------------- |
 | `{type}` | {description} |
 
 ### AI Model & Prompts

@@ -18,16 +18,18 @@ export class MyDurableObject extends DurableObject {
     `);
 
     const ver = this.sql
-      .exec<{ version: number }>("SELECT COALESCE(MAX(id), 0) as version FROM _sql_schema_migrations")
+      .exec<{ version: number }>(
+        'SELECT COALESCE(MAX(id), 0) as version FROM _sql_schema_migrations',
+      )
       .one().version;
 
     if (ver < 1) {
       this.sql.exec(`CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)`);
-      this.sql.exec("INSERT INTO _sql_schema_migrations (id) VALUES (1)");
+      this.sql.exec('INSERT INTO _sql_schema_migrations (id) VALUES (1)');
     }
     if (ver < 2) {
       this.sql.exec(`ALTER TABLE users ADD COLUMN email TEXT`);
-      this.sql.exec("INSERT INTO _sql_schema_migrations (id) VALUES (2)");
+      this.sql.exec('INSERT INTO _sql_schema_migrations (id) VALUES (2)');
     }
   }
 }
@@ -50,7 +52,7 @@ export class UserCache extends DurableObject {
     return user;
   }
   async updateUser(id: string, data: Partial<User>) {
-    const updated = { ...await this.getUser(id), ...data };
+    const updated = { ...(await this.getUser(id)), ...data };
     this.cache.set(id, updated);
     await this.ctx.storage.put(`user:${id}`, updated);
     return updated;
@@ -65,7 +67,9 @@ export class RateLimiter extends DurableObject {
   async checkLimit(key: string, limit: number, window: number): Promise<boolean> {
     const now = Date.now();
     this.sql.exec('DELETE FROM requests WHERE key = ? AND timestamp < ?', key, now - window);
-    const count = this.sql.exec('SELECT COUNT(*) as count FROM requests WHERE key = ?', key).one().count;
+    const count = this.sql
+      .exec('SELECT COUNT(*) as count FROM requests WHERE key = ?', key)
+      .one().count;
     if (count >= limit) return false;
     this.sql.exec('INSERT INTO requests (key, timestamp) VALUES (?, ?)', key, now);
     return true;
@@ -80,12 +84,15 @@ export class BatchProcessor extends DurableObject {
   pending: string[] = [];
   async addItem(item: string) {
     this.pending.push(item);
-    if (!await this.ctx.storage.getAlarm()) await this.ctx.storage.setAlarm(Date.now() + 5000);
+    if (!(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(Date.now() + 5000);
   }
   async alarm() {
     const items = [...this.pending];
     this.pending = [];
-    this.sql.exec(`INSERT INTO processed_items (item, timestamp) VALUES ${items.map(() => "(?, ?)").join(", ")}`, ...items.flatMap(item => [item, Date.now()]));
+    this.sql.exec(
+      `INSERT INTO processed_items (item, timestamp) VALUES ${items.map(() => '(?, ?)').join(', ')}`,
+      ...items.flatMap((item) => [item, Date.now()]),
+    );
   }
 }
 ```
@@ -97,11 +104,13 @@ export class Counter extends DurableObject {
   value: number;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    ctx.blockConcurrencyWhile(async () => { this.value = (await ctx.storage.get("value")) || 0; });
+    ctx.blockConcurrencyWhile(async () => {
+      this.value = (await ctx.storage.get('value')) || 0;
+    });
   }
   async increment() {
     this.value++;
-    this.ctx.storage.put("value", this.value); // Don't await (output gate protects)
+    this.ctx.storage.put('value', this.value); // Don't await (output gate protects)
     return this.value;
   }
 }
@@ -137,15 +146,22 @@ export class Workspace extends DurableObject {
     const childId = this.env.DOCUMENT.idFromName(`${this.ctx.id.toString()}:${docId}`);
     const childStub = this.env.DOCUMENT.get(childId);
     await childStub.initialize(name);
-    
+
     // Track child in parent storage
-    this.sql.exec('INSERT INTO documents (id, name, created) VALUES (?, ?, ?)', 
-      docId, name, Date.now());
+    this.sql.exec(
+      'INSERT INTO documents (id, name, created) VALUES (?, ?, ?)',
+      docId,
+      name,
+      Date.now(),
+    );
     return docId;
   }
-  
+
   async listDocuments(): Promise<string[]> {
-    return this.sql.exec('SELECT id FROM documents').toArray().map(r => r.id);
+    return this.sql
+      .exec('SELECT id FROM documents')
+      .toArray()
+      .map((r) => r.id);
   }
 }
 
@@ -167,7 +183,7 @@ async updateMetrics(userId: string, actions: Action[]) {
   // All writes coalesce - no await needed
   for (const action of actions) {
     this.ctx.storage.put(`user:${userId}:lastAction`, action.type);
-    this.ctx.storage.put(`user:${userId}:count`, 
+    this.ctx.storage.put(`user:${userId}:count`,
       await this.ctx.storage.get(`user:${userId}:count`) + 1);
   }
   // Output gate ensures all writes confirm before response

@@ -5,16 +5,16 @@
 ```typescript
 export class SessionBackend extends Container {
   defaultPort = 3000;
-  sleepAfter = "30m";
+  sleepAfter = '30m';
 }
 
 export default {
   async fetch(request: Request, env: Env) {
-    const sessionId = request.headers.get("X-Session-ID") || crypto.randomUUID();
+    const sessionId = request.headers.get('X-Session-ID') || crypto.randomUUID();
     const container = env.SESSION_BACKEND.getByName(sessionId);
     await container.startAndWaitForPorts();
     return container.fetch(request);
-  }
+  },
 };
 ```
 
@@ -28,7 +28,7 @@ export default {
     const container = env.STATELESS_API.getRandom();
     await container.startAndWaitForPorts();
     return container.fetch(request);
-  }
+  },
 };
 ```
 
@@ -39,10 +39,10 @@ export default {
 ```typescript
 export default {
   async fetch(request: Request, env: Env) {
-    const container = env.GLOBAL_SERVICE.getByName("singleton");
+    const container = env.GLOBAL_SERVICE.getByName('singleton');
     await container.startAndWaitForPorts();
     return container.fetch(request);
-  }
+  },
 };
 ```
 
@@ -53,16 +53,16 @@ export default {
 ```typescript
 export default {
   async fetch(request: Request, env: Env) {
-    if (request.headers.get("Upgrade") === "websocket") {
-      const sessionId = request.headers.get("X-Session-ID") || crypto.randomUUID();
+    if (request.headers.get('Upgrade') === 'websocket') {
+      const sessionId = request.headers.get('X-Session-ID') || crypto.randomUUID();
       const container = env.WS_BACKEND.getByName(sessionId);
       await container.startAndWaitForPorts();
-      
+
       // ⚠️ MUST use fetch(), not containerFetch()
       return container.fetch(request);
     }
-    return new Response("Not a WebSocket request", { status: 400 });
-  }
+    return new Response('Not a WebSocket request', { status: 400 });
+  },
 };
 ```
 
@@ -77,13 +77,13 @@ export class GracefulContainer extends Container {
   onStop() {
     // SIGTERM received, 15 minutes until SIGKILL
     for (const ws of this.connections) {
-      ws.close(1001, "Server shutting down");
+      ws.close(1001, 'Server shutting down');
     }
-    this.ctx.storage.put("shutdown-time", Date.now());
+    this.ctx.storage.put('shutdown-time', Date.now());
   }
 
   onActivityExpired(): boolean {
-    return this.connections.size > 0;  // Keep alive if connections
+    return this.connections.size > 0; // Keep alive if connections
   }
 }
 ```
@@ -112,11 +112,11 @@ export class SafeContainer extends Container {
 
 ```typescript
 export class LongRunningContainer extends Container {
-  sleepAfter = "5m";
+  sleepAfter = '5m';
 
   async processLongJob(data: unknown) {
     const interval = setInterval(() => {
-      this.ctx.storage.put("keepalive", Date.now());
+      this.ctx.storage.put('keepalive', Date.now());
     }, 60000);
 
     try {
@@ -138,8 +138,8 @@ export class MultiPortContainer extends Container {
 
   async fetch(request: Request) {
     const path = new URL(request.url).pathname;
-    if (path.startsWith("/grpc")) this.switchPort(8081);
-    else if (path.startsWith("/metrics")) this.switchPort(9090);
+    if (path.startsWith('/grpc')) this.switchPort(8081);
+    else if (path.startsWith('/metrics')) this.switchPort(9090);
     return super.fetch(request);
   }
 }
@@ -150,23 +150,25 @@ export class MultiPortContainer extends Container {
 ## Workflow Integration
 
 ```typescript
-import { WorkflowEntrypoint } from "cloudflare:workers";
+import { WorkflowEntrypoint } from 'cloudflare:workers';
 
 export class ProcessingWorkflow extends WorkflowEntrypoint {
   async run(event, step) {
     const container = this.env.PROCESSOR.getByName(event.payload.jobId);
-    
-    await step.do("start", async () => {
+
+    await step.do('start', async () => {
       await container.startAndWaitForPorts();
     });
-    
-    const result = await step.do("process", async () => {
-      return container.fetch("/process", {
-        method: "POST",
-        body: JSON.stringify(event.payload.data)
-      }).then(r => r.json());
+
+    const result = await step.do('process', async () => {
+      return container
+        .fetch('/process', {
+          method: 'POST',
+          body: JSON.stringify(event.payload.data),
+        })
+        .then((r) => r.json());
     });
-    
+
     return result;
   }
 }
@@ -183,19 +185,19 @@ export default {
       try {
         const container = env.PROCESSOR.getByName(msg.body.jobId);
         await container.startAndWaitForPorts();
-        
-        const response = await container.fetch("/process", {
-          method: "POST",
-          body: JSON.stringify(msg.body)
+
+        const response = await container.fetch('/process', {
+          method: 'POST',
+          body: JSON.stringify(msg.body),
         });
-        
+
         response.ok ? msg.ack() : msg.retry();
       } catch (err) {
-        console.error("Queue processing error:", err);
+        console.error('Queue processing error:', err);
         msg.retry();
       }
     }
-  }
+  },
 };
 ```
 

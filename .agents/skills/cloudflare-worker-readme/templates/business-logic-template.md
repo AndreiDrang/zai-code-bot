@@ -92,6 +92,7 @@ Uses Mistral chat completion to determine:
 - `entity_type_hints`: Array of entity type hints
 
 **Proceed to Layer 2 only if:**
+
 - `is_relevant === true`
 - `decision === "deep_analyze"`
 - `relevance_score >= 0.65`
@@ -169,15 +170,16 @@ Runs every hour via Cloudflare Cron Trigger (`0 * * * *`)
 ### Gating Logic
 
 The worker implements a multi-stage gating system to optimize processing:
-
 ```
+
 Stage 1: Quick Validation (Synchronous)
-    ↓ PASS
+↓ PASS
 Stage 2: Rule-Based Filtering (Synchronous)
-    ↓ PASS
+↓ PASS
 Stage 3: AI/External Service Call (Async, Costly)
-    ↓ PASS
+↓ PASS
 Stage 4: Final Validation (Synchronous)
+
 ```
 
 **Stage 1 - Quick Validation**

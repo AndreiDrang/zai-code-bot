@@ -9,7 +9,7 @@ State persists to SQLite and broadcasts to connected clients automatically.
 ### Define Typed State
 
 ```typescript
-type State = { 
+type State = {
   count: number;
   items: string[];
 };
@@ -51,20 +51,20 @@ validateStateChange(nextState: State, source: Connection | "server") {
 ### Client-Side Sync (React)
 
 ```tsx
-import { useAgent } from "agents/react";
+import { useAgent } from 'agents/react';
 
 function App() {
   const [state, setLocalState] = useState<State>({ count: 0 });
-  
+
   const agent = useAgent<State>({
-    agent: "MyAgent",
-    name: "instance-1",
-    onStateUpdate: (newState) => setLocalState(newState)
+    agent: 'MyAgent',
+    name: 'instance-1',
+    onStateUpdate: (newState) => setLocalState(newState),
   });
 
-  return <button onClick={() => agent.setState({ count: state.count + 1 })}>
-    Count: {state.count}
-  </button>;
+  return (
+    <button onClick={() => agent.setState({ count: state.count + 1 })}>Count: {state.count}</button>
+  );
 }
 ```
 
@@ -95,28 +95,28 @@ const items = this.sql<{ id: string; name: string }>`
 
 ### Schedule Types
 
-| Mode | Syntax | Use Case |
-|------|--------|----------|
-| Delay | `this.schedule(60, ...)` | Run in 60 seconds |
-| Date | `this.schedule(new Date(...), ...)` | Run at specific time |
-| Cron | `this.schedule("0 8 * * *", ...)` | Recurring schedule |
-| Interval | `this.scheduleEvery(30, ...)` | Fixed interval (every 30s) |
+| Mode     | Syntax                              | Use Case                   |
+| -------- | ----------------------------------- | -------------------------- |
+| Delay    | `this.schedule(60, ...)`            | Run in 60 seconds          |
+| Date     | `this.schedule(new Date(...), ...)` | Run at specific time       |
+| Cron     | `this.schedule("0 8 * * *", ...)`   | Recurring schedule         |
+| Interval | `this.scheduleEvery(30, ...)`       | Fixed interval (every 30s) |
 
 ### Examples
 
 ```typescript
 // Delay (seconds)
-await this.schedule(60, "checkStatus", { id: "abc123" });
+await this.schedule(60, 'checkStatus', { id: 'abc123' });
 
 // Specific date
-await this.schedule(new Date("2025-12-25T00:00:00Z"), "sendGreeting", { to: "user" });
+await this.schedule(new Date('2025-12-25T00:00:00Z'), 'sendGreeting', { to: 'user' });
 
 // Cron (recurring)
-await this.schedule("0 9 * * 1-5", "weekdayReport", {});
+await this.schedule('0 9 * * 1-5', 'weekdayReport', {});
 
 // Fixed interval (every 30 seconds, overlap prevention built-in)
-await this.scheduleEvery(30, "pollUpdates");
-await this.scheduleEvery(300, "syncData", { source: "api" });
+await this.scheduleEvery(30, 'pollUpdates');
+await this.scheduleEvery(300, 'syncData', { source: 'api' });
 ```
 
 ### Handler
@@ -132,15 +132,15 @@ async sendGreeting(payload: { to: string }, schedule: Schedule) {
 
 ```typescript
 const schedules = this.getSchedules();
-const crons = this.getSchedules({ type: "cron" });
+const crons = this.getSchedules({ type: 'cron' });
 await this.cancelSchedule(schedule.id);
 ```
 
 ### Retry on Schedules
 
 ```typescript
-await this.schedule(60, "task", payload, { retry: { maxAttempts: 3 } });
-await this.scheduleEvery(30, "poll", undefined, { retry: { maxAttempts: 2 } });
+await this.schedule(60, 'task', payload, { retry: { maxAttempts: 3 } });
+await this.scheduleEvery(30, 'poll', undefined, { retry: { maxAttempts: 2 } });
 ```
 
 ## Lifecycle Callbacks
@@ -159,7 +159,7 @@ export class MyAgent extends Agent<Env, State> {
     // WebSocket message (non-RPC)
   }
 
-  onStateUpdate(state: State, source: Connection | "server") {
+  onStateUpdate(state: State, source: Connection | 'server') {
     // State changed (async, non-blocking)
   }
 

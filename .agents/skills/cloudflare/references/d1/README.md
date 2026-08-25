@@ -5,6 +5,7 @@ Expert guidance for Cloudflare D1, a serverless SQLite database designed for hor
 ## Overview
 
 D1 is Cloudflare's managed, serverless database with:
+
 - SQLite SQL semantics and compatibility
 - Built-in disaster recovery via Time Travel (30-day point-in-time recovery)
 - Horizontal scale-out architecture (10 GB per database)
@@ -31,7 +32,9 @@ wrangler dev
 ```typescript
 // .all() - Returns all rows; .first() - First row or null; .first(col) - Single column value
 // .run() - INSERT/UPDATE/DELETE; .raw() - Array of arrays (efficient)
-const { results, success, meta } = await env.DB.prepare('SELECT * FROM users WHERE active = ?').bind(true).all();
+const { results, success, meta } = await env.DB.prepare('SELECT * FROM users WHERE active = ?')
+  .bind(true)
+  .all();
 const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
 ```
 
@@ -42,7 +45,7 @@ const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userI
 const results = await env.DB.batch([
   env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(1),
   env.DB.prepare('SELECT * FROM posts WHERE author_id = ?').bind(1),
-  env.DB.prepare('UPDATE users SET last_access = ? WHERE id = ?').bind(Date.now(), 1)
+  env.DB.prepare('UPDATE users SET last_access = ? WHERE id = ?').bind(Date.now(), 1),
 ]);
 ```
 
@@ -71,14 +74,14 @@ await env.DB.prepare('UPDATE users SET last_login = ? WHERE id = ?').bind(Date.n
 
 ## Platform Limits
 
-| Limit | Free Tier | Paid Plans |
-|-------|-----------|------------|
-| Database size | 500 MB | 10 GB per database |
-| Row size | 1 MB max | 1 MB max |
-| Query timeout | 30 seconds | 30 seconds |
-| Batch size | 1,000 statements | 10,000 statements |
-| Time Travel retention | 7 days | 30 days |
-| Read replicas | Not available | Yes (paid add-on) |
+| Limit                 | Free Tier        | Paid Plans         |
+| --------------------- | ---------------- | ------------------ |
+| Database size         | 500 MB           | 10 GB per database |
+| Row size              | 1 MB max         | 1 MB max           |
+| Query timeout         | 30 seconds       | 30 seconds         |
+| Batch size            | 1,000 statements | 10,000 statements  |
+| Time Travel retention | 7 days           | 30 days            |
+| Read replicas         | Not available    | Yes (paid add-on)  |
 
 **Pricing**: $0.001 per million rows read + $1.00 per million rows written + $0.75/GB storage/month (includes free monthly allowance; no per-database fee)
 
@@ -114,6 +117,7 @@ wrangler dev --persist-to=./.wrangler/state
 **Start here**: Quick Start above → configuration.md (setup) → api.md (queries)
 
 **Common tasks**:
+
 - First time setup: configuration.md → Run migrations
 - Adding queries: api.md → Prepared statements
 - Pagination/caching: patterns.md
