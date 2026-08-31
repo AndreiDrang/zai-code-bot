@@ -37,7 +37,8 @@ wrangler.toml          # Public routes, bindings, Secrets Store, cron trigger
 - D1 migrations are sequential (`0001_storage_foundation.sql`, …). Never edit
   an applied migration; add the next numbered file. Both workers share the same
   D1 database, so a migration changes the heavy worker's schema too.
-- `async scheduled` runs every 5 minutes as the recovery sweep; keep it
+- `async scheduled` runs every 10 minutes (`*/10 * * * *` in
+  `wrangler.toml` `[triggers]`) as the recovery sweep; keep it
   idempotent (it re-drives the D1 outbox, expires stuck leases, re-enqueues
   stranded due jobs, and sweeps expired R2 artifacts).
 - Secrets come from the shared Cloudflare Secrets Store bindings declared in
