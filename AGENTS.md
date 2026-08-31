@@ -6,7 +6,7 @@ Z.ai Code Bot: Cloudflare Workers that turn `/zai` GitHub PR comments into
 Z.ai-powered review and describe results.
 
 - `zai-main-worker` — signed GitHub webhook ingress, authorization, durable job
-  creation, PR-context scheduling, and a recovery cron (`*/5 * * * *`).
+  creation, PR-context scheduling, and a recovery cron (`*/10 * * * *`).
 - `zai-heavy-worker` — private Queue consumer for `review`, `describe`, and the
   internal `pr_context` / `pr_summary` gather jobs.
 
@@ -64,6 +64,7 @@ Read only when relevant:
 - Operational failures and recovery → `RUNBOOK.md`
 - Trust boundaries and user-visible output rules → `SECURITY.md`
 - Change rules and commit expectations → `CONTRIBUTING.md`
+- Planned features and pending decisions → `ROADMAP.md`
 - Workspace mechanics, tests, coverage → `src/AGENTS.md`
 - Cloudflare platform questions → `.agents/skills/wrangler/SKILL.md`,
   `.agents/skills/workers-best-practices/SKILL.md`
