@@ -11,7 +11,7 @@ npm create cloudflare@latest my-app
 # Worker (API/WebSocket/Cron)
 npm create cloudflare@latest my-api -- --type=hello-world --ts
 
-# Pages (static/SSG/full-stack)
+# Pages (static/SSG)
 npm create cloudflare@latest my-site -- --type=web-app --framework=astro --platform=pages
 ```
 
@@ -29,16 +29,17 @@ What are you building?
 │       npm create cloudflare@latest my-site -- --type=web-app --framework=astro --platform=pages
 
 ├─ Full-stack app (Next.js/Remix/SvelteKit)
-│   ├─ Need Durable Objects, Queues, or Workers-only features?
-│   │   └─ Workers (default)
-│   └─ Otherwise use Pages for git integration and branch previews
-│       └─ Add --platform=pages
+│   └─ Follow the current framework guide below
 
 └─ Convert existing project
     └─ npm create cloudflare@latest . -- --type=pre-existing --existing-script=./src/worker.ts
 ```
 
 **Critical:** Pages projects require `--platform=pages` flag. Without it, C3 defaults to Workers.
+
+## Framework Setup
+
+Fetch the [Workers framework guide](https://developers.cloudflare.com/workers/framework-guides/) for the chosen framework before scaffolding or adapting an existing app. For Next.js, follow [Next.js on Workers](https://developers.cloudflare.com/workers/framework-guides/web-apps/nextjs/); use the [Pages static export guide](https://developers.cloudflare.com/pages/framework-guides/nextjs/deploy-a-static-nextjs-site/) only when targeting a Next.js static export on Pages.
 
 ## Interactive Flow
 
@@ -67,24 +68,24 @@ pnpm create cloudflare@latest
 
 ## In This Reference
 
-| File                 | Purpose                          | Use When                            |
-| -------------------- | -------------------------------- | ----------------------------------- |
-| **api.md**           | Complete CLI flag reference      | Scripting, CI/CD, advanced usage    |
+| File | Purpose | Use When |
+|------|---------|----------|
+| **api.md** | Complete CLI flag reference | Scripting, CI/CD, advanced usage |
 | **configuration.md** | Generated files, bindings, types | Understanding output, customization |
-| **patterns.md**      | Workflows, CI/CD, monorepos      | Real-world integration              |
-| **gotchas.md**       | Troubleshooting failures         | Deployment blocked, errors          |
+| **patterns.md** | Workflows, CI/CD, monorepos | Real-world integration |
+| **gotchas.md** | Troubleshooting failures | Deployment blocked, errors |
 
 ## Reading Order
 
-| Task                       | Read                     |
-| -------------------------- | ------------------------ |
-| Create first project       | README only              |
-| Set up CI/CD               | README → api → patterns  |
-| Debug failed deploy        | gotchas                  |
-| Understand generated files | configuration            |
-| Full CLI reference         | api                      |
-| Create custom template     | patterns → configuration |
-| Convert existing project   | README → patterns        |
+| Task | Read |
+|------|------|
+| Create first project | README only |
+| Set up CI/CD | README → api → patterns |
+| Debug failed deploy | gotchas |
+| Understand generated files | configuration |
+| Full CLI reference | api |
+| Create custom template | patterns → configuration |
+| Convert existing project | README → patterns |
 
 ## Post-Creation
 
