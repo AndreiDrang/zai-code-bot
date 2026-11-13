@@ -1,5 +1,18 @@
 # Knowledge Bundle Update Log
 
+## 2026-11-12
+
+- **Update**: The `/zai review` agent profile (`REVIEW_AGENT_LIMITS` in
+  `src/zai-heavy-worker/src/handlers/review.js`) now allows a 150-second
+  gathering LLM request (up from 90 seconds; still inside the 260-second
+  gathering window before the 40-second finalization reserve), and its
+  retrieval budget was tightened to 24 total Context Tool calls and 64 KiB of
+  accepted tool-result data (from 50 calls and 256 KiB) so accumulated
+  tool results keep the request body small when Z.ai latency is erratic.
+  Updated [Agent tool-calling loop](/contracts/agent-runner.md),
+  [Context Tools](/contracts/agent-context-tools.md), and
+  [LLM command execution](/workflows/llm-command-execution.md).
+
 ## 2026-08-25
 
 - **Update**: Main-worker ingress is now scoped to a dedicated path — GitHub

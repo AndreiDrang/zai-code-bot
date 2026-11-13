@@ -91,10 +91,12 @@ one safe `TOOL_BUDGET_EXCEEDED` tool response and the runner immediately
 requests final Markdown without tools.
 
 `/zai review` uses a stricter but larger workflow-specific profile:
-50 total calls, 7 calls per iteration, 256 KiB accepted tool-result data, a
-five-minute absolute deadline, a maximum 90-second gathering request with two
+24 total calls, 7 calls per iteration, 64 KiB accepted tool-result data, a
+five-minute absolute deadline, a maximum 150-second gathering request with two
 total attempts, and a 40-second finalization reserve containing one 35-second
-no-tools request. The reserve keeps enough wall time for a final analysis and
+no-tools request. The 150-second request cap still fits inside the 260-second
+gathering window (five-minute deadline minus the reserve); the client's
+deadline capping keeps any retry within the stage deadline. The reserve keeps enough wall time for a final analysis and
 result publication rather than spending the end of a run on additional
 retrieval.
 When more than one limit is encountered, the result retains every applicable

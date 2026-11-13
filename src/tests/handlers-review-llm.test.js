@@ -186,6 +186,9 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       agentTools: [],
     });
     expect(mocks.chat).toHaveBeenCalledOnce();
+    // Review gathering requests get a 150 s per-request timeout (within the
+    // 260 s gathering window = 5 min run − 40 s finalization reserve).
+    expect(mocks.chat.mock.calls[0][0]).toMatchObject({ timeoutMs: 150000 });
 
     // The result is written to the per-command /context/ key (overwrite store).
     const expectedKey = prCommandResultKey(REPO_ID, PR, 'review');
@@ -381,7 +384,7 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
   });
 
   it('publishes a review after finalizing at the Context Tool call budget', async () => {
-    const calls = Array.from({ length: 50 }, (_, index) => ({
+    const calls = Array.from({ length: 24 }, (_, index) => ({
       id: `call-${index}`,
       type: 'function',
       function: { name: 'get_diff', arguments: '{"path":"a/f"}' },
@@ -413,7 +416,7 @@ describe('/zai review — durable LLM handler (via runLlmCommand)', () => {
       }),
     ).resolves.toMatchObject({
       status: 'reviewed',
-      agentToolCalls: 50,
+      agentToolCalls: 24,
       agentFinalizedWithAvailableEvidence: true,
       agentFinalizationReason: 'tool_call_budget',
     });

@@ -91,9 +91,9 @@ tool messages the model can react to.
   bulk changes. It begins with the highest-priority 3–5 files and reassesses after
   each batch rather than reading every changed file.
 
-The review agent has a 50-call Context Tool budget, a 256 KiB accepted-result
+The review agent has a 24-call Context Tool budget, a 64 KiB accepted-result
 budget, and a 40-second finalization reserve within its five-minute wall-clock
-budget. Gathering requests may wait up to 90 seconds, but the final reserve is
+budget. Gathering requests may wait up to 150 seconds, but the final reserve is
 kept for one 35-second no-tools answer. Once any retrieval budget is exhausted,
 or a gathering model request times out after tool evidence was retrieved, the
 runner withholds all tool definitions and resolves pending calls with a safe

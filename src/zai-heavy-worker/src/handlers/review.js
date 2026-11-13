@@ -27,11 +27,11 @@ import { REVIEW_PROMPT } from '../../generated/prompts.js';
 
 const PROMPT_VERSION = 'review-v4';
 const REVIEW_AGENT_LIMITS = Object.freeze({
-  maxToolCalls: 50,
+  maxToolCalls: 24,
   maxToolCallsPerIteration: 7,
-  maxRetrievedBytes: 256 * 1024,
+  maxRetrievedBytes: 64 * 1024,
   maxRunDurationMs: 5 * 60 * 1000,
-  maxLlmRequestDurationMs: 90000,
+  maxLlmRequestDurationMs: 150000,
   maxLlmAttempts: 2,
   finalLlmRequestDurationMs: 35000,
   finalizationReserveMs: 40000,

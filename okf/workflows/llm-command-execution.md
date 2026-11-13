@@ -79,13 +79,13 @@ LLM ↔ tool protocol and enforces its runtime budgets.
   not model-generated.
 - A matching-head [PR summary](/workflows/pr-summary-job.md) is injected as
   bounded background (`summary` ≤ ~8% of the context budget).
-- Review permits up to 50 context-tool calls (at most seven per agent turn)
-  and 256 KiB of accepted tool results over a five-minute deadline. At less
+- Review permits up to 24 context-tool calls (at most seven per agent turn)
+  and 64 KiB of accepted tool results over a five-minute deadline. At less
   than 40 seconds remaining, or after either retrieval budget is exhausted,
   it disables Context Tools and asks the model to complete the analysis from
   available evidence. A completed review records that finalization reason in
   server-generated metadata; it does not fail merely because its allowed
-  retrieval budget was used. Gathering requests may wait up to 90 seconds and
+  retrieval budget was used. Gathering requests may wait up to 150 seconds and
   use at most two attempts, but they are bounded by the deadline before the
   40-second finalization reserve. A gathering timeout after successful tool
   retrieval enters a single 35-second, no-tools finalization request instead
